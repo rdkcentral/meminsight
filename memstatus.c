@@ -1,230 +1,238 @@
-#include <stdio.h>
-#include <stdlib.h>
-#include <dirent.h>
-#include <string.h>
-#include <unistd.h>
-#include <errno.h>
+/*
+ * memstatus.c
+ *
+ * Collects and reports memory usage statistics for all processes on a Linux system.
+ *
+ * Features:
+ *  - Scans /proc for all processes, parses /proc/[pid]/stat and /proc/[pid]/smaps
+ *  - Collects RSS, PSS, shared clean, private dirty, swap PSS, major faults, and CPU time
+ *  - Outputs a CSV file with per-process and system memory info
+ *  - Supports test mode for validating parsing logic
+ *  - Optionally includes kernel threads
+ *
+ * Usage:
+ *   ./memstatus [-a] [-o <output directory>] [-t <path to custom smap>]
+ *
+ * Author: Jagadheesan Duraisamy
+ * Date: 09/07/2025
+ */
 
-#include <time.h>
+#include "memstatus.h"
 
-// For PF_KTHREAD
-#include <linux/sched.h>
-
-typedef struct process_info {
-	unsigned pid;
-	char name[PATH_MAX+8];
-	unsigned long rssTotal;
-	unsigned long pssTotal;
-	unsigned long shared_clean_total;
-	unsigned long private_dirty_total;
-	unsigned long swap_pss_total;
-	unsigned long majFaults;
-	unsigned long cputime;
-	struct process_info *next;
-} Process_Info;
-
-//#define PRINT_DBG printf
-#define PRINT_DBG(...) 
-#define PRINT_DBG_INITIAL printf 
-#define PRINT_DBG_SCANNED printf
-//#define PRINT_DBG_SCANNED(...)
-
-#define TESTME
+int includeKthreads = 0;           // Whether to include kernel threads
+Process_Info getProcessInfo = {0}; // Temporary struct for collecting process info
+Process_Info *headProcessInfo = NULL; // Head of linked list
 
 #ifdef TESTME
-int testpid; // provide for example smap_without_swappss.txt, which for instance can contain without SwapPss
+int testpid;
 char testSmap[128];
-#endif
-#ifdef TESTME
 Process_Info processInfoTest;
 #endif
+// -----------------------------
+// Linked List Operations
+// -----------------------------
 
-int includeKthreads;
-Process_Info getProcessInfo = {0};
-Process_Info *headProcessInfo;
-
+/**
+ * Writes all process info from the linked list to stdout and the output file.
+ * Frees each node after writing.
+ */
 void writeProcessInfo(unsigned noOfpids, FILE *output)
 {
-	Process_Info *tmp = headProcessInfo;
-	Process_Info *tofree;
-	int i = 1;
-	while (tmp) {
-		printf("%d,%lu,%lu,%lu,%lu,%lu,%lu,%lu,%u,%s\n",
-				i++, tmp->pssTotal, tmp->rssTotal, tmp->shared_clean_total, tmp->private_dirty_total, tmp->swap_pss_total, 
-				tmp->majFaults, tmp->cputime, tmp->pid, tmp->name);
-		fprintf(output, "%u,%s,%lu,%lu,%lu,%lu,%lu,%lu,%lu\n", tmp->pid, tmp->name, tmp->pssTotal, tmp->rssTotal, tmp->shared_clean_total,
-				tmp->private_dirty_total, tmp->swap_pss_total, tmp->majFaults, tmp->cputime);	
-		tofree = tmp;
-		tmp = tmp->next;
-		free(tofree);
-	}
-	if (i != noOfpids) {
-		printf("Some process details might've been missed [%d vs actual %u]\n", i, noOfpids);
-	}
+    Process_Info *tmp = headProcessInfo;
+    Process_Info *tofree;
+    int i = 1;
+    while (tmp) {
+        printf("%d,%lu,%lu,%lu,%lu,%lu,%lu,%lu,%u,%s\n",
+                i++, tmp->pssTotal, tmp->rssTotal, tmp->shared_clean_total, tmp->private_dirty_total, tmp->swap_pss_total, 
+                tmp->majFaults, tmp->cputime, tmp->pid, tmp->name);
+        fprintf(output, "%u,%s,%lu,%lu,%lu,%lu,%lu,%lu,%lu\n", tmp->pid, tmp->name, tmp->pssTotal, tmp->rssTotal, tmp->shared_clean_total,
+                tmp->private_dirty_total, tmp->swap_pss_total, tmp->majFaults, tmp->cputime);    
+        tofree = tmp;
+        tmp = tmp->next;
+        free(tofree);
+    }
+    if (i != noOfpids) {
+        printf("Some process details might've been missed [%d vs actual %u]\n", i, noOfpids);
+    }
 }
 
+/**
+ * Inserts a new process info node into the linked list, sorted by descending pssTotal.
+ */
 void addProcessInfo(Process_Info *addPInfo)
 {
-	Process_Info *addNode = (Process_Info*)malloc(sizeof(Process_Info));
-	if (addNode) {
-		Process_Info *tmp = headProcessInfo;
-		Process_Info *prev = NULL;
-		memcpy(addNode, addPInfo, sizeof(Process_Info));
-		while (tmp) {
-			if (tmp->pssTotal < addNode->pssTotal) {
-				if (prev) {
-					prev->next = addNode;
-					addNode->next = tmp;
-				}
-				else {
-					headProcessInfo = addNode;
-					headProcessInfo->next = tmp;
-				}
-				return;
-			}
-			prev = tmp;
-			tmp = tmp->next;
-		}
-		if (headProcessInfo) {
-			prev->next = addNode;
-		}
-		else {
-			headProcessInfo = addNode;
-		}
-	}
+    Process_Info *addNode = (Process_Info*)malloc(sizeof(Process_Info));
+    if (addNode) {
+        Process_Info *tmp = headProcessInfo;
+        Process_Info *prev = NULL;
+        memcpy(addNode, addPInfo, sizeof(Process_Info));
+        while (tmp) {
+            if (tmp->pssTotal < addNode->pssTotal) {
+                if (prev) {
+                    prev->next = addNode;
+                    addNode->next = tmp;
+                }
+                else {
+                    headProcessInfo = addNode;
+                    headProcessInfo->next = tmp;
+                }
+                return;
+            }
+            prev = tmp;
+            tmp = tmp->next;
+        }
+        if (headProcessInfo) {
+            prev->next = addNode;
+        }
+        else {
+            headProcessInfo = addNode;
+        }
+    }
 }
 
 #ifdef TESTME
+/**
+ * Frees the linked list and prints each node (for test mode).
+ */
 void checkAndFree()
 {
-	Process_Info *tmp = headProcessInfo, *tofree;
-	int i = 1;
-	while (tmp) {
-		printf("%d,%u,%lu\n",
-				i++, tmp->pid, tmp->pssTotal);
-		tofree = tmp;
-		tmp = tmp->next;
-		free(tofree);
-	}
-	headProcessInfo = NULL;
+    Process_Info *tmp = headProcessInfo, *tofree;
+    int i = 1;
+    while (tmp) {
+        printf("%d,%u,%lu\n",
+                i++, tmp->pid, tmp->pssTotal);
+        tofree = tmp;
+        tmp = tmp->next;
+        free(tofree);
+    }
+    headProcessInfo = NULL;
 }
 
+/**
+ * Test function to validate linked list insertion order.
+ */
 void testList ()
 {
-	Process_Info add = {0};
-	add.pid = 1;
-	add.pssTotal = 10;
-	addProcessInfo(&add);
-	add.pid = 2;
-	add.pssTotal = 20;
-	addProcessInfo(&add);
-	add.pid = 3;
-	add.pssTotal = 30;
-	addProcessInfo(&add);
-	checkAndFree();
+    Process_Info add = {0};
+    add.pid = 1;
+    add.pssTotal = 10;
+    addProcessInfo(&add);
+    add.pid = 2;
+    add.pssTotal = 20;
+    addProcessInfo(&add);
+    add.pid = 3;
+    add.pssTotal = 30;
+    addProcessInfo(&add);
+    checkAndFree();
 
+    add.pid = 1;
+    add.pssTotal = 30;
+    addProcessInfo(&add);
+    add.pid = 2;
+    add.pssTotal = 20;
+    addProcessInfo(&add);
+    add.pid = 3;
+    add.pssTotal = 10;
+    addProcessInfo(&add);
+    checkAndFree();
 
-	add.pid = 1;
-	add.pssTotal = 30;
-	addProcessInfo(&add);
-	add.pid = 2;
-	add.pssTotal = 20;
-	addProcessInfo(&add);
-	add.pid = 3;
-	add.pssTotal = 10;
-	addProcessInfo(&add);
-	checkAndFree();
-
-
-	add.pid = 1;
-	add.pssTotal = 10;
-	addProcessInfo(&add);
-	add.pid = 2;
-	add.pssTotal = 30;
-	addProcessInfo(&add);
-	add.pid = 3;
-	add.pssTotal = 20;
-	addProcessInfo(&add);
-	checkAndFree();
+    add.pid = 1;
+    add.pssTotal = 10;
+    addProcessInfo(&add);
+    add.pid = 2;
+    add.pssTotal = 30;
+    addProcessInfo(&add);
+    add.pid = 3;
+    add.pssTotal = 20;
+    addProcessInfo(&add);
+    checkAndFree();
 }
 #endif
 
+// -----------------------------
+// Process Info Parsing
+// -----------------------------
+
+/**
+ * Parses /proc/[pid]/smaps for a given process and accumulates memory statistics.
+ * Returns 0 on success, 1 on failure.
+ */
 int getProcessInfos(unsigned pid)
 {
-	static unsigned linesToSkipForRss = 0;
-	static unsigned linesToSkipForPss = 0;
-	static unsigned linesToSkipForSharedClean = 0;
-	static unsigned linesToSkipForDirtyPrivate = 0;
-	static unsigned linesToSkipForSwapPss = 0;
-	static unsigned linesToSkipForRollover = 0;
-	static unsigned linesToSkipIfRss0 = 0; 
-	
-	unsigned linesSkippedForRss = 0;
-	unsigned linesSkippedForPss = 0;
-	unsigned linesSkippedForSharedClean = 0;
-	unsigned linesSkippedForDirtyPrivate = 0;
-	unsigned linesSkippedForSwapPss = 0;
-	unsigned linesSkippedForRollover = 0;
+    static unsigned linesToSkipForRss = 0;
+    static unsigned linesToSkipForPss = 0;
+    static unsigned linesToSkipForSharedClean = 0;
+    static unsigned linesToSkipForDirtyPrivate = 0;
+    static unsigned linesToSkipForSwapPss = 0;
+    static unsigned linesToSkipForRollover = 0;
+    static unsigned linesToSkipIfRss0 = 0; 
+    
+    unsigned linesSkippedForRss = 0;
+    unsigned linesSkippedForPss = 0;
+    unsigned linesSkippedForSharedClean = 0;
+    unsigned linesSkippedForDirtyPrivate = 0;
+    unsigned linesSkippedForSwapPss = 0;
+    unsigned linesSkippedForRollover = 0;
 
-	char tmp[128];
+    char tmp[128];
 #ifdef TESTME
-	if (testpid) {
-		testpid = 0;
-		memcpy(tmp, testSmap, 128);
-		printf("Testing with %s\n", tmp);
-	}
-	else
+    if (testpid) {
+        testpid = 0;
+        memcpy(tmp, testSmap, 128);
+        printf("Testing with %s\n", tmp);
+    }
+    else
 #endif	
-	sprintf(tmp, "/proc/%u/smaps", pid);
-	FILE *smap = fopen(tmp, "r");
-	if (smap) {
-		unsigned lines_To_skip = linesToSkipForRss;
-		unsigned skipped = 1; // Tracks current skips
-		unsigned expect_rss = 1;
-		unsigned expect_pss = 0;
-		unsigned expect_shared_clean = 0;
-		unsigned expect_private_dirty = 0;
-		unsigned expect_swap_pss = 0;
-		unsigned prev_pss = 0;
+    sprintf(tmp, "/proc/%u/smaps", pid);
+    FILE *smap = fopen(tmp, "r");
+    if (smap) {
+        unsigned lines_To_skip = linesToSkipForRss;
+        unsigned skipped = 1; // Tracks current skips
+        unsigned expect_rss = 1;
+        unsigned expect_pss = 0;
+        unsigned expect_shared_clean = 0;
+        unsigned expect_private_dirty = 0;
+        unsigned expect_swap_pss = 0;
+        unsigned prev_pss = 0;
 
 #ifdef TESTME
-		memset(&processInfoTest, 0, sizeof(processInfoTest));
+        memset(&processInfoTest, 0, sizeof(processInfoTest));
 #endif
-		while (fgets(tmp, 127, smap)) {
+        while (fgets(tmp, 127, smap)) {
 #ifdef TESTME
-			unsigned test_rss = 0, test_pss = 0;
-			unsigned test_shared_clean = 0, test_private_dirty = 0;
-			unsigned test_swap_pss = 0;
-			if (strstr(tmp, "Rss:")) {
-				PRINT_DBG("%s\n", tmp);
-				if (sscanf(tmp, "Rss: %u kB", &test_rss)) {
-					processInfoTest.rssTotal += test_rss;
-				}
-			}
-			else if (strstr(tmp, "Pss:")) {
-				PRINT_DBG("%s\n", tmp);
-				if (sscanf(tmp, "Pss: %u kB", &test_pss)) {
-					processInfoTest.pssTotal += test_pss;
-				}
-			}
-			else if (strstr(tmp, "Shared_Clean:")) {
-				PRINT_DBG("%s\n", tmp);
-				if (sscanf(tmp, "Shared_Clean: %u kB", &test_shared_clean)) {
-					processInfoTest.shared_clean_total += test_shared_clean;
-				}
-			}
-			else if (strstr(tmp, "Private_Dirty:")) {
-				PRINT_DBG("%s\n", tmp);
-				if (sscanf(tmp, "Private_Dirty: %u kB", &test_private_dirty)) {
-					processInfoTest.private_dirty_total += test_private_dirty;
-				}
-			}
-			else if (strstr(tmp, "SwapPss:")) {
-				PRINT_DBG("%s\n", tmp);
-				if (sscanf(tmp, "SwapPss: %u kB", &test_swap_pss)) {
-					processInfoTest.swap_pss_total += test_swap_pss;
-				}
-			}
+            unsigned test_rss = 0, test_pss = 0;
+            unsigned test_shared_clean = 0, test_private_dirty = 0;
+            unsigned test_swap_pss = 0;
+            if (strstr(tmp, "Rss:")) {
+                PRINT_DBG("%s\n", tmp);
+                if (sscanf(tmp, "Rss: %u kB", &test_rss)) {
+                    processInfoTest.rssTotal += test_rss;
+                }
+            }
+            else if (strstr(tmp, "Pss:")) {
+                PRINT_DBG("%s\n", tmp);
+                if (sscanf(tmp, "Pss: %u kB", &test_pss)) {
+                    processInfoTest.pssTotal += test_pss;
+                }
+            }
+            else if (strstr(tmp, "Shared_Clean:")) {
+                PRINT_DBG("%s\n", tmp);
+                if (sscanf(tmp, "Shared_Clean: %u kB", &test_shared_clean)) {
+                    processInfoTest.shared_clean_total += test_shared_clean;
+                }
+            }
+            else if (strstr(tmp, "Private_Dirty:")) {
+                PRINT_DBG("%s\n", tmp);
+                if (sscanf(tmp, "Private_Dirty: %u kB", &test_private_dirty)) {
+                    processInfoTest.private_dirty_total += test_private_dirty;
+                }
+            }
+            else if (strstr(tmp, "SwapPss:")) {
+                PRINT_DBG("%s\n", tmp);
+                if (sscanf(tmp, "SwapPss: %u kB", &test_swap_pss)) {
+                    processInfoTest.swap_pss_total += test_swap_pss;
+                }
+            }
 #endif
  			/*00010000-00041000 r-xp 00000000 fc:00 5600       /usr/sbin/dropbearmulti
   	 		  Size:                196 kB
@@ -449,48 +457,62 @@ int getProcessInfos(unsigned pid)
 	}
 	return 1;
 }
+
+/**
+ * Prints usage information and exits.
+ */
 void printHelp(int argc, char *argv[])
 {
-	printf("%s [-a] [-o <output directory>] [-t <path to custom map>]\n", argv[0]);
-	exit(1);
+    printf("%s [-a] [-o <output directory>] [-t <path to custom map>]\n", argv[0]);
+    exit(1);
 }
 
+/**
+ * Reads /proc/meminfo and writes the first 50 fields and their values to the output file.
+ */
 void saveMeminfo(FILE *out)
 {
-	unsigned long val[50];
-	unsigned count = 0;
-	char tmp[128];
-	char name[64];
+    unsigned long val[50];
+    unsigned count = 0;
+    char tmp[128];
+    char name[64];
 
-	FILE *meminfo = fopen("/proc/meminfo", "r");
-	if (meminfo) {
-		while (fgets(tmp, 127, meminfo) && count < 50) {
-			if (!sscanf(tmp, "%s %lu kB", name, &val[count])) {
-				printf("%s: Error parsing [%s]\n", __FUNCTION__, tmp);
-			}
-			else {
-				name[strlen(name)-1] = '\0';
-				if (count) {
-					fprintf(out, ",%s", name);
-				}
-				else {
-					fprintf(out, "/proc/meminfo:\n%s", name);
-				}
-				count++;
-			}
-		}
-		fclose(meminfo);
-	}
-	for (int i=0; i<count; i++) {
-		if (i) {
-			fprintf(out, ",%lu", val[i]);
-		}
-		else {
-			fprintf(out, "\n%lu", val[i]);
-		}
-	}
+    FILE *meminfo = fopen("/proc/meminfo", "r");
+    if (meminfo) {
+        while (fgets(tmp, 127, meminfo) && count < 50) {
+            if (!sscanf(tmp, "%s %lu kB", name, &val[count])) {
+                printf("%s: Error parsing [%s]\n", __FUNCTION__, tmp);
+            }
+            else {
+                name[strlen(name)-1] = '\0';
+                if (count) {
+                    fprintf(out, ",%s", name);
+                }
+                else {
+                    fprintf(out, "/proc/meminfo:\n%s", name);
+                }
+                count++;
+            }
+        }
+        fclose(meminfo);
+    }
+    for (int i=0; i<count; i++) {
+        if (i) {
+            fprintf(out, ",%lu", val[i]);
+        }
+        else {
+            fprintf(out, "\n%lu", val[i]);
+        }
+    }
 }
 
+// -----------------------------
+// Main Program
+// -----------------------------
+
+/**
+ * Main entry point: parses arguments, scans processes, collects stats, writes output.
+ */
 int main(int argc, char *argv[])
 {
 	unsigned noOfPids = 0;
