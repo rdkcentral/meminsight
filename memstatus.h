@@ -62,6 +62,15 @@ typedef struct process_info {
     struct process_info *next;           // Next node in linked list
 } Process_Info;
 
+typedef struct config {
+    char **whitelist;                   // Array of whitelisted process names
+    unsigned int whiteListCount;        // Number of whitelisted processes
+    const char *outputFile;             // Output file name
+    unsigned int iterations;            // Number of iterations to run
+    unsigned int interval;              // Interval between iterations in seconds
+    char logLevel[8];                   // Log level (e.g., "DEBUG", "INFO", "ERROR")   
+} Config_Data;
+
 // -----------------------------
 // Global Variables
 // -----------------------------
@@ -86,6 +95,8 @@ void writeProcessInfo(unsigned noOfpids, FILE *output);
 void addProcessInfo(Process_Info *addPInfo);
 int getProcessInfos(unsigned pid);
 void printHelp(int argc, char *argv[]);
+void printHelpAndUsage(int argc, char *argv[]);
 void saveMeminfo(FILE *out);
+int parseConfig(const char *configFile, Config_Data *config);
 
 #endif // MEMSTATUS_H

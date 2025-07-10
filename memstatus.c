@@ -29,6 +29,93 @@ char testSmap[128];
 Process_Info processInfoTest;
 #endif
 // -----------------------------
+// Configuration Data
+// -----------------------------
+
+int parseConfig(const char *configPath, Config_Data *config) {
+	const char *dot = strrchr(configPath, '.');
+	if (!dot || strcmp(dot, ".json") != 0) {
+		printf("Invalid config file format: %s\n", configPath);
+		return -1;
+	}
+
+	config->whitelist = NULL;
+	config->whiteListCount = 0;
+	config->outputFile = NULL;
+	config->iterations = 1; // Default to 1 iteration
+	config->interval = 0; // Default to 0 seconds interval
+	strncpy(config->logLevel, "INFO", sizeof(config->logLevel) - 1);
+
+	if (strcmp(dot, ".json") == 0) {
+		FILE *fp = fopen(configPath, "r");
+		if (!fp) {
+			printf("Failed to open config file: %s\n", configPath);
+			return -1;
+		}
+		char buf[4096];
+		size_t len = fread(buf, 1, sizeof(buf) - 1, fp);
+		buf[len] = '\0';
+		fclose(fp);
+		//TODO: Implement JSON parsing logic 
+
+	} else if (strcmp(dot, ".txt") == 0 || strcmp(dot, ".cfg") == 0 || strcmp(dot, ".conf") == 0 ) {
+		FILE *fp = fopen(configPath, "r");
+		if (!fp) {
+			printf("Failed to open config file: %s\n", configPath);
+			return -1;
+		}
+		char line[512];
+		while (fgets(line, sizeof(line), fp)) {
+            char *eq = strchr(line, '=');
+            if (!eq) continue;
+            *eq = '\0';
+            char *key = line;
+            char *val = eq + 1;
+            // Remove trailing newline and commas
+            char *end = val + strlen(val) - 1;
+			while (end > val && (*end == '\n' || *end == ',')) *end-- = '\0';
+
+			if (strcmp(key, "process_whitelist") == 0) {
+                // Comma separated
+                int count = 1;
+                for (char *p = val; *p; p++) if (*p == ',') count++;
+                config->whiteListCount = count;
+                config->whitelist = (char **)calloc(count, sizeof(char *));
+                int idx = 0;
+                char *tok = strtok(val, ",");
+                while (tok && idx < count) {
+                    while (*tok == ' ') tok++;
+                    config->whitelist[idx++] = strdup(tok);
+                    tok = strtok(NULL, ",");
+                }
+            } else if (strcmp(key, "output_file") == 0) {
+                config->outputFile = strdup(val);
+				if (!config->outputFile) {
+					static char defaultFile[256];
+					time_t timenow = time(NULL);
+					snprintf(defaultFile, sizeof(defaultFile), "/tmp/%lu_meminsight.csv", timenow);
+					config->outputFile = defaultFile;
+				}
+            } else if (strcmp(key, "iterations") == 0) {
+                config->iterations = atoi(val);
+            } else if (strcmp(key, "interval") == 0) {
+                config->interval = atoi(val);
+            } else if (strcmp(key, "log_level") == 0) {
+                strncpy(config->logLevel, val, sizeof(config->logLevel) - 1);
+                config->logLevel[sizeof(config->logLevel) - 1] = '\0';
+            }
+		}
+		fclose(fp);
+	} else {
+		printf("Unsupported config file format: %s\n", configPath);
+		return -1;
+	}
+	return 0;
+}
+
+
+
+// -----------------------------
 // Linked List Operations
 // -----------------------------
 
@@ -467,6 +554,32 @@ void printHelp(int argc, char *argv[])
     exit(1);
 }
 
+void printHelpAndUsage(int argc, char *argv[])
+{
+	printf("Usage: %s [OPTIONS]\n", argv[0]);
+	printf("A lightweight, configurable tool for collecting detailed system and per-process memory and CPU statistics.\n");
+	printf("Options:\n");
+	printf("  -a, --all				Include kernel threads for process monitoring\n");
+	printf("  -c, --config <file> 	Path to JSON configuration file\n");
+	printf("  -h, --help   			Show this help message and exit\n");
+	printf("  -t, --test 			Run in test mode with a generated minimal config\n");
+	printf("\n");
+	printf("Default behavior (no flags):\n");
+	printf(" - Runs 1 iteration, interval 0s, monitors all processes, log level INFO\n");
+	printf(" - Output: /tmp/<timestamp>_memsinsight.csv\n");
+	printf("\n");
+	printf("Example:\n");
+	printf("  %s\n", argv[0]);
+	printf("  %s -a\n", argv[0]);
+	printf("  %s --config /etc/memins_config.json\n", argv[0]);
+	printf("  %s -c myconfig.json -a\n", argv[0]);
+	printf("  %s --test\n", argv[0]);
+	printf("\n");
+	printf("Sample config file (JSON):\n");
+	printf("{\n  \"process_whitelist\": [\"myapp\", \"systemd\", \"1234\"],\n  \"output_file\": \"/tmp/xmeminsight.csv\",\n  \"iterations\": 10,\n  \"interval\": 60,\n  \"log_level\": \"INFO\"\n}\n");
+	exit(1);
+}
+
 /**
  * Reads /proc/meminfo and writes the first 50 fields and their values to the output file.
  */
@@ -509,6 +622,63 @@ void saveMeminfo(FILE *out)
 // -----------------------------
 // Main Program
 // -----------------------------
+
+int toBeMain(int argc, char *argv[]){
+	// CLI parsing and initialization
+	bool isConfigPresent = false;
+	bool enableKThreads = false
+	char confFile[PATH_MAX] = {0};
+
+	if (argc == 1) {
+		// No arguments: default system-wide mode
+		systemWide(); // TODO: implement system-wide monitoring
+		return
+	}
+
+	for (int i; i < argc; i++) {
+		if (!strcmp(argv[i], "-c") || !strcmp(argv[i], "--config")) {
+			if (i+1 >= argc) {
+				printf("Error: Missing config file path after %s\n", argv[i]);
+				printHelpAndUsage(argc, argv);
+			}
+			strncpy(confFile, argv[i + 1], PATH_MAX - 1);
+            FILE *fp = fopen(confFile, "r");
+			if (!fp) {
+                printf("Error: Config file '%s' does not exist or cannot be opened.\n", confFile);
+                printHelpAndUsage(argc, argv);
+            }
+            fclose(fp);
+			isConfigPresent = true;
+			i++; // Skip next arg (conf file)
+		} else if (!strcmp(argv[i], "-a") || !strcmp(argv[i], "--all")) {
+			enableKThreads = true;
+		} else if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) {
+			printHelpAndUsage(argc, argv);
+		} else if (!strcmp(argv[i], "-t") || !strcmp(argv[i], "--test")) {
+            // TODO: Test mode
+        } else {
+            printf("Error: Unrecognized argument '%s'\n", argv[i]);
+            printHelpAndUsage(argc, argv);
+        }
+	}
+
+	if isConfigPresent {
+		Config_Data config;
+		if (parseConfig(confFile, &config) != 0) {
+			printf("Error: Failed to parse config file '%s'\n", confFile);
+			return -1;
+		}
+		printf("parsed config: whitelist=%p, count=%u, outputFile=%s, iterations=%u, interval=%u, logLevel=%s\n",
+				config.whitelist, config.whiteListCount, config.outputFile, config.iterations, config.interval, config.logLevel);
+
+		// TODO: Implement main logic
+		// 1. Construct LL
+		// 2. Read /proc/meminfo and write to output
+		// 3. Read /proc/[pid]/stat and /proc/[pid]/smaps for each process
+		// 4. Collect stats and write to output file
+		// 5. Handle iterations and intervals
+	}
+}
 
 /**
  * Main entry point: parses arguments, scans processes, collects stats, writes output.
