@@ -817,7 +817,7 @@ void saveMeminfo(FILE *out)
 // Main Program
 // -----------------------------
 
-int toBeMain(int argc, char *argv[]){
+int main(int argc, char *argv[]){
 	// CLI parsing and initialization
 	bool isConfigPresent = false;
 	bool enableKThreads = false;
@@ -957,6 +957,7 @@ int toBeMain(int argc, char *argv[]){
 /**
  * Main entry point: parses arguments, scans processes, collects stats, writes output.
  */
+ #if 0
 int main(int argc, char *argv[])
 {
 	unsigned noOfPids = 0;
@@ -1137,3 +1138,4 @@ int main(int argc, char *argv[])
 	fclose(output);
 	return 0;
 }
+#endif

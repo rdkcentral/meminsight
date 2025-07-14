@@ -22,6 +22,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdbool.h>
 #include <dirent.h>
 #include <string.h>
 #include <unistd.h>
@@ -112,11 +113,11 @@ int getProcessInfos(unsigned pid);
 void printHelp(int argc, char *argv[]);
 void printHelpAndUsage(int argc, char *argv[]);
 void saveMeminfo(FILE *out);
-
 int getPropertyFromFile(const char *filename, const char *property, char *propertyValue, size_t propertyValueLen);
 size_t getMacAddress(const char* iface, char *macAddress, size_t szBufSize);
 int isPID(const char *str);
 int getPIDByProcessName(const char *procName, unsigned int *pidOut);
 int parseConfig(const char *configFile, Config_Data *config);
+int systemWide(bool includeKthreads)
 
 #endif // MEMSTATUS_H
