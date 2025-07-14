@@ -27,6 +27,9 @@
 #include <unistd.h>
 #include <errno.h>
 #include <time.h>
+#include <sys/ioctl.h>
+#include <net/if.h>
+#include <sys/socket.h>
 #include <linux/sched.h> // For PF_KTHREAD (Linux only)
 
 #define TESTME
@@ -40,6 +43,18 @@
 #define PRINT_DBG_INITIAL printf 
 #define PRINT_DBG_SCANNED printf
 //#define PRINT_DBG_SCANNED(...)
+
+// -----------------------------
+// MACROs
+// -----------------------------
+
+#define XMEM_BIN "xMemInsight"
+#define DEVICE_PROP_FILE "/etc/device.properties"
+#define INTERFACE "eth0"
+#define DEFAULT_ITERATIONS 1
+#define DEFAULT_INTERVAL 0
+#define DEFAULT_LOG_LEVEL "INFO"
+#define DEFAULT_MAC "00:00:00:00:00:00"
 
 // -----------------------------
 // Data Structures
@@ -97,6 +112,11 @@ int getProcessInfos(unsigned pid);
 void printHelp(int argc, char *argv[]);
 void printHelpAndUsage(int argc, char *argv[]);
 void saveMeminfo(FILE *out);
+
+int getPropertyFromFile(const char *filename, const char *property, char *propertyValue, size_t propertyValueLen);
+size_t getMacAddress(const char* iface, char *macAddress, size_t szBufSize);
+int isPID(const char *str);
+int getPIDByProcessName(const char *procName, unsigned int *pidOut);
 int parseConfig(const char *configFile, Config_Data *config);
 
 #endif // MEMSTATUS_H

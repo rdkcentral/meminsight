@@ -19,6 +19,9 @@
 
 #include "memstatus.h"
 
+// -----------------------------
+// Global Variables
+// -----------------------------
 int includeKthreads = 0;           // Whether to include kernel threads
 Process_Info getProcessInfo = {0}; // Temporary struct for collecting process info
 Process_Info *headProcessInfo = NULL; // Head of linked list
@@ -28,92 +31,187 @@ int testpid;
 char testSmap[128];
 Process_Info processInfoTest;
 #endif
+
+// -----------------------------
+// Utility Functions
+// -----------------------------
+
+int getPropertyFromFile(const char *filename, const char *property, char *propertyValue, size_t propertyValueLen) {
+	FILE *fp = fopen(filename, "r");
+	if (!fp) {
+		if (propertyValue && propertyValueLen > 0) propertyValue[0] = '\0';
+		return 0;
+	}
+	char line[256];
+	int found = 0;
+	while (fgets(line, sizeof(line), fp)) {
+		char *trim = line;
+		while (*trim == ' ' || *trim == '\t') trim++;	// Skip comments and empty lines
+		if (*trim == '#' || *trim == '\0' || *trim == '\n') continue;	// Check for property match at start of line
+
+		// Split on '='
+        char *key = strtok(trim, "=");
+        char *val = strtok(NULL, "\n");
+        if (!key || !val) continue;
+
+		// Remove trailing spaces from key
+        char *kend = key + strlen(key) - 1;
+        while (kend > key && (*kend == ' ' || *kend == '\t')) *kend-- = '\0';
+
+		// Remove leading spaces from val
+        while (*val == ' ' || *val == '\t') val++;
+
+		if (strcmp(key, property) == 0) {
+			// Find the length of the value, excluding any trailing newline or carriage return
+			size_t valueLen = strcspn(val, "\r\n");
+			// Limit the length to fit in the provided buffer
+			if (valueLen >= propertyValueLen) {
+				valueLen = propertyValueLen - 1;
+			}
+			// Copy the value into the output buffer
+			strncpy(propertyValue, val, valueLen);
+			propertyValue[valueLen] = '\0';
+			found = 1;
+			break;
+		}
+	}
+	fclose(fp);
+	if (!found && propertyValue && propertyValueLen > 0) propertyValue[0] = '\0';
+	return found;
+}
+
+size_t getMacAddress(const char* iface, char *macAddress, size_t szBufSize) {
+	if (!iface || !macAddress || szBufSize < 18) { // 17 chars + null
+        printf("Invalid parameter\n");
+        return 0;
+    }
+	struct ifreq ifr;
+    int fd = socket(AF_INET, SOCK_DGRAM, 0);
+    if (fd == -1) {
+        printf("socket create failed: %s\n", strerror(errno));
+        return 0;
+    }
+	memset(&ifr, 0, sizeof(ifr));
+    strncpy(ifr.ifr_name, iface, IFNAMSIZ - 1);
+    ifr.ifr_addr.sa_family = AF_INET;
+	if (ioctl(fd, SIOCGIFHWADDR, &ifr) == -1) {
+        printf("ioctl SIOCGIFHWADDR failed: %s\n", strerror(errno));
+        close(fd);
+        return 0;
+    }
+    close(fd);
+
+	unsigned char *mac = (unsigned char *)ifr.ifr_hwaddr.sa_data;
+    size_t ret = snprintf(macAddress, szBufSize, "%02x:%02x:%02x:%02x:%02x:%02x",
+                          mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+    return ret;
+}
+
+int isPID(const char *str) {
+	if (!str || !*str) return 0;
+	return strspn(str, "0123456789") == strlen(str);
+}
+
+int getPIDByProcessName(const char *procName, unsigned int *pidOut) {
+    DIR *proc = opendir("/proc");
+    if (!proc) return 0;
+    struct dirent *entry;
+    char commPath[PATH_MAX];
+    char nameBuf[PATH_MAX];
+    int found = 0;
+    while ((entry = readdir(proc)) != NULL) {
+        if (entry->d_type != DT_DIR) continue;
+        if (!isPID(entry->d_name)) continue;
+        snprintf(commPath, sizeof(commPath), "/proc/%s/comm", entry->d_name);
+        FILE *f = fopen(commPath, "r");
+        if (!f) continue;
+        if (fgets(nameBuf, sizeof(nameBuf), f)) {
+            // Remove trailing newline
+            char *nl = strchr(nameBuf, '\n');
+            if (nl) *nl = '\0';
+            if (strcmp(nameBuf, procName) == 0) {
+                *pidOut = (unsigned int)atoi(entry->d_name);
+                found = 1;
+                fclose(f);
+                break;
+            }
+        }
+        fclose(f);
+    }
+    closedir(proc);
+	return found ? 1 : 0;
+}
+
 // -----------------------------
 // Configuration Data
 // -----------------------------
 
 int parseConfig(const char *configPath, Config_Data *config) {
 	const char *dot = strrchr(configPath, '.');
-	if (!dot || strcmp(dot, ".json") != 0) {
-		printf("Invalid config file format: %s\n", configPath);
-		return -1;
-	}
+	if (!dot || (strcmp(dot, ".txt") != 0 && strcmp(dot, ".cfg") != 0 && strcmp(dot, ".conf") != 0)) {
+        printf("Invalid config file format: %s\n", configPath);
+        return -1;
+    }
 
 	config->whitelist = NULL;
 	config->whiteListCount = 0;
 	config->outputFile = NULL;
-	config->iterations = 1; // Default to 1 iteration
-	config->interval = 0; // Default to 0 seconds interval
-	strncpy(config->logLevel, "INFO", sizeof(config->logLevel) - 1);
+	config->iterations = DEFAULT_ITERATIONS; // Default to 1 iteration
+	config->interval = DEFAULT_INTERVAL; // Default to 0 seconds interval
+	strncpy(config->logLevel, DEFAULT_LOG_LEVEL, sizeof(config->logLevel) - 1);
 
-	if (strcmp(dot, ".json") == 0) {
-		FILE *fp = fopen(configPath, "r");
-		if (!fp) {
-			printf("Failed to open config file: %s\n", configPath);
-			return -1;
-		}
-		char buf[4096];
-		size_t len = fread(buf, 1, sizeof(buf) - 1, fp);
-		buf[len] = '\0';
-		fclose(fp);
-		//TODO: Implement JSON parsing logic 
-
-	} else if (strcmp(dot, ".txt") == 0 || strcmp(dot, ".cfg") == 0 || strcmp(dot, ".conf") == 0 ) {
-		FILE *fp = fopen(configPath, "r");
-		if (!fp) {
-			printf("Failed to open config file: %s\n", configPath);
-			return -1;
-		}
-		char line[512];
-		while (fgets(line, sizeof(line), fp)) {
-            char *eq = strchr(line, '=');
-            if (!eq) continue;
-            *eq = '\0';
-            char *key = line;
-            char *val = eq + 1;
-            // Remove trailing newline and commas
-            char *end = val + strlen(val) - 1;
-			while (end > val && (*end == '\n' || *end == ',')) *end-- = '\0';
-
-			if (strcmp(key, "process_whitelist") == 0) {
-                // Comma separated
-                int count = 1;
-                for (char *p = val; *p; p++) if (*p == ',') count++;
-                config->whiteListCount = count;
-                config->whitelist = (char **)calloc(count, sizeof(char *));
-                int idx = 0;
-                char *tok = strtok(val, ",");
-                while (tok && idx < count) {
-                    while (*tok == ' ') tok++;
-                    config->whitelist[idx++] = strdup(tok);
-                    tok = strtok(NULL, ",");
-                }
-            } else if (strcmp(key, "output_file") == 0) {
-                config->outputFile = strdup(val);
-				if (!config->outputFile) {
-					static char defaultFile[256];
-					time_t timenow = time(NULL);
-					snprintf(defaultFile, sizeof(defaultFile), "/tmp/%lu_meminsight.csv", timenow);
-					config->outputFile = defaultFile;
-				}
-            } else if (strcmp(key, "iterations") == 0) {
-                config->iterations = atoi(val);
-            } else if (strcmp(key, "interval") == 0) {
-                config->interval = atoi(val);
-            } else if (strcmp(key, "log_level") == 0) {
-                strncpy(config->logLevel, val, sizeof(config->logLevel) - 1);
-                config->logLevel[sizeof(config->logLevel) - 1] = '\0';
-            }
-		}
-		fclose(fp);
-	} else {
-		printf("Unsupported config file format: %s\n", configPath);
+	FILE *fp = fopen(configPath, "r");
+	if (!fp) {
+		printf("Failed to open config file: %s\n", configPath);
 		return -1;
 	}
+	char line[512];
+	while (fgets(line, sizeof(line), fp)) {
+		char *eq = strchr(line, '=');
+		if (!eq) continue;
+		*eq = '\0';
+		char *key = line;
+		char *val = eq + 1;
+		// Remove trailing newline and commas
+		char *end = val + strlen(val) - 1;
+		while (end > val && (*end == '\n' || *end == ',')) *end-- = '\0';
+
+		if (strcmp(key, "process_whitelist") == 0) {
+			// Comma separated
+			int count = 1;
+			for (char *p = val; *p; p++) if (*p == ',') count++;
+			config->whiteListCount = count;
+			config->whitelist = (char **)calloc(count, sizeof(char *));
+			int idx = 0;
+			char *tok = strtok(val, ",");
+			while (tok && idx < count) {
+				while (*tok == ' ') tok++;
+				config->whitelist[idx++] = strdup(tok);
+				tok = strtok(NULL, ",");
+			}
+		} else if (strcmp(key, "output_file") == 0) {
+			config->outputFile = strdup(val);
+			if (!config->outputFile) {
+				char mac[32] = {0};
+				static char defaultFile[256];
+				getMacAddress(INTERFACE, mac, sizeof(mac));
+				if (mac[0] == '\0') strcpy(mac, DEFAULT_MAC);
+				time_t timenow = time(NULL);
+				snprintf(defaultFile, sizeof(defaultFile), "/tmp/%s_%lu_meminsight.csv", mac, timenow);
+				config->outputFile = defaultFile;
+			}
+		} else if (strcmp(key, "iterations") == 0) {
+			config->iterations = atoi(val);
+		} else if (strcmp(key, "interval") == 0) {
+			config->interval = atoi(val);
+		} else if (strcmp(key, "log_level") == 0) {
+			strncpy(config->logLevel, val, sizeof(config->logLevel) - 1);
+			config->logLevel[sizeof(config->logLevel) - 1] = '\0';
+		}
+	}
+	fclose(fp);
 	return 0;
 }
-
-
 
 // -----------------------------
 // Linked List Operations
@@ -560,24 +658,120 @@ void printHelpAndUsage(int argc, char *argv[])
 	printf("A lightweight, configurable tool for collecting detailed system and per-process memory and CPU statistics.\n");
 	printf("Options:\n");
 	printf("  -a, --all				Include kernel threads for process monitoring\n");
-	printf("  -c, --config <file> 	Path to JSON configuration file\n");
+	printf("  -c, --config <file> 	Path to configuration file with .conf or .cfg or .txt extension\n");
 	printf("  -h, --help   			Show this help message and exit\n");
 	printf("  -t, --test 			Run in test mode with a generated minimal config\n");
 	printf("\n");
 	printf("Default behavior (no flags):\n");
 	printf(" - Runs 1 iteration, interval 0s, monitors all processes, log level INFO\n");
-	printf(" - Output: /tmp/<timestamp>_memsinsight.csv\n");
+	printf(" - Output: /tmp/<MAC>_<timestamp>_memsinsight.csv\n");
 	printf("\n");
 	printf("Example:\n");
 	printf("  %s\n", argv[0]);
 	printf("  %s -a\n", argv[0]);
-	printf("  %s --config /etc/memins_config.json\n", argv[0]);
-	printf("  %s -c myconfig.json -a\n", argv[0]);
+	printf("  %s --config /etc/xmem_configuration.conf\n", argv[0]);
+	printf("  %s -c myconfig.cfg -a\n", argv[0]);
 	printf("  %s --test\n", argv[0]);
 	printf("\n");
 	printf("Sample config file (JSON):\n");
-	printf("{\n  \"process_whitelist\": [\"myapp\", \"systemd\", \"1234\"],\n  \"output_file\": \"/tmp/xmeminsight.csv\",\n  \"iterations\": 10,\n  \"interval\": 60,\n  \"log_level\": \"INFO\"\n}\n");
+	printf("\n  process_whitelist=myapp,systemd,1234,\n  output_file=/tmp/xmeminsight.csv,\n  iterations=10,\n  interval=60\n  log_level=INFO\n");
 	exit(1);
+}
+
+int systemWide(bool includeKthreads) {
+	unsigned int noOfPids = 0;
+	char *outPath = NULL;
+	time_t timenow = time(NULL);
+	struct tm *tm_info = localtime(&timenow);
+	char filename[128] = {'\0'};
+	char outputfile[256] = {'\0'};
+	// getMacAddress() for default interface and have it in the filename
+	char mac[32] = {0};
+	getMacAddress(INTERFACE, mac, sizeof(mac));
+	if (mac[0] == '\0') {
+		strcpy(mac, DEFAULT_MAC);
+	}
+	if (0 == strftime(filename, sizeof(filename), "%Y_%m_%d_%H_%M_%S_memstatus.csv", tm_info)) {
+        sprintf(filename, "%s_%lu_memstatus.csv", mac, timenow);
+    }
+	sprintf(outputfile, "%s/%s", outPath ? outPath : "/tmp/", filename);
+	printf("System-wide monitoring output: %s\n", outputfile);
+	FILE *output = fopen(outputfile, "w");
+	if (NULL == output) {
+        printf("%s: Open failed, %d [%s]\n", outputfile, errno, strerror(errno));
+        return -1;
+    }
+	unsigned long rssTotal = 0, pssTotal = 0, shared_clean_total = 0, private_dirty_total = 0, swap_pss_total = 0;
+    DIR *proc = opendir("/proc");
+	if (proc) {
+		struct dirent *entry;
+		while ((entry = readdir(proc)) != NULL) {
+			if (entry->d_name[0] != ".") {
+				unsigned pid = atoi(entry->d_name);
+				char nameTmp[PATH_MAX] = {0};
+				if (pid > 0) {
+					char pathTmp[PATH_MAX] = {0};
+					unsigned long utime = 0, stime = 0;
+					unsigned long minFaults = 0, majFaults = 0;
+
+					sprintf(pathTmp, "/proc/%d/smaps", pid);
+					FILE *fp = fopen(pathTmp, "r");
+					if (fp) {
+						unsigned flags;
+						if (6 == fscanf(fp, "%*d %*c%s %*c %*d %*d %*d %*d %*d %u %lu %*u %lu %*u %lu %lu",
+                                        nameTmp, &flags, &minFaults, &majFaults, &utime, &stime )) {
+							nameTmp[strlen(nameTmp)-1] = '\0'; // Remove trailing newline
+							memset(&getProcessInfo, 0, sizeof(getProcessInfo));
+							if (flags & 0x00200000) { /*PF_KTHREAD*/
+								if (includeKthreads) {
+									printf("%d,[%s],0,0,0,0,0,%lu,%lu\n", pid, nameTmp, majFaults, utime + stime);
+									getProcessInfo.pid = pid;
+                                    sprintf(getProcessInfo.name, "[%s]", nameTmp);
+                                    getProcessInfo.majFaults = majFaults;
+                                    getProcessInfo.cputime = utime + stime;
+                                    addProcessInfo(&getProcessInfo);
+								}
+								fclose(fp);
+								continue; // Skip kernel threads if not included
+							}
+							noOfPids++;
+						}
+						fclose(fp);
+					} else {
+						printf("%s: Open failed, %d [%s]\n", pathTmp, errno, strerror(errno));
+						continue; // Skip this process if smaps cannot be opened
+					}
+					getProcessInfo.pid = pid;
+					strcpy(getProcessInfo.name, nameTmp);
+                    getProcessInfo.majFaults = majFaults;
+                    getProcessInfo.cputime = utime + stime;
+					if (!getProcessInfos(pid)) {
+						rssTotal += getProcessInfo.rssTotal;
+						pssTotal += getProcessInfo.pssTotal;
+						shared_clean_total += getProcessInfo.shared_clean_total;
+						private_dirty_total += getProcessInfo.private_dirty_total;
+						swap_pss_total += getProcessInfo.swap_pss_total;
+						addProcessInfo(&getProcessInfo);
+					} else {
+						printf("Failed to get process info for PID %d\n", pid);
+					}
+				}
+			}
+		}
+		closedir(proc);
+	} else {
+		printf("Failed to open /proc directory: %s\n", strerror(errno));
+		return -1;
+	}
+
+	saveMeminfo(output);
+	printf("Processed %u processes\nRSS_Total %lu\nPSS_Total %lu\nShared_Clean_Total %lu\nPrivate_Dirty_Total %lu\n",
+           noOfPids, rssTotal, pssTotal, shared_clean_total, private_dirty_total);
+	fprintf(output, "\n\nProcesses:\nPID,EXE,RSS,PSS,SHARED_CLEAN,PRIVATE_DIRTY,SWAP_PSS,MAJ_FAULTS,CPU_TIME\n");
+    writeProcessInfo(noOfPids, output);
+	fprintf(output, "0,Total,%lu,%lu,%lu,%lu\n", rssTotal, pssTotal, shared_clean_total, private_dirty_total);
+    fclose(output);
+	return 0;
 }
 
 /**
@@ -626,57 +820,137 @@ void saveMeminfo(FILE *out)
 int toBeMain(int argc, char *argv[]){
 	// CLI parsing and initialization
 	bool isConfigPresent = false;
-	bool enableKThreads = false
+	bool enableKThreads = false;
+	bool isTestMode = false;
+	bool isSystemWide = false;
 	char confFile[PATH_MAX] = {0};
 
 	if (argc == 1) {
-		// No arguments: default system-wide mode
-		systemWide(); // TODO: implement system-wide monitoring
-		return
+		isSystemWide = true;
 	}
 
-	for (int i; i < argc; i++) {
+	for (int i = 1; i < argc; i++) {
 		if (!strcmp(argv[i], "-c") || !strcmp(argv[i], "--config")) {
-			if (i+1 >= argc) {
+			if (i+1 < argc) {
+				strncpy(confFile, argv[i + 1], PATH_MAX - 1);
+				FILE *fp = fopen(confFile, "r");
+				if (!fp) {
+					printf("Error: Config file '%s' does not exist or cannot be opened.\n", confFile);
+					printHelpAndUsage(argc, argv);
+				}
+				fclose(fp);
+				isConfigPresent = true;
+				i++; // Skip next arg (conf file)
+			} else {
 				printf("Error: Missing config file path after %s\n", argv[i]);
 				printHelpAndUsage(argc, argv);
 			}
-			strncpy(confFile, argv[i + 1], PATH_MAX - 1);
-            FILE *fp = fopen(confFile, "r");
-			if (!fp) {
-                printf("Error: Config file '%s' does not exist or cannot be opened.\n", confFile);
-                printHelpAndUsage(argc, argv);
-            }
-            fclose(fp);
-			isConfigPresent = true;
-			i++; // Skip next arg (conf file)
 		} else if (!strcmp(argv[i], "-a") || !strcmp(argv[i], "--all")) {
 			enableKThreads = true;
 		} else if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) {
 			printHelpAndUsage(argc, argv);
 		} else if (!strcmp(argv[i], "-t") || !strcmp(argv[i], "--test")) {
-            // TODO: Test mode
+            isTestMode = true;
         } else {
             printf("Error: Unrecognized argument '%s'\n", argv[i]);
             printHelpAndUsage(argc, argv);
         }
 	}
-
-	if isConfigPresent {
+	includeKthreads = enableKThreads; // Cascade to global for all code paths
+	if (isConfigPresent) {
 		Config_Data config;
 		if (parseConfig(confFile, &config) != 0) {
 			printf("Error: Failed to parse config file '%s'\n", confFile);
-			return -1;
+			return -1; // TODO: Need to handle this better
 		}
-		printf("parsed config: whitelist=%p, count=%u, outputFile=%s, iterations=%u, interval=%u, logLevel=%s\n",
-				config.whitelist, config.whiteListCount, config.outputFile, config.iterations, config.interval, config.logLevel);
+		printf("%s file data: whitelist=%p\n, count=%u\n, outputFile=%s\n, iterations=%u\n, interval=%u\n, logLevel=%s\n",
+				confFile, config.whitelist, config.whiteListCount, config.outputFile, config.iterations, config.interval, config.logLevel);
 
-		// TODO: Implement main logic
-		// 1. Construct LL
-		// 2. Read /proc/meminfo and write to output
-		// 3. Read /proc/[pid]/stat and /proc/[pid]/smaps for each process
-		// 4. Collect stats and write to output file
-		// 5. Handle iterations and intervals
+		FILE *output = fopen(config.outputFile, "w");
+		if (!output) {
+			printf("Error: Failed to open output file '%s' for writing\n", config.outputFile);
+            for (unsigned j = 0; j < config.whiteListCount; j++) {
+				if (config.whitelist[j] != NULL) {
+					free(config.whitelist[j]);
+				}
+			}
+            if (config.whitelist != NULL) {
+				free(config.whitelist);
+			}
+			if (config.outputFile != NULL) {
+				free(config.outputFile);
+			}
+			return -1; // TODO: Need to handle this better
+		}
+
+		saveMeminfo(output);
+		fprintf(output, "PID,EXE,RSS,PSS,SHARED_CLEAN,PRIVATE_DIRTY,SWAP_PSS,MAJ_FAULTS,CPU_TIME\n");
+
+		unsigned long rssTotal = 0, pssTotal = 0, shared_clean_total = 0, private_dirty_total = 0, swap_pss_total = 0;
+
+		if (config.iterations > 0 && config.whiteListCount > 0) {
+			for (unsigned i = 0; i < config.iterations; i++) {
+				for (unsigned j = 0; j < config.whiteListCount; j++) {
+					unsigned int pid = 0;
+					bool isPIDEntry = false;
+					printf("Processing whitelist item %s\n", config.whitelist[j]);
+					if (isPID(config.whitelist[j])) {
+						isPIDEntry = true;
+						pid = (unsigned int)atoi(config.whitelist[j]);
+					} else {
+						if (!getPIDByProcessName(config.whitelist[j], &pid)) {
+							printf("Process name'%s' not found\n", config.whitelist[j]);
+							continue; // Skip to next item
+						}
+					}
+					memset(&getProcessInfo, 0, sizeof(getProcessInfo));
+					if (getProcessInfos(pid) == 0) {
+						getProcessInfo.pid = pid;
+						if (!isPIDEntry) {
+							strncpy(getProcessInfo.name, config.whitelist[j], sizeof(getProcessInfo.name) - 1);
+							getProcessInfo.name[sizeof(getProcessInfo.name) - 1] = '\0';
+						}
+						rssTotal += getProcessInfo.rssTotal;
+                        pssTotal += getProcessInfo.pssTotal;
+                        shared_clean_total += getProcessInfo.shared_clean_total;
+                        private_dirty_total += getProcessInfo.private_dirty_total;
+                        swap_pss_total += getProcessInfo.swap_pss_total;
+						addProcessInfo(&getProcessInfo);
+					} else {
+						printf("Failed to get process info for PID %u\n", pid);
+					}
+				}
+				writeProcessInfo(config.whiteListCount, output);
+				headProcessInfo = NULL; // Reset for next iteration
+				if (config.interval > 0 && i+1 < config.iterations) {
+					printf("Sleeping for %u seconds before next iteration...\n", config.interval);
+					sleep(config.interval);
+				}
+			}
+		} else {
+			// TODO: Implement behavior for no iterations or empty whitelist
+			printf("No iterations or empty whitelist specified in config.\n");
+		}
+
+		fprintf(output, "0,Total,%lu,%lu,%lu,%lu\n", rssTotal, pssTotal, shared_clean_total, private_dirty_total);
+		fclose(output);
+
+		// Free the whitelist memory
+        for (unsigned j = 0; j < config.whiteListCount; j++) {
+			if (config.whitelist[j] != NULL) {
+				free(config.whitelist[j]);
+			}
+		}
+		if (config.outputFile != NULL) {
+			free(config.outputFile);
+		}
+        if(config.whitelist != NULL) {
+			free(config.whitelist);
+		}
+
+	} else if (isSystemWide){
+		// TODO: Implement default behavior if no config file is provided
+		systemWide(enableKThreads);
 	}
 }
 
