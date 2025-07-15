@@ -40,8 +40,8 @@
 // -----------------------------
 
 //#define PRINT_DBG printf
-#define PRINT_DBG(...) 
-#define PRINT_DBG_INITIAL printf 
+#define PRINT_DBG(...)
+#define PRINT_DBG_INITIAL printf
 #define PRINT_DBG_SCANNED printf
 //#define PRINT_DBG_SCANNED(...)
 
@@ -70,25 +70,25 @@
  * Linked list node for sorting and output.
  */
 typedef struct process_info {
-    unsigned pid;                        // Process ID
-    char name[PATH_MAX+8];               // Process name
-    unsigned long rssTotal;              // Resident Set Size total (kB)
-    unsigned long pssTotal;              // Proportional Set Size total (kB)
-    unsigned long shared_clean_total;    // Shared clean memory (kB)
-    unsigned long private_dirty_total;   // Private dirty memory (kB)
-    unsigned long swap_pss_total;        // Swap PSS (kB)
-    unsigned long majFaults;             // Major page faults
-    unsigned long cputime;               // CPU time (user + system)
-    struct process_info *next;           // Next node in linked list
+	unsigned pid;                        // Process ID
+	char name[PATH_MAX+8];               // Process name
+	unsigned long rssTotal;              // Resident Set Size total (kB)
+	unsigned long pssTotal;              // Proportional Set Size total (kB)
+	unsigned long shared_clean_total;    // Shared clean memory (kB)
+	unsigned long private_dirty_total;   // Private dirty memory (kB)
+	unsigned long swap_pss_total;        // Swap PSS (kB)
+	unsigned long majFaults;             // Major page faults
+	unsigned long cputime;               // CPU time (user + system)
+	struct process_info *next;           // Next node in linked list
 } Process_Info;
 
 typedef struct config {
-    char **whitelist;                   // Array of whitelisted process names
-    unsigned int whiteListCount;        // Number of whitelisted processes
-    const char *outputFile;             // Output file name
-    unsigned int iterations;            // Number of iterations to run
-    unsigned int interval;              // Interval between iterations in seconds
-    char logLevel[8];                   // Log level (e.g., "DEBUG", "INFO", "ERROR")   
+	char **whitelist;                   // Array of whitelisted process names
+	unsigned int whiteListCount;        // Number of whitelisted processes
+	const char *outputFile;             // Output file name
+	unsigned int iterations;            // Number of iterations to run
+	unsigned int interval;              // Interval between iterations in seconds
+	char logLevel[8];                   // Log level (e.g., "DEBUG", "INFO", "ERROR")
 } Config_Data;
 
 // -----------------------------

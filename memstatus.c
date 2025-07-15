@@ -50,16 +50,16 @@ int getPropertyFromFile(const char *filename, const char *property, char *proper
 		if (*trim == '#' || *trim == '\0' || *trim == '\n') continue;	// Check for property match at start of line
 
 		// Split on '='
-        char *key = strtok(trim, "=");
-        char *val = strtok(NULL, "\n");
-        if (!key || !val) continue;
+		char *key = strtok(trim, "=");
+		char *val = strtok(NULL, "\n");
+		if (!key || !val) continue;
 
 		// Remove trailing spaces from key
-        char *kend = key + strlen(key) - 1;
-        while (kend > key && (*kend == ' ' || *kend == '\t')) *kend-- = '\0';
+		char *kend = key + strlen(key) - 1;
+		while (kend > key && (*kend == ' ' || *kend == '\t')) *kend-- = '\0';
 
 		// Remove leading spaces from val
-        while (*val == ' ' || *val == '\t') val++;
+		while (*val == ' ' || *val == '\t') val++;
 
 		if (strcmp(key, property) == 0) {
 			// Find the length of the value, excluding any trailing newline or carriage return
@@ -82,29 +82,29 @@ int getPropertyFromFile(const char *filename, const char *property, char *proper
 
 size_t getMacAddress(const char* iface, char *macAddress, size_t szBufSize) {
 	if (!iface || !macAddress || szBufSize < 18) { // 17 chars + null
-        printf("Invalid parameter\n");
-        return 0;
-    }
+		printf("Invalid parameter\n");
+		return 0;
+	}
 	struct ifreq ifr;
-    int fd = socket(AF_INET, SOCK_DGRAM, 0);
-    if (fd == -1) {
-        printf("socket create failed: %s\n", strerror(errno));
-        return 0;
-    }
+	int fd = socket(AF_INET, SOCK_DGRAM, 0);
+	if (fd == -1) {
+		printf("socket create failed: %s\n", strerror(errno));
+		return 0;
+	}
 	memset(&ifr, 0, sizeof(ifr));
-    strncpy(ifr.ifr_name, iface, IFNAMSIZ - 1);
-    ifr.ifr_addr.sa_family = AF_INET;
+	strncpy(ifr.ifr_name, iface, IFNAMSIZ - 1);
+	ifr.ifr_addr.sa_family = AF_INET;
 	if (ioctl(fd, SIOCGIFHWADDR, &ifr) == -1) {
-        printf("ioctl SIOCGIFHWADDR failed: %s\n", strerror(errno));
-        close(fd);
-        return 0;
-    }
-    close(fd);
+		printf("ioctl SIOCGIFHWADDR failed: %s\n", strerror(errno));
+		close(fd);
+		return 0;
+	}
+	close(fd);
 
 	unsigned char *mac = (unsigned char *)ifr.ifr_hwaddr.sa_data;
-    size_t ret = snprintf(macAddress, szBufSize, "%02x:%02x:%02x:%02x:%02x:%02x",
-                          mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
-    return ret;
+	size_t ret = snprintf(macAddress, szBufSize, "%02x:%02x:%02x:%02x:%02x:%02x",
+	                      mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+	return ret;
 }
 
 int isPID(const char *str) {
@@ -113,32 +113,32 @@ int isPID(const char *str) {
 }
 
 int getPIDByProcessName(const char *procName, unsigned int *pidOut) {
-    DIR *proc = opendir("/proc");
-    if (!proc) return 0;
-    struct dirent *entry;
-    char commPath[PATH_MAX];
-    char nameBuf[PATH_MAX];
-    int found = 0;
-    while ((entry = readdir(proc)) != NULL) {
-        if (entry->d_type != DT_DIR) continue;
-        if (!isPID(entry->d_name)) continue;
-        snprintf(commPath, sizeof(commPath), "/proc/%s/comm", entry->d_name);
-        FILE *f = fopen(commPath, "r");
-        if (!f) continue;
-        if (fgets(nameBuf, sizeof(nameBuf), f)) {
-            // Remove trailing newline
-            char *nl = strchr(nameBuf, '\n');
-            if (nl) *nl = '\0';
-            if (strcmp(nameBuf, procName) == 0) {
-                *pidOut = (unsigned int)atoi(entry->d_name);
-                found = 1;
-                fclose(f);
-                break;
-            }
-        }
-        fclose(f);
-    }
-    closedir(proc);
+	DIR *proc = opendir("/proc");
+	if (!proc) return 0;
+	struct dirent *entry;
+	char commPath[PATH_MAX];
+	char nameBuf[PATH_MAX];
+	int found = 0;
+	while ((entry = readdir(proc)) != NULL) {
+		if (entry->d_type != DT_DIR) continue;
+		if (!isPID(entry->d_name)) continue;
+		snprintf(commPath, sizeof(commPath), "/proc/%s/comm", entry->d_name);
+		FILE *f = fopen(commPath, "r");
+		if (!f) continue;
+		if (fgets(nameBuf, sizeof(nameBuf), f)) {
+			// Remove trailing newline
+			char *nl = strchr(nameBuf, '\n');
+			if (nl) *nl = '\0';
+			if (strcmp(nameBuf, procName) == 0) {
+				*pidOut = (unsigned int)atoi(entry->d_name);
+				found = 1;
+				fclose(f);
+				break;
+			}
+		}
+		fclose(f);
+	}
+	closedir(proc);
 	return found ? 1 : 0;
 }
 
@@ -152,31 +152,31 @@ int fillProcessStatFields(unsigned pid, Process_Info *info, unsigned *flagsOut) 
 	}
 	char line[1024];
 	if (!fgets(line, sizeof(line), statFile)) {
-        fclose(statFile);
-        return 0;
-    }
+		fclose(statFile);
+		return 0;
+	}
 	fclose(statFile);
 	// Parsing Name
 	char *open = strchr(line, '(');
-    char *close = strrchr(line, ')');
+	char *close = strrchr(line, ')');
 	if (open && close && close > open + 1) {
-        size_t len = close - open - 1;
-        if (len >= sizeof(info->name)) len = sizeof(info->name) - 1;
-        strncpy(info->name, open + 1, len);
-        info->name[len] = '\0';
-    } else {
-        strcpy(info->name, "unknown");
-    }
+		size_t len = close - open - 1;
+		if (len >= sizeof(info->name)) len = sizeof(info->name) - 1;
+		strncpy(info->name, open + 1, len);
+		info->name[len] = '\0';
+	} else {
+		strcpy(info->name, "unknown");
+	}
 	// Parse other fields: flags (8), minflt (10), majflt (12), utime (14), stime (15)
 	unsigned flags = 0, minflt = 0, majflt = 0;
-    unsigned long utime = 0, stime = 0;
-    char *after = close ? close + 2 : line;
-    sscanf(after, "%*c %*d %*d %*d %*d %*d %u %u %*u %u %*u %lu %lu",
-           &flags, &minflt, &majflt, &utime, &stime);
-    info->majFaults = majflt;
-    info->cputime = utime + stime;
-    if (flagsOut) *flagsOut = flags;
-    return 1;
+	unsigned long utime = 0, stime = 0;
+	char *after = close ? close + 2 : line;
+	sscanf(after, "%*c %*d %*d %*d %*d %*d %u %u %*u %u %*u %lu %lu",
+	       &flags, &minflt, &majflt, &utime, &stime);
+	info->majFaults = majflt;
+	info->cputime = utime + stime;
+	if (flagsOut) *flagsOut = flags;
+	return 1;
 }
 
 // -----------------------------
@@ -186,9 +186,9 @@ int fillProcessStatFields(unsigned pid, Process_Info *info, unsigned *flagsOut) 
 int parseConfig(const char *configPath, Config_Data *config) {
 	const char *dot = strrchr(configPath, '.');
 	if (!dot || (strcmp(dot, ".txt") != 0 && strcmp(dot, ".cfg") != 0 && strcmp(dot, ".conf") != 0)) {
-        printf("Invalid config file format: %s\n", configPath);
-        return -1;
-    }
+		printf("Invalid config file format: %s\n", configPath);
+		return -1;
+	}
 
 	config->whitelist = NULL;
 	config->whiteListCount = 0;
@@ -260,22 +260,21 @@ int parseConfig(const char *configPath, Config_Data *config) {
  */
 void writeProcessInfo(unsigned noOfPids, FILE *output)
 {
-    Process_Info *tmp = headProcessInfo;
-    Process_Info *tofree;
-    unsigned int i = 1;
-    while (tmp) {
-        printf("%d,%lu,%lu,%lu,%lu,%lu,%lu,%lu,%u,%s\n",
-                i++, tmp->pssTotal, tmp->rssTotal, tmp->shared_clean_total, tmp->private_dirty_total, tmp->swap_pss_total, 
-                tmp->majFaults, tmp->cputime, tmp->pid, tmp->name);
-        fprintf(output, "%u,%s,%lu,%lu,%lu,%lu,%lu,%lu,%lu\n", tmp->pid, tmp->name, tmp->pssTotal, tmp->rssTotal, tmp->shared_clean_total,
-                tmp->private_dirty_total, tmp->swap_pss_total, tmp->majFaults, tmp->cputime);    
-        tofree = tmp;
-        tmp = tmp->next;
-        free(tofree);
-    }
-    if (i != noOfPids) {
-        printf("Some process details might've been missed [%d vs actual %u]\n", i, noOfPids);
-    }
+	Process_Info *tmp = headProcessInfo;
+	Process_Info *tofree;
+	unsigned int i = 1;
+	while (tmp) {
+		printf("%d,%lu,%lu,%lu,%lu,%lu,%lu,%lu,%u,%s\n",
+		       i++, tmp->rssTotal, tmp->pssTotal, tmp->shared_clean_total, tmp->private_dirty_total, tmp->swap_pss_total, tmp->majFaults, tmp->cputime, tmp->pid, tmp->name);
+		fprintf(output, "%u,%s,%lu,%lu,%lu,%lu,%lu,%lu,%lu\n",
+		        tmp->pid, tmp->name, tmp->rssTotal, tmp->pssTotal, tmp->shared_clean_total, tmp->private_dirty_total, tmp->swap_pss_total, tmp->majFaults, tmp->cputime);
+		tofree = tmp;
+		tmp = tmp->next;
+		free(tofree);
+	}
+	if (i != noOfPids) {
+		printf("Some process details might've been missed [%d vs actual %u]\n", i, noOfPids);
+	}
 }
 
 /**
@@ -283,33 +282,33 @@ void writeProcessInfo(unsigned noOfPids, FILE *output)
  */
 void addProcessInfo(Process_Info *addPInfo)
 {
-    Process_Info *addNode = (Process_Info*)malloc(sizeof(Process_Info));
-    if (addNode) {
-        Process_Info *tmp = headProcessInfo;
-        Process_Info *prev = NULL;
-        memcpy(addNode, addPInfo, sizeof(Process_Info));
-        while (tmp) {
-            if (tmp->pssTotal < addNode->pssTotal) {
-                if (prev) {
-                    prev->next = addNode;
-                    addNode->next = tmp;
-                }
-                else {
-                    headProcessInfo = addNode;
-                    headProcessInfo->next = tmp;
-                }
-                return;
-            }
-            prev = tmp;
-            tmp = tmp->next;
-        }
-        if (headProcessInfo) {
-            prev->next = addNode;
-        }
-        else {
-            headProcessInfo = addNode;
-        }
-    }
+	Process_Info *addNode = (Process_Info*)malloc(sizeof(Process_Info));
+	if (addNode) {
+		Process_Info *tmp = headProcessInfo;
+		Process_Info *prev = NULL;
+		memcpy(addNode, addPInfo, sizeof(Process_Info));
+		while (tmp) {
+			if (tmp->pssTotal < addNode->pssTotal) {
+				if (prev) {
+					prev->next = addNode;
+					addNode->next = tmp;
+				}
+				else {
+					headProcessInfo = addNode;
+					headProcessInfo->next = tmp;
+				}
+				return;
+			}
+			prev = tmp;
+			tmp = tmp->next;
+		}
+		if (headProcessInfo) {
+			prev->next = addNode;
+		}
+		else {
+			headProcessInfo = addNode;
+		}
+	}
 }
 
 #ifdef TESTME
@@ -318,16 +317,16 @@ void addProcessInfo(Process_Info *addPInfo)
  */
 void checkAndFree()
 {
-    Process_Info *tmp = headProcessInfo, *tofree;
-    int i = 1;
-    while (tmp) {
-        printf("%d,%u,%lu\n",
-                i++, tmp->pid, tmp->pssTotal);
-        tofree = tmp;
-        tmp = tmp->next;
-        free(tofree);
-    }
-    headProcessInfo = NULL;
+	Process_Info *tmp = headProcessInfo, *tofree;
+	int i = 1;
+	while (tmp) {
+		printf("%d,%u,%lu\n",
+		       i++, tmp->pid, tmp->pssTotal);
+		tofree = tmp;
+		tmp = tmp->next;
+		free(tofree);
+	}
+	headProcessInfo = NULL;
 }
 
 /**
@@ -335,39 +334,39 @@ void checkAndFree()
  */
 void testList ()
 {
-    Process_Info add = {0};
-    add.pid = 1;
-    add.pssTotal = 10;
-    addProcessInfo(&add);
-    add.pid = 2;
-    add.pssTotal = 20;
-    addProcessInfo(&add);
-    add.pid = 3;
-    add.pssTotal = 30;
-    addProcessInfo(&add);
-    checkAndFree();
+	Process_Info add = {0};
+	add.pid = 1;
+	add.pssTotal = 10;
+	addProcessInfo(&add);
+	add.pid = 2;
+	add.pssTotal = 20;
+	addProcessInfo(&add);
+	add.pid = 3;
+	add.pssTotal = 30;
+	addProcessInfo(&add);
+	checkAndFree();
 
-    add.pid = 1;
-    add.pssTotal = 30;
-    addProcessInfo(&add);
-    add.pid = 2;
-    add.pssTotal = 20;
-    addProcessInfo(&add);
-    add.pid = 3;
-    add.pssTotal = 10;
-    addProcessInfo(&add);
-    checkAndFree();
+	add.pid = 1;
+	add.pssTotal = 30;
+	addProcessInfo(&add);
+	add.pid = 2;
+	add.pssTotal = 20;
+	addProcessInfo(&add);
+	add.pid = 3;
+	add.pssTotal = 10;
+	addProcessInfo(&add);
+	checkAndFree();
 
-    add.pid = 1;
-    add.pssTotal = 10;
-    addProcessInfo(&add);
-    add.pid = 2;
-    add.pssTotal = 30;
-    addProcessInfo(&add);
-    add.pid = 3;
-    add.pssTotal = 20;
-    addProcessInfo(&add);
-    checkAndFree();
+	add.pid = 1;
+	add.pssTotal = 10;
+	addProcessInfo(&add);
+	add.pid = 2;
+	add.pssTotal = 30;
+	addProcessInfo(&add);
+	add.pid = 3;
+	add.pssTotal = 20;
+	addProcessInfo(&add);
+	checkAndFree();
 }
 #endif
 
@@ -381,111 +380,111 @@ void testList ()
  */
 int getProcessInfos(unsigned pid)
 {
-    static unsigned linesToSkipForRss = 0;
-    static unsigned linesToSkipForPss = 0;
-    static unsigned linesToSkipForSharedClean = 0;
-    static unsigned linesToSkipForDirtyPrivate = 0;
-    static unsigned linesToSkipForSwapPss = 0;
-    static unsigned linesToSkipForRollover = 0;
-    static unsigned linesToSkipIfRss0 = 0; 
-    
-    unsigned linesSkippedForRss = 0;
-    unsigned linesSkippedForPss = 0;
-    unsigned linesSkippedForSharedClean = 0;
-    unsigned linesSkippedForDirtyPrivate = 0;
-    unsigned linesSkippedForSwapPss = 0;
-    unsigned linesSkippedForRollover = 0;
+	static unsigned linesToSkipForRss = 0;
+	static unsigned linesToSkipForPss = 0;
+	static unsigned linesToSkipForSharedClean = 0;
+	static unsigned linesToSkipForDirtyPrivate = 0;
+	static unsigned linesToSkipForSwapPss = 0;
+	static unsigned linesToSkipForRollover = 0;
+	static unsigned linesToSkipIfRss0 = 0;
 
-    char tmp[128];
+	unsigned linesSkippedForRss = 0;
+	unsigned linesSkippedForPss = 0;
+	unsigned linesSkippedForSharedClean = 0;
+	unsigned linesSkippedForDirtyPrivate = 0;
+	unsigned linesSkippedForSwapPss = 0;
+	unsigned linesSkippedForRollover = 0;
+
+	char tmp[128];
 #ifdef TESTME
-    if (testpid) {
-        testpid = 0;
-        memcpy(tmp, testSmap, 128);
-        printf("Testing with %s\n", tmp);
-    }
-    else
-#endif	
-    sprintf(tmp, "/proc/%u/smaps", pid);
-    FILE *smap = fopen(tmp, "r");
-    if (smap) {
-        unsigned lines_To_skip = linesToSkipForRss;
-        unsigned skipped = 1; // Tracks current skips
-        unsigned expect_rss = 1;
-        unsigned expect_pss = 0;
-        unsigned expect_shared_clean = 0;
-        unsigned expect_private_dirty = 0;
-        unsigned expect_swap_pss = 0;
-        unsigned prev_pss = 0;
+	if (testpid) {
+		testpid = 0;
+		memcpy(tmp, testSmap, 128);
+		printf("Testing with %s\n", tmp);
+	}
+	else
+#endif
+		sprintf(tmp, "/proc/%u/smaps", pid);
+	FILE *smap = fopen(tmp, "r");
+	if (smap) {
+		unsigned lines_To_skip = linesToSkipForRss;
+		unsigned skipped = 1; // Tracks current skips
+		unsigned expect_rss = 1;
+		unsigned expect_pss = 0;
+		unsigned expect_shared_clean = 0;
+		unsigned expect_private_dirty = 0;
+		unsigned expect_swap_pss = 0;
+		unsigned prev_pss = 0;
 
 #ifdef TESTME
-        memset(&processInfoTest, 0, sizeof(processInfoTest));
+		memset(&processInfoTest, 0, sizeof(processInfoTest));
 #endif
-        while (fgets(tmp, 127, smap)) {
+		while (fgets(tmp, 127, smap)) {
 #ifdef TESTME
-            unsigned test_rss = 0, test_pss = 0;
-            unsigned test_shared_clean = 0, test_private_dirty = 0;
-            unsigned test_swap_pss = 0;
-            if (strstr(tmp, "Rss:")) {
-                PRINT_DBG("%s\n", tmp);
-                if (sscanf(tmp, "Rss: %u kB", &test_rss)) {
-                    processInfoTest.rssTotal += test_rss;
-                }
-            }
-            else if (strstr(tmp, "Pss:")) {
-                PRINT_DBG("%s\n", tmp);
-                if (sscanf(tmp, "Pss: %u kB", &test_pss)) {
-                    processInfoTest.pssTotal += test_pss;
-                }
-            }
-            else if (strstr(tmp, "Shared_Clean:")) {
-                PRINT_DBG("%s\n", tmp);
-                if (sscanf(tmp, "Shared_Clean: %u kB", &test_shared_clean)) {
-                    processInfoTest.shared_clean_total += test_shared_clean;
-                }
-            }
-            else if (strstr(tmp, "Private_Dirty:")) {
-                PRINT_DBG("%s\n", tmp);
-                if (sscanf(tmp, "Private_Dirty: %u kB", &test_private_dirty)) {
-                    processInfoTest.private_dirty_total += test_private_dirty;
-                }
-            }
-            else if (strstr(tmp, "SwapPss:")) {
-                PRINT_DBG("%s\n", tmp);
-                if (sscanf(tmp, "SwapPss: %u kB", &test_swap_pss)) {
-                    processInfoTest.swap_pss_total += test_swap_pss;
-                }
-            }
+			unsigned test_rss = 0, test_pss = 0;
+			unsigned test_shared_clean = 0, test_private_dirty = 0;
+			unsigned test_swap_pss = 0;
+			if (strstr(tmp, "Rss:")) {
+				PRINT_DBG("%s\n", tmp);
+				if (sscanf(tmp, "Rss: %u kB", &test_rss)) {
+					processInfoTest.rssTotal += test_rss;
+				}
+			}
+			else if (strstr(tmp, "Pss:")) {
+				PRINT_DBG("%s\n", tmp);
+				if (sscanf(tmp, "Pss: %u kB", &test_pss)) {
+					processInfoTest.pssTotal += test_pss;
+				}
+			}
+			else if (strstr(tmp, "Shared_Clean:")) {
+				PRINT_DBG("%s\n", tmp);
+				if (sscanf(tmp, "Shared_Clean: %u kB", &test_shared_clean)) {
+					processInfoTest.shared_clean_total += test_shared_clean;
+				}
+			}
+			else if (strstr(tmp, "Private_Dirty:")) {
+				PRINT_DBG("%s\n", tmp);
+				if (sscanf(tmp, "Private_Dirty: %u kB", &test_private_dirty)) {
+					processInfoTest.private_dirty_total += test_private_dirty;
+				}
+			}
+			else if (strstr(tmp, "SwapPss:")) {
+				PRINT_DBG("%s\n", tmp);
+				if (sscanf(tmp, "SwapPss: %u kB", &test_swap_pss)) {
+					processInfoTest.swap_pss_total += test_swap_pss;
+				}
+			}
 #endif
- 			/*00010000-00041000 r-xp 00000000 fc:00 5600       /usr/sbin/dropbearmulti
-  	 		  Size:                196 kB
-  	 		  Rss:                 192 kB
-  	 		  Pss:                  96 kB
-  	 		  Shared_Clean:        192 kB
-  	 		  Shared_Dirty:          0 kB
-   	  	 	  Private_Clean:         0 kB
-  	 		  Private_Dirty:         0 kB
-  	 		  Referenced:          192 kB
-  	 		  Anonymous:             0 kB
-  	 		  AnonHugePages:         0 kB
-  	 		  ShmemPmdMapped:        0 kB
-   	  	 	  Shared_Hugetlb:        0 kB
-  	 		  Private_Hugetlb:       0 kB
-  	 		  Swap:                  0 kB
-  	 		  SwapPss:               0 kB
-  	 		  KernelPageSize:        4 kB
-  	 		  MMUPageSize:           4 kB
-   	  	 	  Locked:                0 kB
-  	 		  VmFlags: rd ex mr mw me dw
-  	 		  00050000-00051000 r--p 00030000 fc:00 5600       /usr/sbin/dropbearmulti
-  	 		  Size:                  4 kB
-  	 		  Rss:                   4 kB
-  	 		  Pss:                   4 kB
-   	  	 	  Shared_Clean:          0 kB
-  	 		  Shared_Dirty:          0 kB
-  	 		  Private_Clean:         0 kB
-  	 		  Private_Dirty:         4 kB
- 			*/
-  	
+			/*00010000-00041000 r-xp 00000000 fc:00 5600       /usr/sbin/dropbearmulti
+			  Size:                196 kB
+			  Rss:                 192 kB
+			  Pss:                  96 kB
+			  Shared_Clean:        192 kB
+			  Shared_Dirty:          0 kB
+			  Private_Clean:         0 kB
+			  Private_Dirty:         0 kB
+			  Referenced:          192 kB
+			  Anonymous:             0 kB
+			  AnonHugePages:         0 kB
+			  ShmemPmdMapped:        0 kB
+			  Shared_Hugetlb:        0 kB
+			  Private_Hugetlb:       0 kB
+			  Swap:                  0 kB
+			  SwapPss:               0 kB
+			  KernelPageSize:        4 kB
+			  MMUPageSize:           4 kB
+			  Locked:                0 kB
+			  VmFlags: rd ex mr mw me dw
+			  00050000-00051000 r--p 00030000 fc:00 5600       /usr/sbin/dropbearmulti
+			  Size:                  4 kB
+			  Rss:                   4 kB
+			  Pss:                   4 kB
+			  Shared_Clean:          0 kB
+			  Shared_Dirty:          0 kB
+			  Private_Clean:         0 kB
+			  Private_Dirty:         4 kB
+			*/
+
 			unsigned rss = 0, pss = 0;
 			unsigned shared_clean = 0, private_dirty = 0;
 			unsigned swap_pss = 0;
@@ -510,7 +509,7 @@ int getProcessInfos(unsigned pid)
 								continue;
 							}
 						}
-					} 
+					}
 					else if (expect_pss) {
 						//pss = 0;
 						if (sscanf(tmp, "Pss: %u kB", &pss)) {
@@ -535,7 +534,7 @@ int getProcessInfos(unsigned pid)
 								expect_rss = 1;
 
 								lines_To_skip = linesToSkipForSwapPss? linesToSkipForDirtyPrivate + linesToSkipForSwapPss + linesToSkipForRollover - 2 :
-									linesToSkipForDirtyPrivate + linesToSkipForRollover - 1;
+								                linesToSkipForDirtyPrivate + linesToSkipForRollover - 1;
 							}
 							else {
 								expect_private_dirty = 1;
@@ -685,8 +684,8 @@ int getProcessInfos(unsigned pid)
  */
 void printHelp(char *argv[])
 {
-    printf("%s [-a] [-o <output directory>] [-t <path to custom map>]\n", argv[0]);
-    exit(1);
+	printf("%s [-a] [-o <output directory>] [-t <path to custom map>]\n", argv[0]);
+	exit(1);
 }
 
 void printHelpAndUsage(char *argv[], bool moreInfo)
@@ -730,17 +729,17 @@ int systemWide(bool includeKthreads) {
 		strcpy(mac, DEFAULT_MAC);
 	}
 	if (0 == strftime(filename, sizeof(filename), "%Y_%m_%d_%H_%M_%S_memstatus.csv", tm_info)) {
-        sprintf(filename, "%s_%lu_memstatus.csv", mac, timenow);
-    }
+		sprintf(filename, "%s_%lu_memstatus.csv", mac, timenow);
+	}
 	sprintf(outputfile, "%s/%s", outPath ? outPath : "/tmp/", filename);
 	printf("System-wide monitoring output: %s\n", outputfile);
 	FILE *output = fopen(outputfile, "w");
 	if (NULL == output) {
-        printf("%s: Open failed, %d [%s]\n", outputfile, errno, strerror(errno));
-        return -1;
-    }
+		printf("%s: Open failed, %d [%s]\n", outputfile, errno, strerror(errno));
+		return -1;
+	}
 	unsigned long rssTotal = 0, pssTotal = 0, shared_clean_total = 0, private_dirty_total = 0, swap_pss_total = 0;
-    DIR *proc = opendir(PROC_DIR);
+	DIR *proc = opendir(PROC_DIR);
 	if (proc) {
 		struct dirent *entry;
 		while ((entry = readdir(proc)) != NULL) {
@@ -777,12 +776,12 @@ int systemWide(bool includeKthreads) {
 	}
 	saveMeminfo(output);
 	printf("Processed %u processes\nRSS_Total %lu\nPSS_Total %lu\nShared_Clean_Total %lu\nPrivate_Dirty_Total %lu\n",
-           noOfPids, rssTotal, pssTotal, shared_clean_total, private_dirty_total);
+	       noOfPids, rssTotal, pssTotal, shared_clean_total, private_dirty_total);
 	fprintf(output, "\n\nProcesses:\nPID,EXE,RSS,PSS,SHARED_CLEAN,PRIVATE_DIRTY,SWAP_PSS,MAJ_FAULTS,CPU_TIME\n");
-    writeProcessInfo(noOfPids, output);
-	fprintf(output, "0,Total,%lu,%lu,%lu,%lu\n", rssTotal, pssTotal, shared_clean_total, private_dirty_total);
-    fclose(output);
-    return 0;
+	writeProcessInfo(noOfPids, output);
+	fprintf(output, "0,Total,%lu,%lu,%lu,%lu,%lu,0,0,0\n", rssTotal, pssTotal, shared_clean_total, private_dirty_total, swap_pss_total);
+	fclose(output);
+	return 0;
 }
 
 /**
@@ -790,45 +789,51 @@ int systemWide(bool includeKthreads) {
  */
 void saveMeminfo(FILE *out)
 {
-    unsigned long val[50];
-    unsigned count = 0;
-    char tmp[128];
-    char name[64];
+	unsigned long val[50];
+	unsigned count = 0;
+	char tmp[128];
+	char name[64];
 
-    FILE *meminfo = fopen("/proc/meminfo", "r");
-    if (meminfo) {
-        while (fgets(tmp, 127, meminfo) && count < 50) {
-            if (!sscanf(tmp, "%s %lu kB", name, &val[count])) {
-                printf("%s: Error parsing [%s]\n", __FUNCTION__, tmp);
-            }
-            else {
-                name[strlen(name)-1] = '\0';
-                if (count) {
-                    fprintf(out, ",%s", name);
-                }
-                else {
-                    fprintf(out, "/proc/meminfo:\n%s", name);
-                }
-                count++;
-            }
-        }
-        fclose(meminfo);
-    }
-    for (unsigned int i=0; i<count; i++) {
-        if (i) {
-            fprintf(out, ",%lu", val[i]);
-        }
-        else {
-            fprintf(out, "\n%lu", val[i]);
-        }
-    }
+	FILE *meminfo = fopen("/proc/meminfo", "r");
+	if (meminfo) {
+		int first = 1;
+		// print header
+		while (fgets(tmp, 127, meminfo) && count < 50) {
+			if (sscanf(tmp, "%s %lu kB", name, &val[count]) == 2) {
+				name[strlen(name)-1] = '\0'; // Remove trailing ':'
+				if (!first) {
+					fprintf(out, ",");
+				}
+				fprintf(out, "%s", name);
+				first = 0;
+				count++;
+			}
+		}
+		fprintf(out, "\n");
+		fseek(meminfo, 0, SEEK_SET); // Reset file pointer to start
+		count = 0;
+		first = 1;
+		// Print values
+		while (fgets(tmp, 127, meminfo) && count < 50) {
+			if (sscanf(tmp, "%s %lu kB", name, &val[count]) == 2) {
+				if (!first) {
+					fprintf(out, ",");
+				}
+				fprintf(out, "%lu", val[count]);
+				first = 0;
+				count++;
+			}
+		}
+		fprintf(out, "\n\n"); // Blank line after meminfo block
+		fclose(meminfo);
+	}
 }
 
 // -----------------------------
 // Main Program
 // -----------------------------
 
-int main(int argc, char *argv[]){
+int main(int argc, char *argv[]) {
 	// CLI parsing and initialization
 	bool isConfigPresent = false;
 	bool enableKThreads = false;
@@ -861,11 +866,11 @@ int main(int argc, char *argv[]){
 		} else if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) {
 			printHelpAndUsage(argv, true);
 		} else if (!strcmp(argv[i], "-t") || !strcmp(argv[i], "--test")) {
-            isTestMode = true;
-        } else {
-            printf("Error: Unrecognized argument '%s'\n", argv[i]);
-            printHelpAndUsage(argv, false);
-        }
+			isTestMode = true;
+		} else {
+			printf("Error: Unrecognized argument '%s'\n", argv[i]);
+			printHelpAndUsage(argv, false);
+		}
 	}
 	includeKthreads = enableKThreads; // Cascade to global for all code paths
 	if (isConfigPresent) {
@@ -875,24 +880,24 @@ int main(int argc, char *argv[]){
 			return -1; // TODO: Need to handle this better
 		}
 		printf("%s file data: whitelist=%p\n, count=%u\n, outputFile=%s\n, iterations=%u\n, interval=%u\n, logLevel=%s\n",
-				confFile, config.whitelist, config.whiteListCount, config.outputFile, config.iterations, config.interval, config.logLevel);
+		       confFile, config.whitelist, config.whiteListCount, config.outputFile, config.iterations, config.interval, config.logLevel);
 
 		FILE *output = fopen(config.outputFile, "w");
 		if (!output) {
 			printf("Error: Failed to open output file '%s' for writing\n", config.outputFile);
-            for (unsigned j = 0; j < config.whiteListCount; j++) {
+			for (unsigned j = 0; j < config.whiteListCount; j++) {
 				if (config.whitelist[j] != NULL) {
 					free(config.whitelist[j]);
 				}
 			}
-            if (config.whitelist != NULL) {
+			if (config.whitelist != NULL) {
 				free(config.whitelist);
 			}
 			return -1; // TODO: Need to handle this better
 		}
 
 		saveMeminfo(output);
-		fprintf(output, "PID,EXE,PSS,RSS,SHARED_CLEAN,PRIVATE_DIRTY,SWAP_PSS,MAJ_FAULTS,CPU_TIME\n");
+		fprintf(output, "\nPID,EXE,RSS,PSS,SHARED_CLEAN,PRIVATE_DIRTY,SWAP_PSS,MAJ_FAULTS,CPU_TIME\n");
 
 		unsigned long rssTotal = 0, pssTotal = 0, shared_clean_total = 0, private_dirty_total = 0, swap_pss_total = 0;
 
@@ -924,10 +929,10 @@ int main(int argc, char *argv[]){
 						getProcessInfo.pid = pid;
 						// name, majFaults, cputime already filled by fillProcessStatFields
 						rssTotal += getProcessInfo.rssTotal;
-                        pssTotal += getProcessInfo.pssTotal;
-                        shared_clean_total += getProcessInfo.shared_clean_total;
-                        private_dirty_total += getProcessInfo.private_dirty_total;
-                        swap_pss_total += getProcessInfo.swap_pss_total;
+						pssTotal += getProcessInfo.pssTotal;
+						shared_clean_total += getProcessInfo.shared_clean_total;
+						private_dirty_total += getProcessInfo.private_dirty_total;
+						swap_pss_total += getProcessInfo.swap_pss_total;
 						addProcessInfo(&getProcessInfo);
 						actualCount++;
 					} else {
@@ -950,16 +955,16 @@ int main(int argc, char *argv[]){
 		fclose(output);
 
 		// Free the whitelist memory
-        for (unsigned j = 0; j < config.whiteListCount; j++) {
+		for (unsigned j = 0; j < config.whiteListCount; j++) {
 			if (config.whitelist[j] != NULL) {
 				free(config.whitelist[j]);
 			}
 		}
-        if(config.whitelist != NULL) {
+		if(config.whitelist != NULL) {
 			free(config.whitelist);
 		}
 
-	} else if (isSystemWide){
+	} else if (isSystemWide) {
 		// TODO: Implement default behavior if no config file is provided
 		systemWide(enableKThreads);
 	} else if (isTestMode) {
@@ -971,7 +976,7 @@ int main(int argc, char *argv[]){
 /**
  * Main entry point: parses arguments, scans processes, collects stats, writes output.
  */
- #if 0
+#if 0
 int main(int argc, char *argv[])
 {
 	unsigned noOfPids = 0;
@@ -1009,7 +1014,7 @@ int main(int argc, char *argv[])
 			includeKthreads = 1;
 			continue;
 		}
-		//if (!strcmp(argv[i], "--help") || !strcmp(argv[i], "-h")) 
+		//if (!strcmp(argv[i], "--help") || !strcmp(argv[i], "-h"))
 		{
 			printHelp(argv);
 		}
@@ -1018,13 +1023,13 @@ int main(int argc, char *argv[])
 	if (testpid) {
 		if (getProcessInfos(0)) {
 			if ((getProcessInfo.rssTotal != processInfoTest.rssTotal) || (getProcessInfo.pssTotal != processInfoTest.pssTotal) ||
-					(getProcessInfo.shared_clean_total != processInfoTest.shared_clean_total) || (getProcessInfo.private_dirty_total != processInfoTest.private_dirty_total) ||
-					(getProcessInfo.swap_pss_total != processInfoTest.swap_pss_total))
+			        (getProcessInfo.shared_clean_total != processInfoTest.shared_clean_total) || (getProcessInfo.private_dirty_total != processInfoTest.private_dirty_total) ||
+			        (getProcessInfo.swap_pss_total != processInfoTest.swap_pss_total))
 			{
 				printf("something went wrong while processing %s\n", testSmap);
-				printf("%lu:%lu, %lu:%lu, %lu:%lu, %lu:%lu, %lu:%lu\n", getProcessInfo.rssTotal, processInfoTest.rssTotal, getProcessInfo.pssTotal, 
-						processInfoTest.pssTotal,getProcessInfo.shared_clean_total, processInfoTest.shared_clean_total, getProcessInfo.private_dirty_total, 
-						processInfoTest.private_dirty_total, getProcessInfo.swap_pss_total, processInfoTest.swap_pss_total);
+				printf("%lu:%lu, %lu:%lu, %lu:%lu, %lu:%lu, %lu:%lu\n", getProcessInfo.rssTotal, processInfoTest.rssTotal, getProcessInfo.pssTotal,
+				       processInfoTest.pssTotal,getProcessInfo.shared_clean_total, processInfoTest.shared_clean_total, getProcessInfo.private_dirty_total,
+				       processInfoTest.private_dirty_total, getProcessInfo.swap_pss_total, processInfoTest.swap_pss_total);
 				pause();
 			}
 		}
@@ -1035,7 +1040,7 @@ int main(int argc, char *argv[])
 	struct tm *tmNow = localtime(&timenow);
 	char filename[128] = {'\0'};
 	char outputfile[256] = {'\0'};
-	
+
 	if (0 == strftime(filename, sizeof(filename), "%Y_%m_%d_%H_%M_%S_memstatus.txt", tmNow)) {
 		// Shouldn't fail unless outputFilename is not big enough to hold
 		sprintf(filename, "%lu_memstatus.txt", timenow); // see if this is warned in 32 bit systems..
@@ -1072,7 +1077,7 @@ int main(int argc, char *argv[])
 					char pathTmp[PATH_MAX];
 					unsigned long utime, stime;
 					unsigned long minFaults, majFaults;
-					
+
 					sprintf(pathTmp, "/proc/%d/stat", pid);
 					FILE *fp = fopen(pathTmp, "r");
 					if (fp) {
@@ -1080,8 +1085,8 @@ int main(int argc, char *argv[])
 
 						// pid comm state ppid pgrp session tty_nr tpgid flags minflt cminflt majflt cmajflt utime stime ...
 						// 2 (kthreadd) S 0 0 0 0 -1 2129984 0 0 0 0 0 2
-						if (6 == fscanf(fp, "%*d %*c%s %*c %*d %*d %*d %*d %*d %u %lu %*u %lu %*u %lu %lu", 
-									    nameTmp, &flags, &minFaults, &majFaults, &utime, &stime )) {
+						if (6 == fscanf(fp, "%*d %*c%s %*c %*d %*d %*d %*d %*d %u %lu %*u %lu %*u %lu %lu",
+						                nameTmp, &flags, &minFaults, &majFaults, &utime, &stime )) {
 							nameTmp[strlen(nameTmp)-1] = '\0';
 							memset(&getProcessInfo, 0, sizeof(getProcessInfo));
 							if (flags & 0x00200000) { /*PF_KTHREAD*/
@@ -1125,13 +1130,13 @@ int main(int argc, char *argv[])
 					}
 #ifdef TESTME
 					if ((getProcessInfo.rssTotal != processInfoTest.rssTotal) || (getProcessInfo.pssTotal != processInfoTest.pssTotal) ||
-							(getProcessInfo.shared_clean_total != processInfoTest.shared_clean_total) || (getProcessInfo.private_dirty_total != processInfoTest.private_dirty_total) ||
-							(getProcessInfo.swap_pss_total != processInfoTest.swap_pss_total))
+					        (getProcessInfo.shared_clean_total != processInfoTest.shared_clean_total) || (getProcessInfo.private_dirty_total != processInfoTest.private_dirty_total) ||
+					        (getProcessInfo.swap_pss_total != processInfoTest.swap_pss_total))
 					{
 						printf("something went wrong while processing smap for pid %d\n", pid);
-						printf("%lu:%lu, %lu:%lu, %lu:%lu, %lu:%lu, %lu:%lu\n", 
-								getProcessInfo.rssTotal, processInfoTest.rssTotal,getProcessInfo.pssTotal,processInfoTest.pssTotal,getProcessInfo.shared_clean_total, processInfoTest.shared_clean_total, 
-								getProcessInfo.private_dirty_total, processInfoTest.private_dirty_total, getProcessInfo.swap_pss_total, processInfoTest.swap_pss_total);
+						printf("%lu:%lu, %lu:%lu, %lu:%lu, %lu:%lu, %lu:%lu\n",
+						       getProcessInfo.rssTotal, processInfoTest.rssTotal,getProcessInfo.pssTotal,processInfoTest.pssTotal,getProcessInfo.shared_clean_total, processInfoTest.shared_clean_total,
+						       getProcessInfo.private_dirty_total, processInfoTest.private_dirty_total, getProcessInfo.swap_pss_total, processInfoTest.swap_pss_total);
 						pause();
 					}
 #endif
@@ -1146,7 +1151,7 @@ int main(int argc, char *argv[])
 
 	saveMeminfo(output);
 	printf("Processed %u processes\nRSS_Total %lu\nPSS_Total %lu\nShared_Clean_Total %lu\nPrivate_Dirty_Total %lu\n", noOfPids, rssTotal, pssTotal, shared_clean_total, private_dirty_total);
-	fprintf(output, "\n\nProcesses:\nPID,EXE,RSS,PSS,SHARED_CLEAN,PRIVATE_DIRTY,SWAP_PSS,MAJ_FAULTS,CPU_TIME\n");	
+	fprintf(output, "\n\nProcesses:\nPID,EXE,RSS,PSS,SHARED_CLEAN,PRIVATE_DIRTY,SWAP_PSS,MAJ_FAULTS,CPU_TIME\n");
 	writeProcessInfo(noOfPids, output);
 	fprintf(output, "0,Total,%lu,%lu,%lu,%lu\n", rssTotal, pssTotal, shared_clean_total, private_dirty_total);
 	fclose(output);
