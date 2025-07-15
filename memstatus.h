@@ -50,12 +50,16 @@
 // -----------------------------
 
 #define XMEM_BIN "xMemInsight"
+#define PROC_DIR "/proc"
 #define DEVICE_PROP_FILE "/etc/device.properties"
 #define INTERFACE "eth0"
 #define DEFAULT_ITERATIONS 1
 #define DEFAULT_INTERVAL 0
 #define DEFAULT_LOG_LEVEL "INFO"
 #define DEFAULT_MAC "00:00:00:00:00:00"
+#define PF_KTHREAD 0x00200000 // Kernel thread flag
+#define STAT_PATH_FMT PROC_DIR "/%u/stat" // Format for process stat file path
+#define SMAPS_PATH_FMT PROC_DIR "/%u/smaps" // Format for process smaps file path
 
 // -----------------------------
 // Data Structures
@@ -110,14 +114,15 @@ void testList();
 void writeProcessInfo(unsigned noOfpids, FILE *output);
 void addProcessInfo(Process_Info *addPInfo);
 int getProcessInfos(unsigned pid);
-void printHelp(int argc, char *argv[]);
-void printHelpAndUsage(int argc, char *argv[]);
+void printHelp(char *argv[]);
+void printHelpAndUsage(char *argv[], bool moreInfo);
 void saveMeminfo(FILE *out);
 int getPropertyFromFile(const char *filename, const char *property, char *propertyValue, size_t propertyValueLen);
 size_t getMacAddress(const char* iface, char *macAddress, size_t szBufSize);
 int isPID(const char *str);
 int getPIDByProcessName(const char *procName, unsigned int *pidOut);
 int parseConfig(const char *configFile, Config_Data *config);
-int systemWide(bool includeKthreads)
+int systemWide(bool includeKthreads);
+int fillProcessStatFields(unsigned pid, Process_Info *info, unsigned *flagsOut);
 
 #endif // MEMSTATUS_H

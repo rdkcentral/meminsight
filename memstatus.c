@@ -142,6 +142,43 @@ int getPIDByProcessName(const char *procName, unsigned int *pidOut) {
 	return found ? 1 : 0;
 }
 
+int fillProcessStatFields(unsigned pid, Process_Info *info, unsigned *flagsOut) {
+	char statPath[PATH_MAX];
+	snprintf(statPath, sizeof(statPath), "/proc/%u/stat", pid);
+	FILE *statFile = fopen(statPath, "r");
+	if (!statFile) {
+		printf("Failed to open stat file for PID %u: %s\n", pid, strerror(errno));
+		return 0;
+	}
+	char line[1024];
+	if (!fgets(line, sizeof(line), statFile)) {
+        fclose(statFile);
+        return 0;
+    }
+	fclose(statFile);
+	// Parsing Name
+	char *open = strchr(line, '(');
+    char *close = strrchr(line, ')');
+	if (open && close && close > open + 1) {
+        size_t len = close - open - 1;
+        if (len >= sizeof(info->name)) len = sizeof(info->name) - 1;
+        strncpy(info->name, open + 1, len);
+        info->name[len] = '\0';
+    } else {
+        strcpy(info->name, "unknown");
+    }
+	// Parse other fields: flags (8), minflt (10), majflt (12), utime (14), stime (15)
+	unsigned flags = 0, minflt = 0, majflt = 0;
+    unsigned long utime = 0, stime = 0;
+    char *after = close ? close + 2 : line;
+    sscanf(after, "%*c %*d %*d %*d %*d %*d %u %u %*u %u %*u %lu %lu",
+           &flags, &minflt, &majflt, &utime, &stime);
+    info->majFaults = majflt;
+    info->cputime = utime + stime;
+    if (flagsOut) *flagsOut = flags;
+    return 1;
+}
+
 // -----------------------------
 // Configuration Data
 // -----------------------------
@@ -221,11 +258,11 @@ int parseConfig(const char *configPath, Config_Data *config) {
  * Writes all process info from the linked list to stdout and the output file.
  * Frees each node after writing.
  */
-void writeProcessInfo(unsigned noOfpids, FILE *output)
+void writeProcessInfo(unsigned noOfPids, FILE *output)
 {
     Process_Info *tmp = headProcessInfo;
     Process_Info *tofree;
-    int i = 1;
+    unsigned int i = 1;
     while (tmp) {
         printf("%d,%lu,%lu,%lu,%lu,%lu,%lu,%lu,%u,%s\n",
                 i++, tmp->pssTotal, tmp->rssTotal, tmp->shared_clean_total, tmp->private_dirty_total, tmp->swap_pss_total, 
@@ -236,8 +273,8 @@ void writeProcessInfo(unsigned noOfpids, FILE *output)
         tmp = tmp->next;
         free(tofree);
     }
-    if (i != noOfpids) {
-        printf("Some process details might've been missed [%d vs actual %u]\n", i, noOfpids);
+    if (i != noOfPids) {
+        printf("Some process details might've been missed [%d vs actual %u]\n", i, noOfPids);
     }
 }
 
@@ -646,13 +683,13 @@ int getProcessInfos(unsigned pid)
 /**
  * Prints usage information and exits.
  */
-void printHelp(int argc, char *argv[])
+void printHelp(char *argv[])
 {
     printf("%s [-a] [-o <output directory>] [-t <path to custom map>]\n", argv[0]);
     exit(1);
 }
 
-void printHelpAndUsage(int argc, char *argv[])
+void printHelpAndUsage(char *argv[], bool moreInfo)
 {
 	printf("Usage: %s [OPTIONS]\n", argv[0]);
 	printf("A lightweight, configurable tool for collecting detailed system and per-process memory and CPU statistics.\n");
@@ -662,19 +699,21 @@ void printHelpAndUsage(int argc, char *argv[])
 	printf("  -h, --help   			Show this help message and exit\n");
 	printf("  -t, --test 			Run in test mode with a generated minimal config\n");
 	printf("\n");
-	printf("Default behavior (no flags):\n");
-	printf(" - Runs 1 iteration, interval 0s, monitors all processes, log level INFO\n");
-	printf(" - Output: /tmp/<MAC>_<timestamp>_memsinsight.csv\n");
-	printf("\n");
-	printf("Example:\n");
-	printf("  %s\n", argv[0]);
-	printf("  %s -a\n", argv[0]);
-	printf("  %s --config /etc/xmem_configuration.conf\n", argv[0]);
-	printf("  %s -c myconfig.cfg -a\n", argv[0]);
-	printf("  %s --test\n", argv[0]);
-	printf("\n");
-	printf("Sample config file (JSON):\n");
-	printf("\n  process_whitelist=myapp,systemd,1234,\n  output_file=/tmp/xmeminsight.csv,\n  iterations=10,\n  interval=60\n  log_level=INFO\n");
+	if (moreInfo) {
+		printf("Default behavior (no flags):\n");
+		printf(" - Runs 1 iteration, interval 0s, monitors all processes, log level INFO\n");
+		printf(" - Output: /tmp/<MAC>_<timestamp>_memsinsight.csv\n");
+		printf("\n");
+		printf("Example:\n");
+		printf("  %s\n", argv[0]);
+		printf("  %s -a\n", argv[0]);
+		printf("  %s --config /etc/xmem_configuration.conf\n", argv[0]);
+		printf("  %s -c myconfig.cfg -a\n", argv[0]);
+		printf("  %s --test\n", argv[0]);
+		printf("\n");
+		printf("Sample config file (JSON):\n");
+		printf("\n  process_whitelist=myapp,systemd,1234,\n  output_file=/tmp/xmeminsight.csv,\n  iterations=10,\n  interval=60\n  log_level=INFO\n");
+	}
 	exit(1);
 }
 
@@ -685,7 +724,6 @@ int systemWide(bool includeKthreads) {
 	struct tm *tm_info = localtime(&timenow);
 	char filename[128] = {'\0'};
 	char outputfile[256] = {'\0'};
-	// getMacAddress() for default interface and have it in the filename
 	char mac[32] = {0};
 	getMacAddress(INTERFACE, mac, sizeof(mac));
 	if (mac[0] == '\0') {
@@ -702,68 +740,41 @@ int systemWide(bool includeKthreads) {
         return -1;
     }
 	unsigned long rssTotal = 0, pssTotal = 0, shared_clean_total = 0, private_dirty_total = 0, swap_pss_total = 0;
-    DIR *proc = opendir("/proc");
+    DIR *proc = opendir(PROC_DIR);
 	if (proc) {
 		struct dirent *entry;
 		while ((entry = readdir(proc)) != NULL) {
-			if (entry->d_name[0] != ".") {
+			if (entry->d_name[0] != '.') {
 				unsigned pid = atoi(entry->d_name);
-				char nameTmp[PATH_MAX] = {0};
 				if (pid > 0) {
-					char pathTmp[PATH_MAX] = {0};
-					unsigned long utime = 0, stime = 0;
-					unsigned long minFaults = 0, majFaults = 0;
-
-					sprintf(pathTmp, "/proc/%d/smaps", pid);
-					FILE *fp = fopen(pathTmp, "r");
-					if (fp) {
-						unsigned flags;
-						if (6 == fscanf(fp, "%*d %*c%s %*c %*d %*d %*d %*d %*d %u %lu %*u %lu %*u %lu %lu",
-                                        nameTmp, &flags, &minFaults, &majFaults, &utime, &stime )) {
-							nameTmp[strlen(nameTmp)-1] = '\0'; // Remove trailing newline
-							memset(&getProcessInfo, 0, sizeof(getProcessInfo));
-							if (flags & 0x00200000) { /*PF_KTHREAD*/
-								if (includeKthreads) {
-									printf("%d,[%s],0,0,0,0,0,%lu,%lu\n", pid, nameTmp, majFaults, utime + stime);
-									getProcessInfo.pid = pid;
-                                    sprintf(getProcessInfo.name, "[%s]", nameTmp);
-                                    getProcessInfo.majFaults = majFaults;
-                                    getProcessInfo.cputime = utime + stime;
-                                    addProcessInfo(&getProcessInfo);
-								}
-								fclose(fp);
-								continue; // Skip kernel threads if not included
-							}
-							noOfPids++;
-						}
-						fclose(fp);
-					} else {
-						printf("%s: Open failed, %d [%s]\n", pathTmp, errno, strerror(errno));
-						continue; // Skip this process if smaps cannot be opened
+					unsigned flags = 0;
+					memset(&getProcessInfo, 0, sizeof(getProcessInfo));
+					if (!fillProcessStatFields(pid, &getProcessInfo, &flags)) {
+						printf("Failed to fill process stat fields for PID %d\n", pid);
+						continue;
 					}
-					getProcessInfo.pid = pid;
-					strcpy(getProcessInfo.name, nameTmp);
-                    getProcessInfo.majFaults = majFaults;
-                    getProcessInfo.cputime = utime + stime;
+					if (flags & PF_KTHREAD && !includeKthreads) { /*PF_KTHREAD*/
+						continue; // Skip kernel threads if not included
+					}
 					if (!getProcessInfos(pid)) {
+						getProcessInfo.pid = pid;
+						// name, majFaults, cputime already filled by fillProcessStatFields
 						rssTotal += getProcessInfo.rssTotal;
 						pssTotal += getProcessInfo.pssTotal;
 						shared_clean_total += getProcessInfo.shared_clean_total;
 						private_dirty_total += getProcessInfo.private_dirty_total;
 						swap_pss_total += getProcessInfo.swap_pss_total;
 						addProcessInfo(&getProcessInfo);
-					} else {
-						printf("Failed to get process info for PID %d\n", pid);
+						noOfPids++;
 					}
 				}
 			}
 		}
 		closedir(proc);
 	} else {
-		printf("Failed to open /proc directory: %s\n", strerror(errno));
+		printf("Failed to open %s directory: %s\n", PROC_DIR, strerror(errno));
 		return -1;
 	}
-
 	saveMeminfo(output);
 	printf("Processed %u processes\nRSS_Total %lu\nPSS_Total %lu\nShared_Clean_Total %lu\nPrivate_Dirty_Total %lu\n",
            noOfPids, rssTotal, pssTotal, shared_clean_total, private_dirty_total);
@@ -771,7 +782,7 @@ int systemWide(bool includeKthreads) {
     writeProcessInfo(noOfPids, output);
 	fprintf(output, "0,Total,%lu,%lu,%lu,%lu\n", rssTotal, pssTotal, shared_clean_total, private_dirty_total);
     fclose(output);
-	return 0;
+    return 0;
 }
 
 /**
@@ -803,7 +814,7 @@ void saveMeminfo(FILE *out)
         }
         fclose(meminfo);
     }
-    for (int i=0; i<count; i++) {
+    for (unsigned int i=0; i<count; i++) {
         if (i) {
             fprintf(out, ",%lu", val[i]);
         }
@@ -836,24 +847,24 @@ int main(int argc, char *argv[]){
 				FILE *fp = fopen(confFile, "r");
 				if (!fp) {
 					printf("Error: Config file '%s' does not exist or cannot be opened.\n", confFile);
-					printHelpAndUsage(argc, argv);
+					printHelpAndUsage(argv, true);
 				}
 				fclose(fp);
 				isConfigPresent = true;
 				i++; // Skip next arg (conf file)
 			} else {
 				printf("Error: Missing config file path after %s\n", argv[i]);
-				printHelpAndUsage(argc, argv);
+				printHelpAndUsage(argv, false);
 			}
 		} else if (!strcmp(argv[i], "-a") || !strcmp(argv[i], "--all")) {
 			enableKThreads = true;
 		} else if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) {
-			printHelpAndUsage(argc, argv);
+			printHelpAndUsage(argv, true);
 		} else if (!strcmp(argv[i], "-t") || !strcmp(argv[i], "--test")) {
             isTestMode = true;
         } else {
             printf("Error: Unrecognized argument '%s'\n", argv[i]);
-            printHelpAndUsage(argc, argv);
+            printHelpAndUsage(argv, false);
         }
 	}
 	includeKthreads = enableKThreads; // Cascade to global for all code paths
@@ -877,25 +888,21 @@ int main(int argc, char *argv[]){
             if (config.whitelist != NULL) {
 				free(config.whitelist);
 			}
-			if (config.outputFile != NULL) {
-				free(config.outputFile);
-			}
 			return -1; // TODO: Need to handle this better
 		}
 
 		saveMeminfo(output);
-		fprintf(output, "PID,EXE,RSS,PSS,SHARED_CLEAN,PRIVATE_DIRTY,SWAP_PSS,MAJ_FAULTS,CPU_TIME\n");
+		fprintf(output, "PID,EXE,PSS,RSS,SHARED_CLEAN,PRIVATE_DIRTY,SWAP_PSS,MAJ_FAULTS,CPU_TIME\n");
 
 		unsigned long rssTotal = 0, pssTotal = 0, shared_clean_total = 0, private_dirty_total = 0, swap_pss_total = 0;
 
 		if (config.iterations > 0 && config.whiteListCount > 0) {
 			for (unsigned i = 0; i < config.iterations; i++) {
+				unsigned actualCount = 0;
 				for (unsigned j = 0; j < config.whiteListCount; j++) {
 					unsigned int pid = 0;
-					bool isPIDEntry = false;
 					printf("Processing whitelist item %s\n", config.whitelist[j]);
 					if (isPID(config.whitelist[j])) {
-						isPIDEntry = true;
 						pid = (unsigned int)atoi(config.whitelist[j]);
 					} else {
 						if (!getPIDByProcessName(config.whitelist[j], &pid)) {
@@ -904,23 +911,30 @@ int main(int argc, char *argv[]){
 						}
 					}
 					memset(&getProcessInfo, 0, sizeof(getProcessInfo));
+					unsigned flags = 0;
+					if (!fillProcessStatFields(pid, &getProcessInfo, &flags)) {
+						printf("Failed to fill process stat fields for PID %u\n", pid);
+						continue; // Skip to next item
+					}
+					if (flags & PF_KTHREAD && !enableKThreads) { /*PF_KTHREAD*/
+						printf("Skipping kernel thread PID %u\n", pid);
+						continue; // Skip kernel threads if not included
+					}
 					if (getProcessInfos(pid) == 0) {
 						getProcessInfo.pid = pid;
-						if (!isPIDEntry) {
-							strncpy(getProcessInfo.name, config.whitelist[j], sizeof(getProcessInfo.name) - 1);
-							getProcessInfo.name[sizeof(getProcessInfo.name) - 1] = '\0';
-						}
+						// name, majFaults, cputime already filled by fillProcessStatFields
 						rssTotal += getProcessInfo.rssTotal;
                         pssTotal += getProcessInfo.pssTotal;
                         shared_clean_total += getProcessInfo.shared_clean_total;
                         private_dirty_total += getProcessInfo.private_dirty_total;
                         swap_pss_total += getProcessInfo.swap_pss_total;
 						addProcessInfo(&getProcessInfo);
+						actualCount++;
 					} else {
 						printf("Failed to get process info for PID %u\n", pid);
 					}
 				}
-				writeProcessInfo(config.whiteListCount, output);
+				writeProcessInfo(actualCount, output);
 				headProcessInfo = NULL; // Reset for next iteration
 				if (config.interval > 0 && i+1 < config.iterations) {
 					printf("Sleeping for %u seconds before next iteration...\n", config.interval);
@@ -941,9 +955,6 @@ int main(int argc, char *argv[]){
 				free(config.whitelist[j]);
 			}
 		}
-		if (config.outputFile != NULL) {
-			free(config.outputFile);
-		}
         if(config.whitelist != NULL) {
 			free(config.whitelist);
 		}
@@ -951,6 +962,9 @@ int main(int argc, char *argv[]){
 	} else if (isSystemWide){
 		// TODO: Implement default behavior if no config file is provided
 		systemWide(enableKThreads);
+	} else if (isTestMode) {
+		printf("Running in test mode with minimal config...\n");
+		printf("TO BE IMPLEMENTED"); // TODO: Implement test mode logic
 	}
 }
 
@@ -975,7 +989,7 @@ int main(int argc, char *argv[])
 				}
 				printf("Dir %s access error %d [%s]\n", argv[i], errno, strerror(errno));
 			}
-			printHelp(argc, argv);
+			printHelp(argv);
 		}
 		if (!strcmp(argv[i], "-t")) {
 			if (i < argc + 1) {
@@ -989,7 +1003,7 @@ int main(int argc, char *argv[])
 				}
 				printf("Test map file %s open error %d [%s]\n", argv[i], errno, strerror(errno));
 			}
-			printHelp(argc, argv);
+			printHelp(argv);
 		}
 		if (!strcmp(argv[i], "-a")) {
 			includeKthreads = 1;
@@ -997,7 +1011,7 @@ int main(int argc, char *argv[])
 		}
 		//if (!strcmp(argv[i], "--help") || !strcmp(argv[i], "-h")) 
 		{
-			printHelp(argc, argv);
+			printHelp(argv);
 		}
 	}
 #ifdef TESTME
