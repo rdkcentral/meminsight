@@ -19,7 +19,7 @@ test: $(TARGET)
 
 help: $(TARGET)
 	@echo "Showing help for $(TARGET)..."
-    ./$(TARGET) --help
+        ./$(TARGET) --help
 
 clean:
 	@echo "Cleaning up build artifacts..."
