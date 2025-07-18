@@ -1,0 +1,28 @@
+name: Build Component in Native Environment
+
+on:
+  pull_request:
+    branches: [ develop ]
+    paths: ['**/*.c', '**/*.cpp', '**/*.cc', '**/*.cxx', '**/*.h', '**/*.hpp', '**/*.sh']
+
+jobs:
+  build-meminsight-on-pr:
+    name: Build xMemInsight component in GitHub RDKCentral
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/rdkcentral/docker-device-mgt-service-test/native-platform:latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Build the component
+        run: |
+          make clean  # Clean previous builds if necessary
+          make        # Build the component
+
+      # - name: Run tests (optional)
+      #   run: |
+      #     # If you have tests to run after building, you can add them here
+      #     # For example:
+      #     make test
