@@ -11,7 +11,7 @@
  *  - Optionally includes kernel threads
  *
  * Usage:
- *   ./memstatus [-a] [-o <output directory>] [-t <path to custom smap>]
+ *   ./xMemInsight [-a] [-c <config file>] [-t] [-h]
  *
  * Author: Jagadheesan Duraisamy
  * Date: 09/07/2025
@@ -35,7 +35,10 @@ Process_Info processInfoTest;
 // -----------------------------
 // Utility Functions
 // -----------------------------
-
+/**
+ * Reads a property value from a file in "key=value" format.
+ * Returns 1 if found, 0 otherwise.
+ */
 int getPropertyFromFile(const char *filename, const char *property, char *propertyValue, size_t propertyValueLen) {
 	FILE *fp = fopen(filename, "r");
 	if (!fp) {
@@ -80,6 +83,10 @@ int getPropertyFromFile(const char *filename, const char *property, char *proper
 	return found;
 }
 
+/**
+ * Retrieves the MAC address for a given network interface.
+ * Returns the number of characters written to macAddress.
+ */
 size_t getMacAddress(const char* iface, char *macAddress, size_t szBufSize) {
 	if (!iface || !macAddress || szBufSize < 18) { // 17 chars + null
 		printf("Invalid parameter\n");
@@ -107,11 +114,18 @@ size_t getMacAddress(const char* iface, char *macAddress, size_t szBufSize) {
 	return ret;
 }
 
+/**
+ * Checks if a string represents a valid PID (all digits).
+ */
 int isPID(const char *str) {
 	if (!str || !*str) return 0;
 	return strspn(str, "0123456789") == strlen(str);
 }
 
+/**
+ * Finds the PID of a process by its name.
+ * Returns 1 if found, 0 otherwise.
+ */
 int getPIDByProcessName(const char *procName, unsigned int *pidOut) {
 	DIR *proc = opendir("/proc");
 	if (!proc) return 0;
@@ -142,6 +156,10 @@ int getPIDByProcessName(const char *procName, unsigned int *pidOut) {
 	return found ? 1 : 0;
 }
 
+/**
+ * Fills process statistics fields from /proc/[pid]/stat.
+ * Returns 1 on success, 0 on failure.
+ */
 int fillProcessStatFields(unsigned pid, Process_Info *info, unsigned *flagsOut) {
 	char statPath[PATH_MAX];
 	snprintf(statPath, sizeof(statPath), "/proc/%u/stat", pid);
@@ -183,6 +201,10 @@ int fillProcessStatFields(unsigned pid, Process_Info *info, unsigned *flagsOut) 
 // Configuration Data
 // -----------------------------
 
+/**
+ * Parses a configuration file for whitelist, output file, iterations, interval, and log level.
+ * Returns 0 on success, -1 on failure.
+ */
 int parseConfig(const char *configPath, Config_Data *config) {
 	const char *dot = strrchr(configPath, '.');
 	if (!dot || (strcmp(dot, ".txt") != 0 && strcmp(dot, ".cfg") != 0 && strcmp(dot, ".conf") != 0)) {
@@ -688,6 +710,9 @@ void printHelp(char *argv[])
 	exit(1);
 }
 
+/**
+ * Prints detailed help and usage information and exits.
+ */
 void printHelpAndUsage(char *argv[], bool moreInfo)
 {
 	printf("Usage: %s [OPTIONS]\n", argv[0]);
@@ -710,12 +735,16 @@ void printHelpAndUsage(char *argv[], bool moreInfo)
 		printf("  %s -c myconfig.cfg -a\n", argv[0]);
 		printf("  %s --test\n", argv[0]);
 		printf("\n");
-		printf("Sample config file (JSON):\n");
+		printf("Sample config file:\n");
 		printf("\n  process_whitelist=myapp,systemd,1234,\n  output_file=/tmp/xmeminsight.csv,\n  iterations=10,\n  interval=60\n  log_level=INFO\n");
 	}
 	exit(1);
 }
 
+/**
+ * Collects system-wide memory statistics and writes to output file.
+ * Returns 0 on success, -1 on failure.
+ */
 int systemWide(bool includeKthreads) {
 	unsigned int noOfPids = 0;
 	char *outPath = NULL;
@@ -833,6 +862,9 @@ void saveMeminfo(FILE *out)
 // Main Program
 // -----------------------------
 
+/**
+ * Main entry point: parses arguments, scans processes, collects stats, writes output.
+ */
 int main(int argc, char *argv[]) {
 	// CLI parsing and initialization
 	bool isConfigPresent = false;

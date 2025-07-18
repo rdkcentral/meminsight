@@ -46,7 +46,7 @@
 //#define PRINT_DBG_SCANNED(...)
 
 // -----------------------------
-// MACROs
+// Macro Definitions
 // -----------------------------
 
 #define XMEM_BIN "xMemInsight"
@@ -82,6 +82,9 @@ typedef struct process_info {
 	struct process_info *next;           // Next node in linked list
 } Process_Info;
 
+/**
+ * Struct to hold configuration data parsed from config file.
+ */
 typedef struct config {
 	char **whitelist;                   // Array of whitelisted process names
 	unsigned int whiteListCount;        // Number of whitelisted processes
