@@ -61,8 +61,8 @@
 #define DEFAULT_OUT_DIR "/tmp"
 #define DEFAULT_LOG_LEVEL "INFO"
 #define DEFAULT_MAC "00:00:00:00:00:00"
-#define PF_KTHREAD 0x00200000             // Kernel thread flag
-#define STAT_PATH_FMT PROC_DIR "/%u/stat" // Format for process stat file path
+#define PF_KTHREAD 0x00200000               // Kernel thread flag
+#define STAT_PATH_FMT PROC_DIR "/%u/stat"   // Format for process stat file path
 #define SMAPS_PATH_FMT PROC_DIR "/%u/smaps" // Format for process smaps file path
 #define CONFIG_EXTN ".conf"
 #define CSV_FILE_NAME "meminsight.csv"
@@ -77,16 +77,16 @@
  */
 typedef struct process_info
 {
-  unsigned pid;                      // Process ID
-  char name[PATH_MAX + 8];           // Process name
-  unsigned long rssTotal;            // Resident Set Size total (kB)
-  unsigned long pssTotal;            // Proportional Set Size total (kB)
-  unsigned long shared_clean_total;  // Shared clean memory (kB)
-  unsigned long private_dirty_total; // Private dirty memory (kB)
-  unsigned long swap_pss_total;      // Swap PSS (kB)
-  unsigned long majFaults;           // Major page faults
-  unsigned long cputime;             // CPU time (user + system)
-  struct process_info *next;         // Next node in linked list
+    unsigned pid;                      // Process ID
+    char name[PATH_MAX + 8];           // Process name
+    unsigned long rssTotal;            // Resident Set Size total (kB)
+    unsigned long pssTotal;            // Proportional Set Size total (kB)
+    unsigned long shared_clean_total;  // Shared clean memory (kB)
+    unsigned long private_dirty_total; // Private dirty memory (kB)
+    unsigned long swap_pss_total;      // Swap PSS (kB)
+    unsigned long majFaults;           // Major page faults
+    unsigned long cputime;             // CPU time (user + system)
+    struct process_info *next;         // Next node in linked list
 } Process_Info;
 
 /**
@@ -94,53 +94,47 @@ typedef struct process_info
  */
 typedef struct config
 {
-  char **whitelist;            // Array of whitelisted process names
-  unsigned int whiteListCount; // Number of whitelisted processes
-  char outputDir[PATH_MAX]; // Output directory
-  unsigned int iterations;  // Number of iterations to run
-  unsigned int interval;    // Interval between iterations in seconds
-  char logLevel[8];         // Log level (e.g., "DEBUG", "INFO", "ERROR")
+    char **whitelist;            // Array of whitelisted process names
+    unsigned int whiteListCount; // Number of whitelisted processes
+    char outputDir[PATH_MAX];    // Output directory
+    unsigned int iterations;     // Number of iterations to run
+    unsigned int interval;       // Interval between iterations in seconds
+    char logLevel[8];            // Log level (e.g., "DEBUG", "INFO", "ERROR")
 } Config_Data;
 
 // -----------------------------
 // Global Variables
 // -----------------------------
 
-extern int includeKthreads; // Whether to include kernel threads
-extern Process_Info getProcessInfo; // Temporary struct for collecting process info
+extern int includeKthreads;           // Whether to include kernel threads
+extern Process_Info getProcessInfo;   // Temporary struct for collecting process info
 extern Process_Info *headProcessInfo; // Head of linked list
 
 #ifdef TESTME
 extern int testpid; // Used for test mode with custom smap file
 extern char testSmap[128];
 extern Process_Info processInfoTest;
-void checkAndFree ();
-void testList ();
+void checkAndFree();
+void testList();
 #endif
 
 // -----------------------------
 // Function Prototypes
 // -----------------------------
 
-void writeProcessInfo (unsigned noOfpids, FILE *output);
-void addProcessInfo (Process_Info *addPInfo);
-int getProcessInfos (unsigned pid);
-void printHelp (char *argv[]);
-void printHelpAndUsage (char *argv[], bool moreInfo);
-void saveMeminfo (FILE *out);
-int getPropertyFromFile (const char *filename, const char *property,
-                         char *propertyValue, size_t propertyValueLen);
-size_t getMacAddress (const char *iface, char *macAddress, size_t szBufSize);
-int isPID (const char *str);
-int getPIDByProcessName (const char *procName, unsigned int *pidOut);
-int parseConfig (const char *configFile, Config_Data *config);
-int collectSystemMemoryStats (bool includeKthreads, const char *outDir,
-                              int iterations, int interval);
-int handleConfigMode (const char *confFile, const char *cli_out_dir,
-                      int cli_iterations, int cli_interval,
-                      bool enableKThreads);
-int fillProcessStatFields (unsigned pid, Process_Info *info,
-                           unsigned *flagsOut);
+void writeProcessInfo(unsigned noOfpids, FILE *output);
+void addProcessInfo(Process_Info *addPInfo);
+int getProcessInfos(unsigned pid);
+void printHelp(char *argv[]);
+void printHelpAndUsage(char *argv[], bool moreInfo);
+void saveMeminfo(FILE *out);
+int getPropertyFromFile(const char *filename, const char *property, char *propertyValue, size_t propertyValueLen);
+size_t getMacAddress(const char *iface, char *macAddress, size_t szBufSize);
+int isPID(const char *str);
+int getPIDByProcessName(const char *procName, unsigned int *pidOut);
+int parseConfig(const char *configFile, Config_Data *config);
+int collectSystemMemoryStats(bool includeKthreads, const char *outDir, int iterations, int interval);
+int handleConfigMode(const char *confFile, const char *cli_out_dir, int cli_iterations, int cli_interval, bool enableKThreads);
+int fillProcessStatFields(unsigned pid, Process_Info *info, unsigned *flagsOut);
 
 #endif // MEMSTATUS_H
-
