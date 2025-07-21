@@ -1,23 +1,19 @@
 /*
- * memstatus.c
+ * Copyright 2024 Comcast Cable Communications Management, LLC
  *
- * Collects and reports memory usage statistics for all processes on a Linux
- * system.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- * Features:
- *  - Scans /proc for all processes, parses /proc/[pid]/stat and
- * /proc/[pid]/smaps
- *  - Collects RSS, PSS, shared clean, private dirty, swap PSS, major faults,
- * and CPU time
- *  - Outputs a CSV file with per-process and system memory info
- *  - Supports test mode for validating parsing logic
- *  - Optionally includes kernel threads
+ * http://www.apache.org/licenses/LICENSE-2.0
  *
- * Usage:
- *   ./xMemInsight [-a] [-c <config file>] [-t] [-h]
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  *
- * Author: Jagadheesan Duraisamy
- * Date: 09/07/2025
+ * SPDX-License-Identifier: Apache-2.0
  */
 
 #include "memstatus.h"
