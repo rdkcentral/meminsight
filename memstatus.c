@@ -214,7 +214,8 @@ int parseConfig(const char *configPath, Config_Data *config) {
 
 	config->whitelist = NULL;
 	config->whiteListCount = 0;
-	config->outputFile = NULL;
+	//config->outputFile = NULL;
+	config.outDir[0] = '\0';
 	config->iterations = DEFAULT_ITERATIONS; // Default to 1 iteration
 	config->interval = DEFAULT_INTERVAL; // Default to 0 seconds interval
 	strncpy(config->logLevel, DEFAULT_LOG_LEVEL, sizeof(config->logLevel) - 1);
@@ -248,7 +249,9 @@ int parseConfig(const char *configPath, Config_Data *config) {
 				config->whitelist[idx++] = strdup(tok);
 				tok = strtok(NULL, ",");
 			}
-		} else if (strcmp(key, "output_file") == 0) {
+		}
+		/*
+		else if (strcmp(key, "output_file") == 0) {
 			config->outputFile = strdup(val);
 			if (!config->outputFile) {
 				char mac[32] = {0};
@@ -256,10 +259,16 @@ int parseConfig(const char *configPath, Config_Data *config) {
 				getMacAddress(INTERFACE, mac, sizeof(mac));
 				if (mac[0] == '\0') strcpy(mac, DEFAULT_MAC);
 				time_t timenow = time(NULL);
-				snprintf(defaultFile, sizeof(defaultFile), "/tmp/%s_%lu_meminsight.csv", mac, timenow);
+				snprintf(defaultFile, sizeof(defaultFile), "/tmp/%s_%lu_%s", mac, timenow, CSV_FILE_NAME);
 				config->outputFile = defaultFile;
 			}
-		} else if (strcmp(key, "iterations") == 0) {
+		}
+		*/
+		else if (strcmp(key, "output_dir") == 0) {
+			strncpy(config->outputDir, val, PATH_MAX-1);
+			config->outputDir[PATH_MAX-1] = '\0';
+		}
+		else if (strcmp(key, "iterations") == 0) {
 			config->iterations = atoi(val);
 		} else if (strcmp(key, "interval") == 0) {
 			config->interval = atoi(val);
@@ -717,26 +726,41 @@ void printHelpAndUsage(char *argv[], bool moreInfo)
 {
 	printf("Usage: %s [OPTIONS]\n", argv[0]);
 	printf("A lightweight, configurable tool for collecting detailed system and per-process memory and CPU statistics.\n");
+
 	printf("Options:\n");
-	printf("  -a, --all				Include kernel threads for process monitoring\n");
-	printf("  -c, --config <file> 	Path to configuration file with .conf or .cfg or .txt extension\n");
-	printf("  -h, --help   			Show this help message and exit\n");
-	printf("  -t, --test 			Run in test mode with a generated minimal config\n");
+	printf("  -a, --all					Include kernel threads for process monitoring\n");
+	printf("  -c, --config <dir>		Path to configuration directory with %s extension\n", CONFIG_EXTN);
+	printf("  -o, --output <directory>	Output directory for generated CSV files (default: /tmp)\n");
+	printf("      --interval <seconds>	Interval in seconds between iterations (overrides config)\n");
+	printf("      --iterations <count>	Number of iterations to run (overrides config)\n");
+	printf("  -h, --help				Show this help message and exit\n");
+	printf("  -t, --test				Run in test mode with a generated minimal config\n");
 	printf("\n");
+
 	if (moreInfo) {
-		printf("Default behavior (no flags):\n");
-		printf(" - Runs 1 iteration, interval 0s, monitors all processes, log level INFO\n");
-		printf(" - Output: /tmp/<MAC>_<timestamp>_memsinsight.csv\n");
+		printf("\nPrecedence:\n");
+		printf("  Command-line arguments override config file values, which override built-in defaults.\n");
+		printf("\nDefault behavior (no flags):\n");
+		printf("  - Runs 1 iteration, interval 0s, monitors all processes, log level INFO\n");
+		printf("  - Output: /tmp/<MAC>_<timestamp>_%s\n", CSV_FILE_NAME);
 		printf("\n");
+
 		printf("Example:\n");
 		printf("  %s\n", argv[0]);
 		printf("  %s -a\n", argv[0]);
-		printf("  %s --config /etc/xmem_configuration.conf\n", argv[0]);
-		printf("  %s -c myconfig.cfg -a\n", argv[0]);
+		printf("  %s --config /etc/xmem_configuration.%s\n", argv[0], CONFIG_EXTN);
+		printf("  %s -c myconfig.%s -a --interval 10 --iterations 5\n", argv[0], CONFIG_EXTN);
+		printf("  %s --output /var/log/ --iterations 3\n", argv[0]);
 		printf("  %s --test\n", argv[0]);
 		printf("\n");
 		printf("Sample config file:\n");
-		printf("\n  process_whitelist=myapp,systemd,1234,\n  output_file=/tmp/xmeminsight.csv,\n  iterations=10,\n  interval=60\n  log_level=INFO\n");
+		printf("\n  process_whitelist=myapp,systemd,1234,\n  output_dir=/var/log,\n  iterations=10,\n  interval=60\n  log_level=INFO\n");
+
+		printf("\nNotes:\n");
+		printf("  - Supported config file extensions: %s\n", CONFIG_EXTN);
+		printf("  - If both interval and iterations are set via CLI, both are used.\n");
+		printf("  - If only one is set, the other uses its default or config value.\n");
+		printf("  - Output file name format: <MAC>_<TIMESTAMP>_%s\n", CSV_FILE_NAME);
 	}
 	exit(1);
 }
@@ -745,71 +769,87 @@ void printHelpAndUsage(char *argv[], bool moreInfo)
  * Collects system-wide memory statistics and writes to output file.
  * Returns 0 on success, -1 on failure.
  */
-int systemWide(bool includeKthreads) {
-	unsigned int noOfPids = 0;
-	char *outPath = NULL;
-	time_t timenow = time(NULL);
-	struct tm *tm_info = localtime(&timenow);
-	char filename[128] = {'\0'};
-	char outputfile[256] = {'\0'};
-	char mac[32] = {0};
-	getMacAddress(INTERFACE, mac, sizeof(mac));
-	if (mac[0] == '\0') {
-		strcpy(mac, DEFAULT_MAC);
-	}
-	if (0 == strftime(filename, sizeof(filename), "%Y_%m_%d_%H_%M_%S_memstatus.csv", tm_info)) {
-		sprintf(filename, "%s_%lu_memstatus.csv", mac, timenow);
-	}
-	sprintf(outputfile, "%s/%s", outPath ? outPath : "/tmp/", filename);
-	printf("System-wide monitoring output: %s\n", outputfile);
-	FILE *output = fopen(outputfile, "w");
-	if (NULL == output) {
-		printf("%s: Open failed, %d [%s]\n", outputfile, errno, strerror(errno));
-		return -1;
-	}
-	unsigned long rssTotal = 0, pssTotal = 0, shared_clean_total = 0, private_dirty_total = 0, swap_pss_total = 0;
-	DIR *proc = opendir(PROC_DIR);
-	if (proc) {
-		struct dirent *entry;
-		while ((entry = readdir(proc)) != NULL) {
-			if (entry->d_name[0] != '.') {
-				unsigned pid = atoi(entry->d_name);
-				if (pid > 0) {
-					unsigned flags = 0;
-					memset(&getProcessInfo, 0, sizeof(getProcessInfo));
-					if (!fillProcessStatFields(pid, &getProcessInfo, &flags)) {
-						printf("Failed to fill process stat fields for PID %d\n", pid);
-						continue;
-					}
-					if (flags & PF_KTHREAD && !includeKthreads) { /*PF_KTHREAD*/
-						continue; // Skip kernel threads if not included
-					}
-					if (!getProcessInfos(pid)) {
-						getProcessInfo.pid = pid;
-						// name, majFaults, cputime already filled by fillProcessStatFields
-						rssTotal += getProcessInfo.rssTotal;
-						pssTotal += getProcessInfo.pssTotal;
-						shared_clean_total += getProcessInfo.shared_clean_total;
-						private_dirty_total += getProcessInfo.private_dirty_total;
-						swap_pss_total += getProcessInfo.swap_pss_total;
-						addProcessInfo(&getProcessInfo);
-						noOfPids++;
+int collectSystemMemoryStats(bool includeKthreads, const char *outDir, int iterations, int interval) {
+	for (int iter = 0; iter < iterations; iter++) {
+		unsigned int noOfPids = 0;
+
+		// MAC Address
+		char mac[32] = {0};
+		getMacAddress(INTERFACE, mac, sizeof(mac));
+		if (mac[0] == '\0') {
+			strcpy(mac, DEFAULT_MAC);
+		}
+
+		// Current timestamp
+		time_t timenow = time(NULL);
+		struct tm *tm_info = localtime(&timenow);
+		char timestamp[128] = {0};
+		// Format: YYYYMMDD_HHMMSS
+		strftime(timestamp, sizeof(timestamp), "%Y%m%d_%H%M%S", tm_info);
+
+		// outDir or default /tmp/
+		const char *dir = (outDir && outDir[0]) ? outDir : DEFAULT_OUT_DIR;
+		char outputfile[512] = {0};
+		snprintf(outputfile, sizeof(outputfile), "%s/%s_%s_%s", dir, mac, timestamp, CSV_FILE_NAME); // add iteration number here if required
+
+		printf("System-wide monitoring output: %s\n", outputfile);
+		FILE *output = fopen(outputfile, "w");
+		if (NULL == output) {
+			printf("%s: Open failed, %d [%s]\n", outputfile, errno, strerror(errno));
+			return -1;
+		}
+
+		unsigned long rssTotal = 0, pssTotal = 0, shared_clean_total = 0, private_dirty_total = 0, swap_pss_total = 0;
+		DIR *proc = opendir(PROC_DIR);
+		if (proc) {
+			struct dirent *entry;
+			while ((entry = readdir(proc)) != NULL) {
+				if (entry->d_name[0] != '.') {
+					unsigned pid = atoi(entry->d_name);
+					if (pid > 0) {
+						unsigned flags = 0;
+						memset(&getProcessInfo, 0, sizeof(getProcessInfo));
+						if (!fillProcessStatFields(pid, &getProcessInfo, &flags)) {
+							printf("Failed to fill process stat fields for PID %d\n", pid);
+							continue;
+						}
+						if (flags & PF_KTHREAD && !includeKthreads) { /*PF_KTHREAD*/
+							continue; // Skip kernel threads if not included
+						}
+						if (!getProcessInfos(pid)) {
+							getProcessInfo.pid = pid;
+							// name, majFaults, cputime already filled by fillProcessStatFields
+							rssTotal += getProcessInfo.rssTotal;
+							pssTotal += getProcessInfo.pssTotal;
+							shared_clean_total += getProcessInfo.shared_clean_total;
+							private_dirty_total += getProcessInfo.private_dirty_total;
+							swap_pss_total += getProcessInfo.swap_pss_total;
+							addProcessInfo(&getProcessInfo);
+							noOfPids++;
+						}
 					}
 				}
 			}
+			closedir(proc);
+		} else {
+			printf("Failed to open %s directory: %s\n", PROC_DIR, strerror(errno));
+			fclose(output);
+			return -1;
 		}
-		closedir(proc);
-	} else {
-		printf("Failed to open %s directory: %s\n", PROC_DIR, strerror(errno));
-		return -1;
+
+		saveMeminfo(output);
+		printf("Processed %u processes\nRSS_Total %lu\nPSS_Total %lu\nShared_Clean_Total %lu\nPrivate_Dirty_Total %lu\n",
+			noOfPids, rssTotal, pssTotal, shared_clean_total, private_dirty_total);
+		fprintf(output, "\n\nProcesses:\nPID,EXE,RSS,PSS,SHARED_CLEAN,PRIVATE_DIRTY,SWAP_PSS,MAJ_FAULTS,CPU_TIME\n");
+		writeProcessInfo(noOfPids, output);
+		fprintf(output, "0,Total,%lu,%lu,%lu,%lu,%lu,0,0,0\n", rssTotal, pssTotal, shared_clean_total, private_dirty_total, swap_pss_total);
+		fclose(output);
+
+		if (interval > 0 && iter + 1 < iterations) {
+			printf("Sleeping for %d seconds before next iteration...\n", interval);
+			sleep(interval);
+		}
 	}
-	saveMeminfo(output);
-	printf("Processed %u processes\nRSS_Total %lu\nPSS_Total %lu\nShared_Clean_Total %lu\nPrivate_Dirty_Total %lu\n",
-	       noOfPids, rssTotal, pssTotal, shared_clean_total, private_dirty_total);
-	fprintf(output, "\n\nProcesses:\nPID,EXE,RSS,PSS,SHARED_CLEAN,PRIVATE_DIRTY,SWAP_PSS,MAJ_FAULTS,CPU_TIME\n");
-	writeProcessInfo(noOfPids, output);
-	fprintf(output, "0,Total,%lu,%lu,%lu,%lu,%lu,0,0,0\n", rssTotal, pssTotal, shared_clean_total, private_dirty_total, swap_pss_total);
-	fclose(output);
 	return 0;
 }
 
@@ -866,19 +906,23 @@ void saveMeminfo(FILE *out)
  * Main entry point: parses arguments, scans processes, collects stats, writes output.
  */
 int main(int argc, char *argv[]) {
-	// CLI parsing and initialization
+	// set defaults
 	bool isConfigPresent = false;
 	bool enableKThreads = false;
 	bool isTestMode = false;
 	bool isSystemWide = false;
-	char confFile[PATH_MAX] = {0};
+	// char confFile[PATH_MAX] = {0};
+	const char *final_out_dir = DEFAULT_OUT_DIR;
+	int cli_iterations = -1;
+	int cli_interval = -1;
 
+	// CLI parsing and initialization
 	if (argc == 1) {
 		isSystemWide = true;
 	}
 
 	for (int i = 1; i < argc; i++) {
-		if (!strcmp(argv[i], "-c") || !strcmp(argv[i], "--config")) {
+		if (!strcmp(argv[i], "-c") || !strcmp(argv[i], "--config")) { // config file
 			if (i+1 < argc) {
 				strncpy(confFile, argv[i + 1], PATH_MAX - 1);
 				FILE *fp = fopen(confFile, "r");
@@ -893,49 +937,119 @@ int main(int argc, char *argv[]) {
 				printf("Error: Missing config file path after %s\n", argv[i]);
 				printHelpAndUsage(argv, false);
 			}
-		} else if (!strcmp(argv[i], "-a") || !strcmp(argv[i], "--all")) {
+		} else if (!strcmp(argv[i], "-a") || !strcmp(argv[i], "--all")) { // include kernel threads
 			enableKThreads = true;
-		} else if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) {
+		} else if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) { // help
 			printHelpAndUsage(argv, true);
-		} else if (!strcmp(argv[i], "-t") || !strcmp(argv[i], "--test")) {
+		} else if (!strcmp(argv[i], "-t") || !strcmp(argv[i], "--test")) { // test mode
 			isTestMode = true;
+		} else if (!strcmp(argv[i], "-o") || !strcmp(argv[i], "--output")) { // output directory
+			if (i+1 < argc) {
+				strncpy(out_dir, argv[i+1], PATH_MAX - 1);
+				i++; // skip next arg (output directory)
+			} else {
+				printf("Error: Missing output directory path after %s\n", argv[i]);
+				printHelpAndUsage(argv, false);
+			}
+		} else if (!strcmp(argv[i], "--interval")) { // interval
+			if (i+1 < argc) {
+				cli_interval = atoi(argv[i+1]);
+				i++; // skip next arg (interval)
+			} else {
+				printf("Error: Missing interval value after %s\n", argv[i]);
+				printHelpAndUsage(argv, false);
+			}
+		} else if (!strcmp(argv[i], "--iterations")) { // iterations
+			if (i+1 < argc) {
+				cli_iterations = atoi(argv[i+1]);
+				i++; // skip next arg (iterations)
+			} else {
+				printf("Error: Missing iterations value after %s\n", argv[i]);
+				printHelpAndUsage(argv, false);
+			}
 		} else {
 			printf("Error: Unrecognized argument '%s'\n", argv[i]);
 			printHelpAndUsage(argv, false);
 		}
 	}
 	includeKthreads = enableKThreads; // Cascade to global for all code paths
+
 	if (isConfigPresent) {
 		Config_Data config;
 		if (parseConfig(confFile, &config) != 0) {
 			printf("Error: Failed to parse config file '%s'\n", confFile);
 			return -1; // TODO: Need to handle this better
 		}
-		printf("%s file data: whitelist=%p\n, count=%u\n, outputFile=%s\n, iterations=%u\n, interval=%u\n, logLevel=%s\n",
-		       confFile, config.whitelist, config.whiteListCount, config.outputFile, config.iterations, config.interval, config.logLevel);
 
-		FILE *output = fopen(config.outputFile, "w");
-		if (!output) {
-			printf("Error: Failed to open output file '%s' for writing\n", config.outputFile);
-			for (unsigned j = 0; j < config.whiteListCount; j++) {
-				if (config.whitelist[j] != NULL) {
-					free(config.whitelist[j]);
-				}
-			}
-			if (config.whitelist != NULL) {
-				free(config.whitelist);
-			}
-			return -1; // TODO: Need to handle this better
-		}
+		// Output directory: CLI > config > default
+		const char *final_out_dir = (out_dir[0] && strcmp(out_dir, DEFAULT_OUT_DIR) != 0) ? out_dir:(config.outputDir[0] ? config.outputDir : DEFAULT_OUT_DIR);
 
-		saveMeminfo(output);
-		fprintf(output, "\nPID,EXE,RSS,PSS,SHARED_CLEAN,PRIVATE_DIRTY,SWAP_PSS,MAJ_FAULTS,CPU_TIME\n");
+		// Interval/Iterations logic (CLI > config > default)
+		int final_iterations = config.iterations;
+		int final_interval = config.interval;
 
-		unsigned long rssTotal = 0, pssTotal = 0, shared_clean_total = 0, private_dirty_total = 0, swap_pss_total = 0;
+		if (cli_iterations > 0 && cli_interval > 0) { // valid CLI values
+			final_iterations = cli_iterations;
+            final_interval = cli_interval;
+        } else if (cli_iterations > 0 && (cli_interval <= 0)) { // only iterations is valid
+            final_iterations = cli_iterations;
+            final_interval = DEFAULT_INTERVAL;
+        } else if ((cli_iterations <= 0) && cli_interval > 0) { // only interval is valid
+            final_iterations = 2;
+            final_interval = cli_interval;
+        } else if ((cli_iterations <= 0) && (cli_interval <= 0)) { // no valid CLI values
+            // Use config values if present, else defaults
+            if (final_iterations <= 0) final_iterations = DEFAULT_ITERATIONS;
+            if (final_interval <= 0) final_interval = DEFAULT_INTERVAL;
+        }
 
-		if (config.iterations > 0 && config.whiteListCount > 0) {
-			for (unsigned i = 0; i < config.iterations; i++) {
-				unsigned actualCount = 0;
+		// Defensive: if config values are negative or zero, use defaults
+		if (final_iterations <= 0) final_iterations = DEFAULT_ITERATIONS;
+		if (final_interval < 0) final_interval = DEFAULT_INTERVAL;
+
+		config.iterations = final_iterations;
+		config.interval = final_interval;
+
+		printf("%s Config loaded:\n whitelist=%p\n count=%u\n outDir=%s\n iterations=%u\n interval=%u\n logLevel=%s\n",
+		       confFile, config.whitelist, config.whiteListCount, config.outputDir, final_iterations, final_interval, config.logLevel);
+
+		for (int iter = 0; iter < final_iterations; iter++) {
+			// Get MAC address
+			char mac[32] = {0};
+			getMacAddress(INTERFACE, mac, sizeof(mac));
+			if (mac[0] == '\0') strcpy(mac, DEFAULT_MAC);
+
+			// Get timestamp
+			time_t timenow = time(NULL);
+			struct tm *tm_info = localtime(&timenow);
+			char timestamp[32] = {0};
+			strftime(timestamp, sizeof(timestamp), "%Y%m%d_%H%M%S", tm_info);
+
+			// Generate output file name
+			char outputFilePath[PATH_MAX * 2] = {0};
+			snprintf(outputFilePath, sizeof(outputFilePath), "%s/%s_%s_%s", final_out_dir, mac, timestamp, CSV_FILE_NAME);
+
+			// Open output file
+			FILE *output = fopen(outputFilePath, "w");
+			if (!output) {
+                printf("Error: Failed to open output file '%s' for writing\n", outputFilePath);
+                for (unsigned j = 0; j < config.whiteListCount; j++) {
+                    if (config.whitelist[j] != NULL) {
+                        free(config.whitelist[j]);
+                    }
+                }
+                if (config.whitelist != NULL) {
+                    free(config.whitelist);
+                }
+                return -1;
+            }
+
+			saveMeminfo(output);
+			fprintf(output, "\nPID,EXE,RSS,PSS,SHARED_CLEAN,PRIVATE_DIRTY,SWAP_PSS,MAJ_FAULTS,CPU_TIME\n");
+
+			unsigned long rssTotal = 0, pssTotal = 0, shared_clean_total = 0, private_dirty_total = 0, swap_pss_total = 0;
+			unsigned actualCount = 0;
+			if (config.whiteListCount > 0) {
 				for (unsigned j = 0; j < config.whiteListCount; j++) {
 					unsigned int pid = 0;
 					printf("Processing whitelist item %s\n", config.whitelist[j]);
@@ -973,18 +1087,17 @@ int main(int argc, char *argv[]) {
 				}
 				writeProcessInfo(actualCount, output);
 				headProcessInfo = NULL; // Reset for next iteration
-				if (config.interval > 0 && i+1 < config.iterations) {
-					printf("Sleeping for %u seconds before next iteration...\n", config.interval);
-					sleep(config.interval);
-				}
+			} else {
+				printf("No whitelist specified in config.\n");
 			}
-		} else {
-			// TODO: Implement behavior for no iterations or empty whitelist
-			printf("No iterations or empty whitelist specified in config.\n");
-		}
+			fprintf(output, "0,Total,%lu,%lu,%lu,%lu\n", rssTotal, pssTotal, shared_clean_total, private_dirty_total);
+			fclose(output);
 
-		fprintf(output, "0,Total,%lu,%lu,%lu,%lu\n", rssTotal, pssTotal, shared_clean_total, private_dirty_total);
-		fclose(output);
+			if (final_interval > 0 && iter + 1 < final_iterations) {
+                printf("Sleeping for %d seconds before next iteration...\n", final_interval);
+                sleep(final_interval);
+            }
+		}
 
 		// Free the whitelist memory
 		for (unsigned j = 0; j < config.whiteListCount; j++) {
@@ -995,10 +1108,10 @@ int main(int argc, char *argv[]) {
 		if(config.whitelist != NULL) {
 			free(config.whitelist);
 		}
-
 	} else if (isSystemWide) {
-		// TODO: Implement default behavior if no config file is provided
-		systemWide(enableKThreads);
+		int final_iterations = (cli_iterations > 0) ? cli_iterations : DEFAULT_ITERATIONS;
+        int final_interval = (cli_interval > 0) ? cli_interval : DEFAULT_INTERVAL;
+		collectSystemMemoryStats(enableKThreads, final_out_dir, final_iterations, final_interval);
 	} else if (isTestMode) {
 		printf("Running in test mode with minimal config...\n");
 		printf("TO BE IMPLEMENTED"); // TODO: Implement test mode logic

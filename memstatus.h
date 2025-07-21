@@ -20,6 +20,10 @@
 #ifndef MEMSTATUS_H
 #define MEMSTATUS_H
 
+// -----------------------------
+// Standard C includes
+// -----------------------------
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdbool.h>
@@ -55,11 +59,14 @@
 #define INTERFACE "eth0"
 #define DEFAULT_ITERATIONS 1
 #define DEFAULT_INTERVAL 0
+#define DEFAULT_OUT_DIR "/tmp"
 #define DEFAULT_LOG_LEVEL "INFO"
 #define DEFAULT_MAC "00:00:00:00:00:00"
 #define PF_KTHREAD 0x00200000 // Kernel thread flag
 #define STAT_PATH_FMT PROC_DIR "/%u/stat" // Format for process stat file path
 #define SMAPS_PATH_FMT PROC_DIR "/%u/smaps" // Format for process smaps file path
+#define CONFIG_EXTN ".conf"
+#define CSV_FILE_NAME "meminsight.csv"
 
 // -----------------------------
 // Data Structures
@@ -88,7 +95,8 @@ typedef struct process_info {
 typedef struct config {
 	char **whitelist;                   // Array of whitelisted process names
 	unsigned int whiteListCount;        // Number of whitelisted processes
-	const char *outputFile;             // Output file name
+	//const char *outputFile;           // Output file name
+	const char outputDir[PATH_MAX];     // Output directory
 	unsigned int iterations;            // Number of iterations to run
 	unsigned int interval;              // Interval between iterations in seconds
 	char logLevel[8];                   // Log level (e.g., "DEBUG", "INFO", "ERROR")
@@ -125,7 +133,7 @@ size_t getMacAddress(const char* iface, char *macAddress, size_t szBufSize);
 int isPID(const char *str);
 int getPIDByProcessName(const char *procName, unsigned int *pidOut);
 int parseConfig(const char *configFile, Config_Data *config);
-int systemWide(bool includeKthreads);
+int collectSystemMemoryStats(bool includeKthreads, const char *outDir, int iterations, int interval);
 int fillProcessStatFields(unsigned pid, Process_Info *info, unsigned *flagsOut);
 
 #endif // MEMSTATUS_H
