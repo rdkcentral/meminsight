@@ -18,8 +18,8 @@ jobs:
 
       - name: Build the component
         run: |
-          make clean  # Clean previous builds if necessary
-          make        # Build the component
+          sh cov_build.sh --clean # Clean build to ensure no stale artifacts
+          sh cov_build.sh # Build the component
 
       # - name: Run tests (optional)
       #   run: |
