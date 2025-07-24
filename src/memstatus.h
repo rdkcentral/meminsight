@@ -66,6 +66,7 @@
 #define SMAPS_PATH_FMT PROC_DIR "/%u/smaps" // Format for process smaps file path
 #define CONFIG_EXTN ".conf"
 #define CSV_FILE_NAME "meminsight.csv"
+#define LONG_RUN_INTERVAL 900 // 900 is Default interval for long runs in seconds
 
 // -----------------------------
 // Data Structures
@@ -133,8 +134,8 @@ size_t getMacAddress(const char *iface, char *macAddress, size_t szBufSize);
 int isPID(const char *str);
 int getPIDByProcessName(const char *procName, unsigned int *pidOut);
 int parseConfig(const char *configFile, Config_Data *config);
-int collectSystemMemoryStats(bool includeKthreads, const char *outDir, int iterations, int interval);
-int handleConfigMode(const char *confFile, const char *cli_out_dir, int cli_iterations, int cli_interval, bool enableKThreads);
+int collectSystemMemoryStats(bool includeKthreads, const char *outDir, int iterations, int interval, bool long_run);
+int handleConfigMode(const char *confFile, const char *cli_out_dir, int cli_iterations, int cli_interval, bool enableKThreads, bool long_run);
 int fillProcessStatFields(unsigned pid, Process_Info *info, unsigned *flagsOut);
 
 #endif // MEMSTATUS_H

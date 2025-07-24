@@ -29,6 +29,7 @@ if [ "$1" = "--clean" ]; then
     rm -f *.o *.lo *.la *.al *.so *.a meminsight
     rm -f stamp-h1
     rm -rf .deps/
+    rm -f configure~
     rm -rf src/.deps/
     echo "Clean complete."
     exit 0

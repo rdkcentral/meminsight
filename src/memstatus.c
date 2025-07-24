@@ -886,11 +886,11 @@ void printHelpAndUsage(char *argv[], bool moreInfo)
  * Collects system-wide memory statistics and writes to output file.
  * Returns 0 on success, -1 on failure.
  */
-int collectSystemMemoryStats(bool includeKthreads, const char *outDir, int iterations, int interval)
+int collectSystemMemoryStats(bool includeKthreads, const char *outDir, int iterations, int interval, bool long_run)
 {
-    for (int iter = 0; iter < iterations; iter++)
+    for (int iter = 0; long_run || iter < iterations; iter++)
     {
-        printf("Iteration %d/%d\n", iter + 1, iterations);
+        printf("Iteration %d%s\n", iter + 1, long_run ? "/∞" : "");
         unsigned int noOfPids = 0;
 
         // MAC Address
@@ -978,16 +978,16 @@ int collectSystemMemoryStats(bool includeKthreads, const char *outDir, int itera
         fprintf(output, "0,Total,%lu,%lu,%lu,%lu,%lu,0,0,0\n", rssTotal, pssTotal, shared_clean_total,
                 private_dirty_total, swap_pss_total);
         fclose(output);
-        if (interval >= 0 && iter + 1 < iterations)
+        if (interval >= 0 && (long_run || iter + 1 < iterations))
         {
-            printf("(%d/%d) Completed. Sleeping for %d seconds before next iteration... \n", iter + 1, iterations, interval);
+            printf("%d%s Iteration completed. Sleeping for %d seconds before next iteration... \n", iter + 1, long_run ? "/∞" : "", interval);
             sleep(interval);
         }
     }
     return 0;
 }
 
-int handleConfigMode(const char *confFile, const char *cli_out_dir, int cli_iterations, int cli_interval, bool enableKThreads)
+int handleConfigMode(const char *confFile, const char *cli_out_dir, int cli_iterations, int cli_interval, bool enableKThreads, bool long_run)
 {
     Config_Data config;
     if (parseConfig(confFile, &config) != 0)
@@ -1043,9 +1043,14 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, int cli_iter
            confFile, config.whitelist, config.whiteListCount, config.outputDir, final_iterations, final_interval,
            config.logLevel);
 
-    for (int iter = 0; iter < final_iterations; iter++)
+    if (config.interval > 0 && config.iterations > 0)
     {
-        printf("Iteration %d/%d\n", iter + 1, final_iterations);
+        long_run = false; // If both interval and iterations are specified, it's not a long run
+    }
+
+    for (int iter = 0; long_run || iter < final_iterations; iter++)
+    {
+        printf("Iteration %d%s\n", iter + 1, long_run ? "/∞" : "");
         // Get MAC address
         char mac[32] = {0};
         getMacAddress(INTERFACE, mac, sizeof(mac));
@@ -1234,6 +1239,7 @@ int main(int argc, char *argv[])
     bool enableKThreads = false;
     bool isTestMode = false;
     bool isSystemWide = true;
+    bool long_run = true;
     char confFile[PATH_MAX] = {0};
     char out_dir[PATH_MAX] = DEFAULT_OUT_DIR;
     int cli_iterations = -1;
@@ -1302,6 +1308,7 @@ int main(int argc, char *argv[])
             {
                 cli_interval = atoi(argv[i + 1]);
                 i++; // skip next arg (interval)
+                long_run = false; // If interval is specified, it's not a long run
             }
             else
             {
@@ -1315,6 +1322,7 @@ int main(int argc, char *argv[])
             {
                 cli_iterations = atoi(argv[i + 1]);
                 i++; // skip next arg (iterations)
+                long_run = false; // If iterations are specified, it's not a long run
             }
             else
             {
@@ -1331,14 +1339,21 @@ int main(int argc, char *argv[])
     includeKthreads = enableKThreads; // Cascade to global for all code paths
     if (isConfigPresent)
     {
-        handleConfigMode(confFile, out_dir, cli_iterations, cli_interval, enableKThreads);
+        handleConfigMode(confFile, out_dir, cli_iterations, cli_interval, enableKThreads, long_run);
     }
     else if (isSystemWide)
     {
-        int final_interval = (cli_interval <= 0) ? DEFAULT_INTERVAL : cli_interval;
-        int final_iterations = (cli_iterations <= 1) ? ((final_interval > 0) ? 2 : DEFAULT_ITERATIONS) : cli_iterations;
-        printf("FINAL_ITERATIONS: %d, FINAL_INTERVAL: %d\n", final_iterations, final_interval);
-        collectSystemMemoryStats(enableKThreads, out_dir, final_iterations, final_interval);
+        int final_interval = 0;
+        int final_iterations = 1;
+        if (long_run) {
+            final_interval = LONG_RUN_INTERVAL;
+        }
+        else {
+            final_interval = (cli_interval <= 0) ? DEFAULT_INTERVAL : cli_interval;
+            final_iterations = (cli_iterations <= 1) ? ((final_interval > 0) ? 2 : DEFAULT_ITERATIONS) : cli_iterations;
+        }
+        printf("FINAL_ITERATIONS: %d, FINAL_INTERVAL: %d LONG_RUN: %s\n", final_iterations, final_interval, long_run ? "true" : "false");
+        collectSystemMemoryStats(enableKThreads, out_dir, final_iterations, final_interval, long_run);
     }
     else if (isTestMode)
     {
