@@ -844,40 +844,41 @@ void printHelpAndUsage(char *argv[], bool moreInfo)
     printf("A lightweight, configurable tool for collecting detailed system and per-process memory and CPU statistics.\n");
 
     printf("\nOptions:\n");
-    printf("  -a, --all			Include kernel threads for process monitoring\n");
-    printf("  -c, --config <dir>		Path to configuration directory with %s extension\n", CONFIG_EXTN);
-    printf("  -o, --output <directory>	Output directory for generated CSV files (default: %s)\n", DEFAULT_OUT_DIR);
-    printf("      --interval <seconds>	Interval in seconds between iterations (overrides config)\n");
-    printf("      --iterations <count>	Number of iterations to run (overrides config)\n");
-    printf("  -h, --help			Show this help message and exit\n");
-    printf("  -t, --test			Run in test mode with a generated minimal config\n");
+    printf("  -a, --all                 Include kernel threads for process monitoring\n");
+    printf("  -c, --config <file>       Path to configuration file with %s extension\n", CONFIG_EXTN);
+    printf("  -o, --output <directory>  Output directory for generated CSV files (default: %s)\n", DEFAULT_OUT_DIR);
+    printf("      --interval <seconds>  Interval in seconds between iterations (overrides config)\n");
+    printf("      --iterations <count>  Number of iterations to run (overrides config)\n");
+    printf("  -h, --help                Show this help message and exit\n");
+    printf("  -t, --test                Run in test mode with a generated minimal config\n");
     printf("\n");
 
     if (moreInfo)
     {
         printf("\nPrecedence:\n");
         printf("  Command-line arguments override config file values, which override built-in defaults.\n");
+
         printf("\nDefault behavior (no flags):\n");
-        printf("  - Runs 1 iteration, interval 0s, monitors all processes, log level INFO\n");
-        printf("  - Output: /tmp/<MAC>_<timestamp>_%s\n", CSV_FILE_NAME);
+        printf("  - Runs indefinite number of iterations, with an interval of 15 minutes, monitors all processes with log level INFO\n");
+        printf("  - Output: /tmp/<MAC>_<timestamp>_iter<iteration>_%s\n", CSV_FILE_NAME);
         printf("\n");
 
         printf("Example:\n");
         printf("  %s\n", argv[0]);
         printf("  %s --all\n", argv[0]);
         printf("  %s --config /etc/xmem_configuration%s\n", argv[0], CONFIG_EXTN);
-        printf("  %s -c myconfig.%s -a --interval 10 --iterations 5\n", argv[0], CONFIG_EXTN);
+        printf("  %s -c myconfig%s -a --interval 10 --iterations 5\n", argv[0], CONFIG_EXTN);
         printf("  %s --output /var/log/ --iterations 3\n", argv[0]);
         printf("  %s --test\n", argv[0]);
 
         printf("\nSample config file:\n");
-        printf("\n  process_whitelist=myapp,systemd,1234\n  output_dir=/var/log/\n iterations=10\n  interval=60\n  log_level=INFO\n");
+        printf("\n  process_whitelist=myapp,systemd,1234\n  output_dir=/var/log/\n  iterations=10\n  interval=60\n  log_level=INFO\n");
 
         printf("\nNotes:\n");
         printf("  - Supported config file extensions: %s\n", CONFIG_EXTN);
         printf("  - If both interval and iterations are set via CLI, both are used.\n");
         printf("  - If only one is set, the other uses its default or config value.\n");
-        printf("  - Output file name format: <MAC>_<TIMESTAMP>_%s\n", CSV_FILE_NAME);
+        printf("  - Output file name format: <MAC>_<TIMESTAMP>_iter<iteration>_%s\n", CSV_FILE_NAME);
     }
     exit(1);
 }
