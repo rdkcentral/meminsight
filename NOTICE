@@ -2,10 +2,10 @@
 
 Copyright 2024 Comcast Cable Communications Management, LLC
 
-Licensed under the Apache License, Version 2.0 (the "License");you may not use this file except in compliance with the License.
+Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with the License.
 You may obtain a copy of the License at
 
-http://www.apache.org/licenses/LICENSE-2.0
+    http://www.apache.org/licenses/LICENSE-2.0
 
 Unless required by applicable law or agreed to in writing, software
 distributed under the License is distributed on an "AS IS" BASIS,
@@ -17,8 +17,28 @@ SPDX-License-Identifier: Apache-2.0
 
 This product includes software developed at Comcast (http://www.comcast.com/).
 
-The component may include material which is licensed under other licenses / copyrights as
-listed below. Your use of this material within the component is also subject to the terms and
-conditions of these licenses. The LICENSE file contains the text of all the licenses which apply
-within this component..
+Third-Party Code and Licenses
+-----------------------------
+
+This product includes code or snippets derived from the following projects:
+
+- Chromium (BSD-3-Clause)
+  https://github.com/chromium/chromium
+  Portions of code in src/memstatus.c are similar to code from Chromium.
+
+- NVIDIA ISAAC ROS (Apache-2.0)
+  https://github.com/NVIDIA-ISAAC-ROS/isaac_ros_apriltag
+  Portions of code in Makefile.am, configure.ac, cov_build.sh are similar to code from NVIDIA ISAAC ROS.
+
+- lightning-js/blits (Apache-2.0)
+  https://github.com/lightning-js/blits
+  Portions of code in src/memstatus.c and src/memstatus.h are similar to code from lightning-js/blits.
+
+- @firebolt-js/sdk (Apache-2.0)
+  https://registry.npmjs.org/@firebolt-js/sdk
+  Portions of code in NOTICE are similar to code from @firebolt-js/sdk.
+
+All third-party code is used in compliance with their respective licenses. See LICENSE file for full license texts.
+
+Your use of this material within the component is also subject to the terms and conditions of these licenses. The LICENSE file contains the text of all the licenses which apply within this component..
 
