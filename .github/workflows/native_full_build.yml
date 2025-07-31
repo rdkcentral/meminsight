@@ -10,7 +10,7 @@ jobs:
     name: Build xMemInsight component in GitHub RDKCentral
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/rdkcentral/docker-device-mgt-service-test/native-platform:latest
+      image: ghcr.io/rdkcentral/docker-device-mgt-service-test/native-platform:1.6.9
 
     steps:
       - name: Checkout code
