@@ -38,22 +38,42 @@ fi
 
 echo "Running build steps..."
 
-# Check if required tools are installed
+# Check if required tools are installed and install them if needed
+echo "Checking for required build tools..."
+MISSING_TOOLS=""
+
+if ! command -v autoconf >/dev/null 2>&1; then
+    MISSING_TOOLS="$MISSING_TOOLS autoconf"
+fi
+
+if ! command -v automake >/dev/null 2>&1; then
+    MISSING_TOOLS="$MISSING_TOOLS automake"
+fi
+
 if ! command -v autoreconf >/dev/null 2>&1; then
-    echo "autoreconf not found. Installing autotools..."
+    MISSING_TOOLS="$MISSING_TOOLS autotools-dev"
+fi
+
+if [ -n "$MISSING_TOOLS" ]; then
+    echo "Missing tools:$MISSING_TOOLS. Attempting to install..."
     if command -v apt-get >/dev/null 2>&1; then
-        apt-get update && apt-get install -y autotools-dev autoconf automake libtool
+        apt-get update && apt-get install -y $MISSING_TOOLS
     elif command -v yum >/dev/null 2>&1; then
-        yum install -y autoconf automake libtool
+        yum install -y $MISSING_TOOLS
     else
-        echo "Please install autotools (autoconf, automake, libtool) manually"
+        echo "Please install the following tools manually:$MISSING_TOOLS"
         exit 1
     fi
 fi
 
-# Use autoreconf instead of individual commands for better compatibility
+# Use autoreconf for better compatibility
+echo "Running autoreconf..."
 autoreconf --install --verbose --force
 
+echo "Running configure..."
 ./configure
+
+echo "Running make..."
 make
+
 echo "Build complete."
