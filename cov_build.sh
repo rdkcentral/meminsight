@@ -21,12 +21,13 @@ set -e
 
 if [ "$1" = "--clean" ]; then
     echo "Cleaning build artifacts..."
-    make clean || true
+    make clean 2>/dev/null || true
+    make distclean 2>/dev/null || true
     rm -f config.h config.h.in config.log config.status
     rm -rf autom4te.cache
     rm -f Makefile Makefile.in aclocal.m4 configure ltmain.sh libtool
-    rm -f install-sh missing depcomp compile
-    rm -f *.o *.lo *.la *.al *.so *.a meminsight
+    rm -f install-sh missing depcomp compile config.guess config.sub
+    rm -f *.o *.lo *.la *.al *.so *.a xmeminsight
     rm -f stamp-h1
     rm -rf .deps/
     rm -f configure~
@@ -36,10 +37,43 @@ if [ "$1" = "--clean" ]; then
 fi
 
 echo "Running build steps..."
-aclocal
-autoheader
-autoconf
-automake --add-missing
+
+# Check if required tools are installed and install them if needed
+echo "Checking for required build tools..."
+MISSING_TOOLS=""
+
+if ! command -v autoconf >/dev/null 2>&1; then
+    MISSING_TOOLS="$MISSING_TOOLS autoconf"
+fi
+
+if ! command -v automake >/dev/null 2>&1; then
+    MISSING_TOOLS="$MISSING_TOOLS automake"
+fi
+
+if ! command -v autoreconf >/dev/null 2>&1; then
+    MISSING_TOOLS="$MISSING_TOOLS autotools-dev"
+fi
+
+if [ -n "$MISSING_TOOLS" ]; then
+    echo "Missing tools:$MISSING_TOOLS. Attempting to install..."
+    if command -v apt-get >/dev/null 2>&1; then
+        apt-get update && apt-get install -y $MISSING_TOOLS
+    elif command -v yum >/dev/null 2>&1; then
+        yum install -y $MISSING_TOOLS
+    else
+        echo "Please install the following tools manually:$MISSING_TOOLS"
+        exit 1
+    fi
+fi
+
+# Use autoreconf for better compatibility
+echo "Running autoreconf..."
+autoreconf --install --verbose --force
+
+echo "Running configure..."
 ./configure
+
+echo "Running make..."
 make
+
 echo "Build complete."

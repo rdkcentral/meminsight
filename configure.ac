@@ -19,8 +19,7 @@
 # Process this file with autoconf to produce a configure script.
 
 AC_INIT([xmeminsight], [1.0])
-AM_INIT_AUTOMAKE([foreign])
-LT_INIT
+AM_INIT_AUTOMAKE([foreign subdir-objects])
 
 # Config Source files.
 AC_CONFIG_SRCDIR([src/memstatus.c])
@@ -40,3 +39,4 @@ AC_TYPE_SIZE_T
 AC_CONFIG_FILES([Makefile])
 
 AC_OUTPUT
+
