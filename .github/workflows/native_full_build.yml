@@ -14,16 +14,26 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         
       - name: Install Dependencies
         run: |
-          apt-get install -y libtool
+          apt-get update
+          apt-get install -y autotools-dev autoconf automake pkg-config
+
+      - name: Clean build artifacts
+        run: |
+          sh cov_build.sh --clean
 
       - name: Build the component
         run: |
-          sh cov_build.sh --clean # Clean build to ensure no stale artifacts
-          sh cov_build.sh # Build the component
+          sh cov_build.sh
+
+      - name: Verify build output
+        run: |
+          ls -la xmeminsight || echo "Build artifact not found"
+          file xmeminsight || echo "Cannot check file type"
+          echo "Build verification complete"
 
       # - name: Run tests (optional)
       #   run: |
