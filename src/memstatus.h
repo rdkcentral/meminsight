@@ -43,10 +43,11 @@
 // -----------------------------
 
 // #define PRINT_DBG printf
+//#define PRINT_DBG_INITIAL printf
+//#define PRINT_DBG_SCANNED printf
 #define PRINT_DBG(...)
-#define PRINT_DBG_INITIAL printf
-#define PRINT_DBG_SCANNED printf
-// #define PRINT_DBG_SCANNED(...)
+#define PRINT_DBG_INITIAL(...)
+#define PRINT_DBG_SCANNED(...)
 
 // -----------------------------
 // Macro Definitions
