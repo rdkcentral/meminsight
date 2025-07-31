@@ -19,7 +19,10 @@
 # Process this file with autoconf to produce a configure script.
 
 AC_INIT([xmeminsight], [1.0])
-AM_INIT_AUTOMAKE([foreign])
+AM_INIT_AUTOMAKE([foreign subdir-objects])
+
+# Initialize libtool properly
+LT_PREREQ([2.2])
 LT_INIT
 
 # Config Source files.
