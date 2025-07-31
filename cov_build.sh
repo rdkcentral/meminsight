@@ -21,12 +21,13 @@ set -e
 
 if [ "$1" = "--clean" ]; then
     echo "Cleaning build artifacts..."
-    make clean || true
+    make clean 2>/dev/null || true
+    make distclean 2>/dev/null || true
     rm -f config.h config.h.in config.log config.status
     rm -rf autom4te.cache
     rm -f Makefile Makefile.in aclocal.m4 configure ltmain.sh libtool
-    rm -f install-sh missing depcomp compile
-    rm -f *.o *.lo *.la *.al *.so *.a meminsight
+    rm -f install-sh missing depcomp compile config.guess config.sub
+    rm -f *.o *.lo *.la *.al *.so *.a xmeminsight
     rm -f stamp-h1
     rm -rf .deps/
     rm -f configure~
@@ -36,10 +37,23 @@ if [ "$1" = "--clean" ]; then
 fi
 
 echo "Running build steps..."
-aclocal
-autoheader
-autoconf
-automake --add-missing
+
+# Check if required tools are installed
+if ! command -v autoreconf >/dev/null 2>&1; then
+    echo "autoreconf not found. Installing autotools..."
+    if command -v apt-get >/dev/null 2>&1; then
+        apt-get update && apt-get install -y autotools-dev autoconf automake libtool
+    elif command -v yum >/dev/null 2>&1; then
+        yum install -y autoconf automake libtool
+    else
+        echo "Please install autotools (autoconf, automake, libtool) manually"
+        exit 1
+    fi
+fi
+
+# Use autoreconf instead of individual commands for better compatibility
+autoreconf --install --verbose --force
+
 ./configure
 make
 echo "Build complete."
