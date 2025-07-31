@@ -907,7 +907,7 @@ int collectSystemMemoryStats(bool includeKthreads, const char *outDir, int itera
         struct tm *tm_info = localtime(&timenow);
         char timestamp[128] = {0};
         // Format: YYYYMMDD_HHMMSS
-        strftime(timestamp, sizeof(timestamp), "%Y%m%d_%H%M%S", tm_info);
+        strftime(timestamp, sizeof(timestamp), "%Y%m%d%H%M%S", tm_info);
 
         // outDir or default /tmp/
         const char *dir = (outDir && outDir[0]) ? outDir : DEFAULT_OUT_DIR;
@@ -1062,7 +1062,7 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, int cli_iter
         time_t timenow = time(NULL);
         struct tm *tm_info = localtime(&timenow);
         char timestamp[32] = {0};
-        strftime(timestamp, sizeof(timestamp), "%Y%m%d_%H%M%S", tm_info);
+        strftime(timestamp, sizeof(timestamp), "%Y%m%d%H%M%S", tm_info);
 
         // Generate output file name
         char outputFilePath[PATH_MAX * 2] = {0};
