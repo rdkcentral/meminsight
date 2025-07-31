@@ -21,10 +21,6 @@
 AC_INIT([xmeminsight], [1.0])
 AM_INIT_AUTOMAKE([foreign subdir-objects])
 
-# Initialize libtool properly
-LT_PREREQ([2.2])
-LT_INIT
-
 # Config Source files.
 AC_CONFIG_SRCDIR([src/memstatus.c])
 AC_CONFIG_HEADERS([config.h])
