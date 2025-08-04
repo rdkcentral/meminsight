@@ -72,7 +72,7 @@ int getPropertyFromFile(const char *filename, const char *property, char *proper
         while (*val == ' ' || *val == '\t')
             val++;
 
-        if (strcmp(key, property) == 0)
+        if (strncmp(key, property, strlen(property) + 1) == 0)
         {
             // Find the length of the value, excluding any trailing newline or
             // carriage return
@@ -168,7 +168,7 @@ int getPIDByProcessName(const char *procName, unsigned int *pidOut)
             char *nl = strchr(nameBuf, '\n');
             if (nl)
                 *nl = '\0';
-            if (strcmp(nameBuf, procName) == 0)
+            if (strncmp(nameBuf, procName, strlen(procName) + 1) == 0)
             {
                 *pidOut = (unsigned int)atoi(entry->d_name);
                 found = 1;
@@ -216,7 +216,8 @@ int fillProcessStatFields(unsigned pid, Process_Info *info, unsigned *flagsOut)
     }
     else
     {
-        strcpy(info->name, "unknown");
+        strncpy(info->name, "unknown", sizeof(info->name) - 1);
+        info->name[sizeof(info->name) - 1] = '\0';
     }
     // Parse other fields: flags (8), minflt (10), majflt (12), utime (14), stime
     // (15)
@@ -242,7 +243,7 @@ int fillProcessStatFields(unsigned pid, Process_Info *info, unsigned *flagsOut)
 int parseConfig(const char *configPath, Config_Data *config)
 {
     const char *dot = strrchr(configPath, '.');
-    if (!dot || (strcmp(dot, ".txt") != 0 && strcmp(dot, ".cfg") != 0 && strcmp(dot, ".conf") != 0))
+    if (!dot || (strncmp(dot, ".conf", 6) != 0))
     {
         printf("Invalid config file format: %s\n", configPath);
         return -1;
@@ -899,7 +900,8 @@ int collectSystemMemoryStats(bool includeKthreads, const char *outDir, int itera
         getMacAddress(INTERFACE, mac, sizeof(mac));
         if (mac[0] == '\0')
         {
-            strcpy(mac, DEFAULT_MAC);
+            strncpy(mac, DEFAULT_MAC, sizeof(mac) - 1);
+            mac[sizeof(mac) - 1] = '\0';
         }
 
         // Current timestamp
@@ -998,7 +1000,7 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, int cli_iter
     }
 
     // Output directory: CLI > config > default
-    const char *final_out_dir = (cli_out_dir[0] && strcmp(cli_out_dir, DEFAULT_OUT_DIR) != 0)
+    const char *final_out_dir = (cli_out_dir[0] && strncmp(cli_out_dir, DEFAULT_OUT_DIR, strlen(DEFAULT_OUT_DIR) + 1) != 0)
                                     ? cli_out_dir
                                     : (config.outputDir[0] ? config.outputDir : DEFAULT_OUT_DIR);
 
@@ -1055,8 +1057,10 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, int cli_iter
         // Get MAC address
         char mac[32] = {0};
         getMacAddress(INTERFACE, mac, sizeof(mac));
-        if (mac[0] == '\0')
-            strcpy(mac, DEFAULT_MAC);
+        if (mac[0] == '\0') {
+            strncpy(mac, DEFAULT_MAC, sizeof(mac) - 1);
+            mac[sizeof(mac) - 1] = '\0'; // Ensure null-termination
+        }
 
         // Get timestamp
         time_t timenow = time(NULL);
@@ -1254,7 +1258,7 @@ int main(int argc, char *argv[])
 
     for (int i = 1; i < argc; i++)
     {
-        if (!strcmp(argv[i], "-c") || !strcmp(argv[i], "--config"))
+        if (!strncmp(argv[i], "-c", 3) || !strncmp(argv[i], "--config", 9))
         { // config file
             if (i + 1 < argc)
             {
@@ -1278,19 +1282,19 @@ int main(int argc, char *argv[])
                 printHelpAndUsage(argv, false);
             }
         }
-        else if (!strcmp(argv[i], "-a") || !strcmp(argv[i], "--all"))
+        else if (!strncmp(argv[i], "-a", 3) || !strncmp(argv[i], "--all", 6))
         { // include kernel threads
             enableKThreads = true;
         }
-        else if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help"))
+        else if (!strncmp(argv[i], "-h", 3) || !strncmp(argv[i], "--help", 7))
         { // help
             printHelpAndUsage(argv, true);
         }
-        else if (!strcmp(argv[i], "-t") || !strcmp(argv[i], "--test"))
+        else if (!strncmp(argv[i], "-t", 3) || !strncmp(argv[i], "--test", 7))
         { // test mode
             isTestMode = true;
         }
-        else if (!strcmp(argv[i], "-o") || !strcmp(argv[i], "--output"))
+        else if (!strncmp(argv[i], "-o", 3) || !strncmp(argv[i], "--output", 9))
         { // output directory
             if (i + 1 < argc)
             {
@@ -1303,7 +1307,7 @@ int main(int argc, char *argv[])
                 printHelpAndUsage(argv, false);
             }
         }
-        else if (!strcmp(argv[i], "--interval"))
+        else if (!strncmp(argv[i], "--interval", 11))
         { // interval
             if (i + 1 < argc)
             {
@@ -1317,7 +1321,7 @@ int main(int argc, char *argv[])
                 printHelpAndUsage(argv, false);
             }
         }
-        else if (!strcmp(argv[i], "--iterations"))
+        else if (!strncmp(argv[i], "--iterations", 13))
         { // iterations
             if (i + 1 < argc)
             {
