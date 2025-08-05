@@ -34,6 +34,23 @@ Process_Info processInfoTest;
 // -----------------------------
 // Utility Functions
 // -----------------------------
+
+/**
+ * Ensures that the specified output directory exists.
+ * If it doesn't exist, it attempts to create it.
+ */
+static void ensure_output_dir(const char *dir)
+{
+    struct stat st = {0};
+    if (stat(dir, &st) == -1)
+    {
+        if (mkdir(dir, 0755) == -1)
+        {
+            printf("Failed to create output directory '%s': %s\n", dir, strerror(errno));
+        }
+    }
+}
+
 /**
  * Reads a property value from a file in "key=value" format.
  * Returns 1 if found, 0 otherwise.
@@ -94,6 +111,50 @@ int getPropertyFromFile(const char *filename, const char *property, char *proper
         propertyValue[0] = '\0';
     return found;
 }
+
+/**
+ * Reads the firmware image name from /version.txt.
+ * Returns 1 if found, 0 otherwise. Writes result to fwName buffer.
+ */
+
+ int getFirmwareImageName(char *fwName, size_t fwNameLen)
+ {
+    if (!fwName || fwNameLen == 0)
+    {
+        printf("Invalid parameter for firmware name\n");
+        return 0;
+    }
+    FILE *fp = fopen(VERSION_FILE, "r");
+    if (!fp)
+    {
+        strncpy(fwName, DEFAULT_FW_NAME, fwNameLen - 1);
+        fwName[fwNameLen - 1] = '\0';
+        return 0;
+    }
+    char line[FW_LEN + 32] = {0};
+    if (fgets(line, sizeof(line), fp))
+    {
+        char *p = strstr(line, "imagename:");
+        if (p)
+        {
+            p += strlen("imagename:");
+            while (*p == ' ' || *p == '\t') p++;
+            size_t len = strcspn(p, "\r\n");
+            if (len >= fwNameLen)
+            {
+                len = fwNameLen - 1;
+            }
+            strncpy(fwName, p, len);
+            fwName[len] = '\0';
+            fclose(fp);
+            return 1;
+        }
+    }
+    fclose(fp);
+    strncpy(fwName, DEFAULT_FW_NAME, fwNameLen - 1);
+    fwName[fwNameLen - 1] = '\0';
+    return 0;
+ }
 
 /**
  * Retrieves the MAC address for a given network interface.
@@ -907,12 +968,19 @@ int collectSystemMemoryStats(bool includeKthreads, const char *outDir, int itera
         // Current timestamp
         time_t timenow = time(NULL);
         struct tm *tm_info = localtime(&timenow);
-        char timestamp[128] = {0};
-        // Format: YYYYMMDD_HHMMSS
+        char timestamp[32] = {0};
+        char ts[32] = {0};
+        strftime(ts, sizeof(ts), "%Y-%m-%d %H:%M:%S", tm_info);
+        printf("Current time: %s\n", ts);
         strftime(timestamp, sizeof(timestamp), "%Y%m%d%H%M%S", tm_info);
 
-        // outDir or default /tmp/
+        // Firmware image name
+        char fwName[FW_LEN] = {0};
+        getFirmwareImageName(fwName, sizeof(fwName));
+
+        // outDir or default /tmp/meminsight
         const char *dir = (outDir && outDir[0]) ? outDir : DEFAULT_OUT_DIR;
+        ensure_output_dir(dir);
         char outputfile[512] = {0};
         snprintf(outputfile, sizeof(outputfile), "%s/%s_%s_iter%d_%s", dir, mac, timestamp, iter + 1, CSV_FILE_NAME);
 
@@ -923,6 +991,9 @@ int collectSystemMemoryStats(bool includeKthreads, const char *outDir, int itera
             printf("%s: Open failed, %d [%s]\n", outputfile, errno, strerror(errno));
             return -1;
         }
+
+        fprintf(output, "FIRMWARE_NAME,MAC_ADDRESS,TIMESTAMP\n");
+        fprintf(output, "%s,%s,%s\n\n", fwName, mac, ts);
 
         unsigned long rssTotal = 0, pssTotal = 0, shared_clean_total = 0, private_dirty_total = 0, swap_pss_total = 0;
         DIR *proc = opendir(PROC_DIR);
@@ -1066,10 +1137,17 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, int cli_iter
         time_t timenow = time(NULL);
         struct tm *tm_info = localtime(&timenow);
         char timestamp[32] = {0};
+        char ts[32] = {0};
+        strftime(ts, sizeof(ts), "%Y-%m-%d %H:%M:%S", tm_info);
         strftime(timestamp, sizeof(timestamp), "%Y%m%d%H%M%S", tm_info);
+
+        // Firmware image name
+        char fwName[FW_LEN] = {0};
+        getFirmwareImageName(fwName, sizeof(fwName));
 
         // Generate output file name
         char outputFilePath[PATH_MAX * 2] = {0};
+        ensure_output_dir(final_out_dir);
         snprintf(outputFilePath, sizeof(outputFilePath), "%s/%s_%s_iter%d_%s", final_out_dir, mac, timestamp, iter+1, CSV_FILE_NAME);
 
         // Open output file
@@ -1090,6 +1168,9 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, int cli_iter
             }
             return -1;
         }
+
+        fprintf(output, "FIRMWARE_NAME,MAC_ADDRESS,TIMESTAMP\n");
+        fprintf(output, "%s,%s,%s\n\n", fwName, mac, ts);
 
         saveMeminfo(output); // TODO: based on whitelist count write content
         fprintf(output, "\nPID,EXE,RSS,PSS,SHARED_CLEAN,PRIVATE_DIRTY,SWAP_PSS,"

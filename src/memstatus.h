@@ -33,6 +33,8 @@
 #include <string.h>
 #include <sys/ioctl.h>
 #include <sys/socket.h>
+#include <sys/types.h>
+#include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -55,6 +57,9 @@
 
 #define XMEM_BIN "xmeminsight"
 #define PROC_DIR "/proc"
+#define VERSION_FILE "/version.txt"
+#define DEFAULT_FW_NAME "ACTIVEFW123"
+#define FW_LEN 64
 #define DEVICE_PROP_FILE "/etc/device.properties"
 #define INTERFACE "eth0"
 #define DEFAULT_ITERATIONS 1
@@ -132,6 +137,8 @@ void printHelpAndUsage(char *argv[], bool moreInfo);
 void saveMeminfo(FILE *out);
 int getPropertyFromFile(const char *filename, const char *property, char *propertyValue, size_t propertyValueLen);
 size_t getMacAddress(const char *iface, char *macAddress, size_t szBufSize);
+int getFirmwareImageName(char *fwName, size_t fwNameLen);
+
 int isPID(const char *str);
 int getPIDByProcessName(const char *procName, unsigned int *pidOut);
 int parseConfig(const char *configFile, Config_Data *config);
