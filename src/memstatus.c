@@ -395,8 +395,7 @@ void writeProcessInfo(unsigned noOfPids, FILE *output)
     unsigned int i = 1;
     while (tmp)
     {
-        printf("%d,%lu,%lu,%lu,%lu,%lu,%lu,%lu,%u,%s\n", i++, tmp->rssTotal, tmp->pssTotal, tmp->shared_clean_total,
-               tmp->private_dirty_total, tmp->swap_pss_total, tmp->majFaults, tmp->cputime, tmp->pid, tmp->name);
+        //printf("%d,%lu,%lu,%lu,%lu,%lu,%lu,%lu,%u,%s\n", i++, tmp->rssTotal, tmp->pssTotal, tmp->shared_clean_total,tmp->private_dirty_total, tmp->swap_pss_total, tmp->majFaults, tmp->cputime, tmp->pid, tmp->name);
         fprintf(output, "%u,%s,%lu,%lu,%lu,%lu,%lu,%lu,%lu\n", tmp->pid, tmp->name, tmp->rssTotal, tmp->pssTotal,
                 tmp->shared_clean_total, tmp->private_dirty_total, tmp->swap_pss_total, tmp->majFaults, tmp->cputime);
         tofree = tmp;
@@ -406,7 +405,7 @@ void writeProcessInfo(unsigned noOfPids, FILE *output)
     headProcessInfo = NULL;
     if (i != noOfPids)
     {
-        printf("Some process details might've been missed [%d vs actual %u]\n", i, noOfPids);
+        printf("* Some process details might have been missed [%d vs actual %u]\n", i, noOfPids);
     }
 }
 
@@ -953,7 +952,7 @@ int collectSystemMemoryStats(bool includeKthreads, const char *outDir, int itera
 {
     for (int iter = 0; long_run || iter < iterations; iter++)
     {
-        printf("Iteration %d%s\n", iter + 1, long_run ? "/∞" : "");
+        printf("\n==== Iteration %d%s ====\n", iter + 1, long_run ? "/∞" : "");
         unsigned int noOfPids = 0;
 
         // MAC Address
@@ -971,7 +970,6 @@ int collectSystemMemoryStats(bool includeKthreads, const char *outDir, int itera
         char timestamp[32] = {0};
         char ts[32] = {0};
         strftime(ts, sizeof(ts), "%Y-%m-%d %H:%M:%S", tm_info);
-        printf("Current time: %s\n", ts);
         strftime(timestamp, sizeof(timestamp), "%Y%m%d%H%M%S", tm_info);
 
         // Firmware image name
@@ -984,7 +982,7 @@ int collectSystemMemoryStats(bool includeKthreads, const char *outDir, int itera
         char outputfile[512] = {0};
         snprintf(outputfile, sizeof(outputfile), "%s/%s_%s_iter%d_%s", dir, mac, timestamp, iter + 1, CSV_FILE_NAME);
 
-        printf("System-wide monitoring output: %s\n", outputfile);
+        printf("Capturing System wide stats into %s\n", outputfile);
         FILE *output = fopen(outputfile, "w");
         if (NULL == output)
         {
@@ -1043,8 +1041,8 @@ int collectSystemMemoryStats(bool includeKthreads, const char *outDir, int itera
             return -1;
         }
         saveMeminfo(output);
-        printf("Processed %u processes\nRSS_Total %lu\nPSS_Total "
-               "%lu\nShared_Clean_Total %lu\nPrivate_Dirty_Total %lu\n",
+        printf("\nProcessed %u processes\n>> RSS_Total %lu\n>> PSS_Total "
+               "%lu\n>> Shared_Clean_Total %lu\n>> Private_Dirty_Total %lu\n",
                noOfPids, rssTotal, pssTotal, shared_clean_total, private_dirty_total);
         fprintf(output, "\n\nProcesses:\nPID,EXE,RSS,PSS,SHARED_CLEAN,PRIVATE_"
                         "DIRTY,SWAP_PSS,MAJ_FAULTS,CPU_TIME\n");
@@ -1054,10 +1052,11 @@ int collectSystemMemoryStats(bool includeKthreads, const char *outDir, int itera
         fclose(output);
         if (interval >= 0 && (long_run || iter + 1 < iterations))
         {
-            printf("%d%s Iteration completed. Sleeping for %d seconds before next iteration... \n", iter + 1, long_run ? "/∞" : "", interval);
+            printf("* %d%s Iteration completed. Sleeping for %d seconds before next iteration... \n", iter + 1, long_run ? "/∞" : "", interval);
             sleep(interval);
         }
     }
+    printf("\n---- Completed Data Capture ----\n");
     return 0;
 }
 
@@ -1112,10 +1111,8 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, int cli_iter
     config.iterations = final_iterations;
     config.interval = final_interval;
 
-    printf("%s Config loaded:\n whitelist=%p\n count=%u\n outDir=%s\n "
-           "iterations=%u\n interval=%u\n logLevel=%s\n",
-           confFile, config.whitelist, config.whiteListCount, config.outputDir, final_iterations, final_interval,
-           config.logLevel);
+    printf("* Config loaded successfully [%s]", confFile);
+    //printf("\n whitelist=%p\n count=%u\n outDir=%s\n iterations=%u\n interval=%u\n logLevel=%s\n", config.whitelist, config.whiteListCount, config.outputDir, final_iterations, final_interval, config.logLevel);
 
     if (config.interval > 0 && config.iterations > 0)
     {
@@ -1124,7 +1121,7 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, int cli_iter
 
     for (int iter = 0; long_run || iter < final_iterations; iter++)
     {
-        printf("Iteration %d%s\n", iter + 1, long_run ? "/∞" : "");
+        printf("\n==== Iteration %d%s ====\n", iter + 1, long_run ? "/∞" : "");
         // Get MAC address
         char mac[32] = {0};
         getMacAddress(INTERFACE, mac, sizeof(mac));
@@ -1150,6 +1147,7 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, int cli_iter
         ensure_output_dir(final_out_dir);
         snprintf(outputFilePath, sizeof(outputFilePath), "%s/%s_%s_iter%d_%s", final_out_dir, mac, timestamp, iter+1, CSV_FILE_NAME);
 
+        printf("Capturing Process stats into %s\n", outputFilePath);
         // Open output file
         FILE *output = fopen(outputFilePath, "w");
         if (!output)
@@ -1237,7 +1235,7 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, int cli_iter
 
         if (final_interval > 0 && iter + 1 < final_iterations)
         {
-            printf("(%d/%d) Completed. Sleeping for %d seconds before next iteration... \n", iter+1, final_iterations, final_interval);
+            printf("* %d/%d Completed. Sleeping for %d seconds before next iteration... \n", iter+1, final_iterations, final_interval);
             sleep(final_interval);
         }
     }
@@ -1254,6 +1252,7 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, int cli_iter
     {
         free(config.whitelist);
     }
+    printf("\n---- Completed Data Capture ----\n");
     return 0;
 }
 
@@ -1438,7 +1437,7 @@ int main(int argc, char *argv[])
             final_interval = (cli_interval <= 0) ? DEFAULT_INTERVAL : cli_interval;
             final_iterations = (cli_iterations <= 1) ? ((final_interval > 0) ? 2 : DEFAULT_ITERATIONS) : cli_iterations;
         }
-        printf("FINAL_ITERATIONS: %d, FINAL_INTERVAL: %d LONG_RUN: %s\n", final_iterations, final_interval, long_run ? "true" : "false");
+        printf("* Running %d iterations with %ds interval (indefinitely?: %s)\n", final_iterations, final_interval, long_run ? "yes" : "no");
         collectSystemMemoryStats(enableKThreads, out_dir, final_iterations, final_interval, long_run);
     }
     else if (isTestMode)
