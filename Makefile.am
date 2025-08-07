@@ -25,6 +25,8 @@ xmeminsight_SOURCES = src/memstatus.c
 xmeminsightdir = $(includedir)
 xmeminsight_HEADERS = src/memstatus.h
 
+AM_CPPFLAGS = @CPPFLAGS@
+
 # Add clean targets for better cleanup
 CLEANFILES = *.o *.lo *.la *.al *.so *.a
 DISTCLEANFILES = config.h config.h.in config.log config.status Makefile.in aclocal.m4 configure

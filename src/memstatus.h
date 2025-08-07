@@ -61,7 +61,11 @@
 #define DEFAULT_FW_NAME "ACTIVEFW123"
 #define FW_LEN 64
 #define DEVICE_PROP_FILE "/etc/device.properties"
+
+#ifndef INTERFACE
 #define INTERFACE "eth0"
+#endif
+
 #define DEFAULT_ITERATIONS 1
 #define DEFAULT_INTERVAL 0
 #define DEFAULT_OUT_DIR "/tmp/meminsight"

@@ -31,6 +31,7 @@ if [ "$1" = "--clean" ]; then
     rm -f stamp-h1
     rm -rf .deps/
     rm -f configure~
+    rm -rf config.h.in~
     rm -rf src/.deps/
     echo "Clean complete."
     exit 0
