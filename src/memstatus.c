@@ -965,8 +965,6 @@ int collectSystemMemoryStats(bool includeKthreads, const char *outDir, int itera
     {
         printf("\n==== Iteration %d%s ====\n", iter + 1, long_run ? "/∞" : "");
         unsigned int noOfPids = 0;
-
-        printf("DEBUG: before MAC func MAC Address\n", mac);
         // MAC Address
         char mac[32] = {0};
         getMacAddress(INTERFACE, mac, sizeof(mac));
