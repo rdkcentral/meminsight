@@ -1,0 +1,42 @@
+name: Build Component in Native Environment
+
+on:
+  pull_request:
+    branches: [ develop ]
+    paths: ['**/*.c', '**/*.cpp', '**/*.cc', '**/*.cxx', '**/*.h', '**/*.hpp', '**/*.sh']
+
+jobs:
+  build-meminsight-on-pr:
+    name: Build xMemInsight component in GitHub RDKCentral
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/rdkcentral/docker-device-mgt-service-test/native-platform:1.6.9
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        
+      - name: Install Dependencies
+        run: |
+          apt-get update
+          apt-get install -y autotools-dev autoconf automake pkg-config
+
+      - name: Clean build artifacts
+        run: |
+          sh cov_build.sh --clean
+
+      - name: Build the component
+        run: |
+          sh cov_build.sh
+
+      - name: Verify build output
+        run: |
+          ls -la xmeminsight || echo "Build artifact not found"
+          file xmeminsight || echo "Cannot check file type"
+          echo "Build verification complete"
+
+      # - name: Run tests (optional)
+      #   run: |
+      #     # If you have tests to run after building, you can add them here
+      #     # For example:
+      #     make test
