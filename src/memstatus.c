@@ -41,6 +41,7 @@ Process_Info processInfoTest;
  */
 static void ensure_output_dir(const char *dir)
 {
+    printf("DEBUG: ensure_output_dir called for %s\n", dir);
     struct stat st = {0};
     if (stat(dir, &st) == -1)
     {
@@ -48,7 +49,14 @@ static void ensure_output_dir(const char *dir)
         {
             printf("Failed to create output directory '%s': %s\n", dir, strerror(errno));
         }
+        else {
+            printf("DEBUG: Created output directory '%s'\n", dir);
+        }
+    } 
+    else {
+        printf("DEBUG: Output directory '%s' already exists\n", dir);
     }
+    printf("DEBUG: Output directory '%s' is ready\n", dir);
 }
 
 /**
@@ -162,6 +170,7 @@ int getPropertyFromFile(const char *filename, const char *property, char *proper
  */
 size_t getMacAddress(const char *iface, char *macAddress, size_t szBufSize)
 {
+    printf("DEBUG: getMacAddress called for interface: %s\n", iface);
     if (!iface || !macAddress || szBufSize < 18)
     { // 17 chars + null
         printf("Invalid parameter\n");
@@ -184,9 +193,10 @@ size_t getMacAddress(const char *iface, char *macAddress, size_t szBufSize)
         return 0;
     }
     close(fd);
-
+    printf("DEBUG: MAC Address from ioctl: %s\n", ifr.ifr_hwaddr.sa_data);
     unsigned char *mac = (unsigned char *)ifr.ifr_hwaddr.sa_data;
     size_t ret = snprintf(macAddress, szBufSize, "%02x%02x%02x%02x%02x%02x", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+    printf("DEBUG: MAC Address from func: %s\n", macAddress);
     return ret;
 }
 
@@ -956,14 +966,17 @@ int collectSystemMemoryStats(bool includeKthreads, const char *outDir, int itera
         printf("\n==== Iteration %d%s ====\n", iter + 1, long_run ? "/∞" : "");
         unsigned int noOfPids = 0;
 
+        printf("DEBUG: before MAC func MAC Address\n", mac);
         // MAC Address
         char mac[32] = {0};
         getMacAddress(INTERFACE, mac, sizeof(mac));
+        printf("DEBUG: after MAC func MAC Address: %s\n", mac);
         if (mac[0] == '\0')
         {
             strncpy(mac, DEFAULT_MAC, sizeof(mac) - 1);
             mac[sizeof(mac) - 1] = '\0';
         }
+        printf("DEBUG: final MAC Address: %s\n", mac);
 
         // Current timestamp
         time_t timenow = time(NULL);
@@ -972,14 +985,21 @@ int collectSystemMemoryStats(bool includeKthreads, const char *outDir, int itera
         char ts[32] = {0};
         strftime(ts, sizeof(ts), "%Y-%m-%d %H:%M:%S", tm_info);
         strftime(timestamp, sizeof(timestamp), "%Y%m%d%H%M%S", tm_info);
+        printf("DEBUG: Timestamp: %s | TS: %s\n", timestamp, ts);
 
         // Firmware image name
         char fwName[FW_LEN] = {0};
         getFirmwareImageName(fwName, sizeof(fwName));
+        printf("DEBUG: Firmware Name: %s\n", fwName);
+        printf("DEBUG: Default Directory: %s\n", DEFAULT_OUT_DIR);
 
         // outDir or default /tmp/meminsight
         const char *dir = (outDir && outDir[0]) ? outDir : DEFAULT_OUT_DIR;
+        printf("DEBUG: Output Directory: %s\n", dir);
+
+        printf("DEBUG: Ensuring output directory exists...\n");
         ensure_output_dir(dir);
+        printf("DEBUG: Ensured output directory exists: %s\n", dir);
         char outputfile[512] = {0};
         snprintf(outputfile, sizeof(outputfile), "%s/%s_%s_iter%d_%s", dir, mac, timestamp, iter + 1, CSV_FILE_NAME);
 
@@ -1126,10 +1146,12 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, int cli_iter
         // Get MAC address
         char mac[32] = {0};
         getMacAddress(INTERFACE, mac, sizeof(mac));
+        printf("DEBUG: MAC Address: %s\n", mac);
         if (mac[0] == '\0') {
             strncpy(mac, DEFAULT_MAC, sizeof(mac) - 1);
             mac[sizeof(mac) - 1] = '\0'; // Ensure null-termination
         }
+        printf("DEBUG: Final MAC Address: %s\n", mac);
 
         // Get timestamp
         time_t timenow = time(NULL);
@@ -1138,14 +1160,18 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, int cli_iter
         char ts[32] = {0};
         strftime(ts, sizeof(ts), "%Y-%m-%d %H:%M:%S", tm_info);
         strftime(timestamp, sizeof(timestamp), "%Y%m%d%H%M%S", tm_info);
+        printf("DEBUG: Timestamp: %s | TS: %s\n", timestamp, ts);
 
         // Firmware image name
         char fwName[FW_LEN] = {0};
         getFirmwareImageName(fwName, sizeof(fwName));
+        printf("DEBUG: Firmware Name: %s\n", fwName);
 
         // Generate output file name
         char outputFilePath[PATH_MAX * 2] = {0};
+        printf("DEBUG: Output Directory: %s\n", final_out_dir);
         ensure_output_dir(final_out_dir);
+        printf("DEBUG: Ensured output directory exists: %s\n", final_out_dir);
         snprintf(outputFilePath, sizeof(outputFilePath), "%s/%s_%s_iter%d_%s", final_out_dir, mac, timestamp, iter+1, CSV_FILE_NAME);
 
         printf("Capturing Process stats into %s\n", outputFilePath);
