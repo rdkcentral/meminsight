@@ -56,6 +56,13 @@
 // -----------------------------
 
 #define XMEM_BIN "xmeminsight"
+/* BIN_VERSION is track the binary version, any changes in the binary version should increment this version.
+This is used to ensure compatibility with older versions of the binary. */
+#define BIN_VERSION "1.0"
+
+/* REPORT_VERSION is track the report format, any changes in the report format should increment this version.
+This is used to ensure compatibility with older versions of the report parser. */
+#define REPORT_VERSION "1.0"
 #define PROC_DIR "/proc"
 #define VERSION_FILE "/version.txt"
 #define DEFAULT_FW_NAME "ACTIVEFW123"

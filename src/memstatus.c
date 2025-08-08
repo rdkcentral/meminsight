@@ -901,6 +901,7 @@ void printHelp(char *argv[])
  */
 void printHelpAndUsage(char *argv[], bool moreInfo)
 {
+    printf("%s (v%s)\n", XMEM_BIN, BIN_VERSION);
     printf("Usage: %s [OPTIONS]\n", XMEM_BIN);
     printf("A lightweight, configurable tool for collecting detailed system and per-process memory and CPU statistics.\n");
 
@@ -990,8 +991,8 @@ int collectSystemMemoryStats(bool includeKthreads, const char *outDir, int itera
             return -1;
         }
 
-        fprintf(output, "FIRMWARE_NAME,MAC_ADDRESS,TIMESTAMP\n");
-        fprintf(output, "%s,%s,%s\n\n", fwName, mac, ts);
+        fprintf(output, "FIRMWARE_NAME,MAC_ADDRESS,TIMESTAMP,REPORT_VERSION\n");
+        fprintf(output, "%s,%s,%s,%s\n\n", fwName, mac, ts, REPORT_VERSION);
 
         unsigned long rssTotal = 0, pssTotal = 0, shared_clean_total = 0, private_dirty_total = 0, swap_pss_total = 0;
         DIR *proc = opendir(PROC_DIR);
@@ -1167,8 +1168,8 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, int cli_iter
             return -1;
         }
 
-        fprintf(output, "FIRMWARE_NAME,MAC_ADDRESS,TIMESTAMP\n");
-        fprintf(output, "%s,%s,%s\n\n", fwName, mac, ts);
+        fprintf(output, "FIRMWARE_NAME,MAC_ADDRESS,TIMESTAMP,REPORT_VERSION\n");
+        fprintf(output, "%s,%s,%s,%s\n\n", fwName, mac, ts, REPORT_VERSION);
 
         saveMeminfo(output); // TODO: based on whitelist count write content
         fprintf(output, "\nPID,EXE,RSS,PSS,SHARED_CLEAN,PRIVATE_DIRTY,SWAP_PSS,"
