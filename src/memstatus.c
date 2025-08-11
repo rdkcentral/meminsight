@@ -1344,6 +1344,7 @@ void saveMeminfo(FILE *out)
  */
 int main(int argc, char *argv[])
 {
+	printf("\nDEBUG: %s -> %s", INTERFACE, DEFAULT_MAC);
     // set defaults
     bool isConfigPresent = false;
     bool enableKThreads = false;
