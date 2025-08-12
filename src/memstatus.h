@@ -69,7 +69,9 @@ This is used to ensure compatibility with older versions of the report parser. *
 #define FW_LEN 64
 #define DEVICE_PROP_FILE "/etc/device.properties"
 
-#ifndef INTERFACE
+#ifdef BB_INTERFACE
+#define INTERFACE "erouter0"
+#else
 #define INTERFACE "eth0"
 #endif
 
