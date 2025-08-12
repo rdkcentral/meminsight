@@ -1,126 +1,325 @@
-# MemInsight
+# 🔍 xmeminsight
 
-MemInsight is a lightweight, configurable Linux tool for collecting detailed system and per-process memory and CPU statistics, tailored for embedded environments. It is designed to aid in the diagnosis and debugging of memory and performance issues.
+**xmeminsight** is a powerful, lightweight Linux memory profiling and monitoring tool designed for system administrators, developers, and embedded system engineers. It provides comprehensive real-time memory usage analysis with detailed per-process statistics and system-wide memory insights.
 
-## Features
+---
 
-- **System-wide and per-process memory statistics:**  
-  Scans `/proc` for all processes and parses `/proc/[pid]/stat` and `/proc/[pid]/smaps` to collect:
-  - Resident Set Size (RSS)
-  - Proportional Set Size (PSS)
-  - Shared clean memory
-  - Private dirty memory
-  - Swap PSS
-  - Major page faults
-  - CPU time (user + system)
+## 📋 Table of Contents
 
-- **Configurable output:**  
-  Supports configuration files to specify process whitelists, output file location, number of iterations, interval between samples, and log level.
+- [Features](#-features)
+- [Quick Start](#-quick-start)
+- [Installation](#-installation)
+- [Usage](#-usage)
+- [Configuration](#-configuration)
+- [Advanced Features](#-advanced-features)
+- [Build System](#-build-system)
+- [Architecture](#-architecture)
+- [Examples](#-examples)
+- [Troubleshooting](#-troubleshooting)
+- [Contributing](#-contributing)
 
-- **CSV output:**  
-  Outputs results in CSV format for easy analysis.
+## ✨ Features
 
-- **Test mode:**  
-  Includes a test mode for validating parsing logic and linked list sorting.
+### 🎯 **Comprehensive Memory Analysis**
+- **RSS (Resident Set Size)** - Physical memory currently used by processes
+- **PSS (Proportional Set Size)** - RSS + a portion of shared memory
+- **Shared Clean Memory** - Read-only shared pages
+- **Private Dirty Memory** - Process-exclusive modified pages
+- **Swap PSS** - Proportional swap usage
+- **Major Page Faults** - Hard page faults requiring disk I/O
+- **CPU Time** - Combined user and system CPU usage
 
-- **Kernel thread support:**  
-  Optionally includes kernel threads in monitoring.
+### 🛠️ **Flexible Configuration**
+- **Process Whitelisting** - Monitor specific processes by name or PID
+- **Configurable Sampling** - Set iterations and intervals for data collection
+- **Multiple Output Formats** - CSV export with timestamps and metadata
+- **Kernel Thread Support** - Optional inclusion of kernel threads
+- **Long-running Mode** - Extended monitoring with automatic intervals
 
-## Usage
+### 🔧 **Advanced Capabilities**
+- **Network Interface Detection** - Automatic MAC address retrieval
+- **Firmware Information** - System version and device property extraction
+- **Memory Leak Detection** - Track memory growth over time
+- **Performance Profiling** - CPU and memory correlation analysis
+- **Embedded System Optimized** - Minimal overhead for resource-constrained environments
 
-### Building
+## 🚀 Quick Start
 
-To build the binary:
+```bash
+# Build the tool
+./configure && make
 
-```sh
+# Run basic system-wide memory analysis
+./xmeminsight
+
+# Monitor specific processes with custom intervals
+./xmeminsight --config myconfig.conf --iterations 10 --interval 30
+
+# Include kernel threads in analysis
+./xmeminsight --include-kthreads --output-dir /tmp/memreports
+```
+
+## 🔨 Installation
+
+### Prerequisites
+- Linux operating system (kernel 2.6+)
+- GCC compiler
+- GNU Autotools (autoconf, automake)
+- Standard C library with POSIX support
+
+### Building from Source
+
+```bash
+# Clone or extract the source code
+cd meminsight/
+
+# Generate configure script
+autoreconf -fiv
+
+# Configure build environment
+./configure
+
+# Compile the binary
 make
+
+# Optional: Install system-wide
+sudo make install
 ```
 
-This produces the `xMemInsight` executable.
+## 📖 Usage
 
-### Running
+### Command Line Options
 
-#### Standalone (system-wide monitoring):
+```bash
+xmeminsight [OPTIONS]
 
-```sh
-make run
-# or
-./xMemInsight
+OPTIONS:
+  --config FILE              Use configuration file
+  --iterations N             Number of sampling iterations (default: 1)
+  --interval SECONDS         Seconds between samples (default: 0)
+  --output-dir DIR           Output directory (default: /tmp/meminsight)
+  --include-kthreads         Include kernel threads in analysis
+  --long-run                 Enable long-running mode (900s intervals)
+  --log-level LEVEL          Set logging level (DEBUG, INFO, ERROR)
+  --help                     Show help message
+  --test                     Run internal test suite
 ```
 
-#### Test mode:
+### Basic Usage Examples
 
-```sh
-make test
-# or
-./xMemInsight --test
+```bash
+# Single snapshot of system memory
+./xmeminsight
+
+# Monitor for 1 hour with 5-minute intervals
+./xmeminsight --iterations 12 --interval 300
+
+# Continuous monitoring with configuration file
+./xmeminsight --config production.conf --long-run
+
+# Debug mode with kernel thread inclusion
+./xmeminsight --include-kthreads --log-level DEBUG
 ```
 
-#### Help:
-
-```sh
-make help
-# or
-./xMemInsight --help
-```
-
-#### With configuration file:
-
-```sh
-./xMemInsight --config /path/to/config.conf
-```
+## ⚙️ Configuration
 
 ### Configuration File Format
 
-Supported extensions: `.conf`, `.cfg`, `.txt`
+Create a `.conf` file with the following parameters:
 
-Example config file:
-
-```
-process_whitelist=myapp,systemd,1234,
-output_file=/tmp/xmeminsight.csv,
-iterations=10,
-interval=60
+```ini
+# production.conf
+process_whitelist=nginx,mysql,redis,1234
+output_dir=/var/log/meminsight
+iterations=24
+interval=3600
 log_level=INFO
 ```
 
-- `process_whitelist`: Comma-separated list of process names or PIDs to monitor.
-- `output_file`: Path to output CSV file.
-- `iterations`: Number of times to sample statistics.
-- `interval`: Seconds to wait between samples.
-- `log_level`: Logging verbosity.
+### Configuration Parameters
 
-## Output
+| Parameter | Description | Default Value | Example |
+|-----------|-------------|---------------|---------|
+| `process_whitelist` | Comma-separated list of process names/PIDs | All processes | `apache2,mysql,1234` |
+| `output_dir` | Directory for output files | `/tmp/meminsight` | `/var/log/monitoring` |
+| `iterations` | Number of sampling cycles | `1` | `10` |
+| `interval` | Seconds between samples | `0` | `60` |
+| `log_level` | Logging verbosity | `INFO` | `DEBUG`, `ERROR` |
 
-- **CSV file** containing per-process statistics and system-wide memory info.
-- **Console output** for progress and errors.
+### Network Interface Configuration
 
-## Code Structure
+The tool automatically detects network interfaces for MAC address collection:
 
-- `memstatus.c`: Main source file. Handles CLI parsing, process scanning, statistics collection, output writing, and configuration parsing.
-- `memstatus.h`: Header file. Contains data structures, macros, global variables, and function prototypes.
-- `Makefile`: Build and run targets.
-- `README.md`: Documentation.
+```bash
+# Default: uses "eth0"
+./xmeminsight
 
-## Main Functions
+# Custom interface via compile-time flag
+CPPFLAGS="-DDEVICE_IDENTIFIER=\"erouter0\"" make clean && make
+```
 
-- `main()`: Entry point. Parses arguments, loads config, runs monitoring.
-- `systemWide()`: Collects system-wide stats.
-- `parseConfig()`: Loads configuration from file.
-- `getProcessInfos()`: Parses `/proc/[pid]/smaps` for memory stats.
-- `fillProcessStatFields()`: Parses `/proc/[pid]/stat` for process info.
-- `writeProcessInfo()`: Outputs and frees process info linked list.
-- `addProcessInfo()`: Inserts process info into sorted linked list.
-- `saveMeminfo()`: Dumps `/proc/meminfo` to output.
+## 🔬 Advanced Features
 
-## Extending
+### Memory Leak Detection
 
-- Add new fields to `Process_Info` struct for more statistics.
-- Modify `parseConfig()` to support additional config options.
-- Implement more advanced filtering or output formats as needed.
+```bash
+# Monitor memory growth over 8 hours
+./xmeminsight --iterations 48 --interval 600 --config leak_detection.conf
+```
 
-## License
+### Process-Specific Monitoring
 
-This project is licensed under the Apache-2.0 License.
+```bash
+# Monitor only critical services
+echo "process_whitelist=systemd,NetworkManager,sshd" > services.conf
+./xmeminsight --config services.conf --iterations 60 --interval 60
+```
+
+### Long-Running System Monitoring
+
+```bash
+# 24/7 monitoring with 15-minute intervals
+./xmeminsight --long-run --output-dir /var/log/meminsight/
+```
+
+### Test Mode for Validation
+
+```bash
+# Run internal test suite
+./xmeminsight --test
+
+# Validate configuration file
+./xmeminsight --config test.conf --test
+```
+
+## 🏗️ Build System
+
+### Autotools Configuration
+
+The project uses GNU Autotools for cross-platform compatibility:
+
+- **`configure.ac`** - Autoconf configuration
+- **`Makefile.am`** - Automake build rules
+- **Generated files** - `configure`, `Makefile.in`, `config.h`
+
+### Build Targets
+
+```bash
+# Standard build
+make
+
+# Clean build artifacts
+make clean
+
+# Full cleanup including generated files
+make distclean
+
+# Create distribution tarball
+make dist
+
+# Install to system directories
+make install
+```
+
+## 🏛️ Architecture
+
+### Memory Collection Pipeline
+
+1. **Process Discovery** - Scan `/proc` filesystem
+2. **Statistics Parsing** - Read `/proc/[pid]/stat` and `/proc/[pid]/smaps`
+3. **Data Aggregation** - Calculate totals and averages
+4. **Sorting & Filtering** - Apply whitelist and sort by PSS
+5. **Output Generation** - Write CSV with metadata
+
+### Key Functions
+
+| Function | Purpose | Location |
+|----------|---------|----------|
+| `collectSystemMemoryStats()` | Main collection orchestrator | memstatus.c |
+| `getProcessInfos()` | Parse per-process smaps data | memstatus.c |
+| `fillProcessStatFields()` | Extract stat file information | memstatus.c |
+| `addProcessInfo()` | Maintain sorted process list | memstatus.c |
+| `getMacAddress()` | Network interface detection | memstatus.c |
+| `parseConfig()` | Configuration file processing | memstatus.c |
+
+---
+
+## 💡 Examples
+
+### Example 1: Web Server Monitoring
+
+```bash
+# Monitor web server processes
+cat > webserver.conf << EOF
+process_whitelist=nginx,apache2,httpd,php-fpm
+output_dir=/var/log/webserver-memory
+iterations=288
+interval=300
+log_level=INFO
+EOF
+
+./xmeminsight --config webserver.conf
+```
+
+### Example 2: Database Performance Analysis
+
+```bash
+# Monitor database memory usage every minute for 2 hours
+./xmeminsight --iterations 120 --interval 60 \
+              --output-dir /tmp/db-analysis \
+              --config database.conf
+```
+
+### Example 3: Embedded System Monitoring
+
+```bash
+# Lightweight monitoring for embedded systems
+CPPFLAGS="-DDEVICE_IDENTIFIER=\"eth0\"" make clean && make
+./xmeminsight --iterations 24 --interval 3600 --output-dir /mnt/logs/
+```
+
+## 🔧 Troubleshooting
+
+### Common Issues
+
+**Issue**: Permission denied errors
+```bash
+# Solution: Run with appropriate privileges
+sudo ./xmeminsight
+# Or adjust /proc permissions
+```
+
+**Issue**: High memory usage during monitoring
+```bash
+# Solution: Reduce monitoring frequency or use whitelisting
+./xmeminsight --interval 300 --config lightweight.conf
+```
+
+## 🤝 Contributing
+
+We welcome contributions! Please follow these guidelines:
+
+1. **Fork the repository**
+2. **Create a feature branch**
+3. **Follow coding standards**
+   - Use consistent indentation (4 spaces)
+   - Add comprehensive comments
+   - Include error handling
+4. **Test thoroughly**
+   - Run `make test`
+   - Validate on different systems
+5. **Submit pull request**
+
+### Development Setup
+
+```bash
+# Setup development environment
+autoreconf -fiv
+./configure --enable-debug
+make
+
+# Run test suite
+./xmeminsight --test
+```
 
 ---

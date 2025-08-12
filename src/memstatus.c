@@ -31,8 +31,8 @@ char testSmap[128];
 Process_Info processInfoTest;
 #endif
 
-static const char interfaceName[] = INTERFACE;
-static const char xmemVersion[] = "" XMEM_MAJOR_VERSION "." XMEM_MINOR_VERSION "";
+static const char deviceIdentifierName[] = DEVICE_IDENTIFIER;
+static const char xMemInsightVersion[] = "" XMEMINSIGHT_MAJOR_VERSION "." XMEMINSIGHT_MINOR_VERSION "";
 static const char reportVersion[] =  "" REPORT_MAJOR_VERSION "." REPORT_MINOR_VERSION "";
 
 // -----------------------------
@@ -905,8 +905,8 @@ void printHelp(char *argv[])
  */
 void printHelpAndUsage(char *argv[], bool moreInfo)
 {
-    printf("%s (v%s)\n", XMEM_BIN, xmemVersion);
-    printf("Usage: %s [OPTIONS]\n", XMEM_BIN);
+    printf("%s (v%s)\n", XMEMINSIGHT_BIN, xMemInsightVersion);
+    printf("Usage: %s [OPTIONS]\n", XMEMINSIGHT_BIN);
     printf("A lightweight, configurable tool for collecting detailed system and per-process memory and CPU statistics.\n");
 
     printf("\nOptions:\n");
@@ -932,7 +932,7 @@ void printHelpAndUsage(char *argv[], bool moreInfo)
         printf("Example:\n");
         printf("  %s\n", argv[0]);
         printf("  %s --all\n", argv[0]);
-        printf("  %s --config /etc/xmem_configuration%s\n", argv[0], CONFIG_EXTN);
+        printf("  %s --config /etc/xmeminsight_configuration%s\n", argv[0], CONFIG_EXTN);
         printf("  %s -c myconfig%s -a --interval 10 --iterations 5\n", argv[0], CONFIG_EXTN);
         printf("  %s --output /var/log/ --iterations 3\n", argv[0]);
         printf("  %s --test\n", argv[0]);
@@ -962,7 +962,7 @@ int collectSystemMemoryStats(bool includeKthreads, const char *outDir, int itera
 
         // MAC Address
         char mac[32] = {0};
-        getMacAddress(interfaceName, mac, sizeof(mac));
+        getMacAddress(deviceIdentifierName, mac, sizeof(mac));
         if (mac[0] == '\0')
         {
             strncpy(mac, DEFAULT_MAC, sizeof(mac) - 1);
@@ -1129,7 +1129,7 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, int cli_iter
         printf("\n==== Iteration %d%s ====\n", iter + 1, long_run ? "/∞" : "");
         // Get MAC address
         char mac[32] = {0};
-        getMacAddress(interfaceName, mac, sizeof(mac));
+        getMacAddress(deviceIdentifierName, mac, sizeof(mac));
         if (mac[0] == '\0') {
             strncpy(mac, DEFAULT_MAC, sizeof(mac) - 1);
             mac[sizeof(mac) - 1] = '\0'; // Ensure null-termination

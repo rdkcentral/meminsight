@@ -55,21 +55,19 @@
 // Macro Definitions
 // -----------------------------
 
-#define XMEM_BIN "xmeminsight"
-/* XMEM_MAJOR_VERSION and XMEM_MINOR_VERSION are to track the binary version, any changes in the binary version should increment this version.
+#define XMEMINSIGHT_BIN "xmeminsight"
+/* XMEMINSIGHT_MAJOR_VERSION and XMEMINSIGHT_MINOR_VERSION are to track the binary version, any changes in the binary version should increment this version.
 This is used to ensure compatibility with older versions of the binary. */
-#define XMEM_MAJOR_VERSION "1"
-#define XMEM_MINOR_VERSION "0"
+#define XMEMINSIGHT_MAJOR_VERSION "1"
+#define XMEMINSIGHT_MINOR_VERSION "0"
 
 /* REPORT_MAJOR_VERSION and REPORT_MINOR_VERSION are to track the report format, any changes in the report format should increment this version.
 This is used to ensure compatibility with older versions of the report parser. */
 #define REPORT_MAJOR_VERSION "1"
 #define REPORT_MINOR_VERSION "0"
 
-#ifdef BB_INTERFACE
-#define INTERFACE "erouter0"
-#else
-#define INTERFACE "eth0"
+#ifndef DEVICE_IDENTIFIER
+#define DEVICE_IDENTIFIER "eth0"
 #endif
 
 /* Paths */
