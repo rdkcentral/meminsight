@@ -31,6 +31,8 @@ char testSmap[128];
 Process_Info processInfoTest;
 #endif
 
+static const char interfaceName[] = INTERFACE;
+
 // -----------------------------
 // Utility Functions
 // -----------------------------
@@ -967,7 +969,7 @@ int collectSystemMemoryStats(bool includeKthreads, const char *outDir, int itera
         unsigned int noOfPids = 0;
         // MAC Address
         char mac[32] = {0};
-        getMacAddress(INTERFACE, mac, sizeof(mac));
+        getMacAddress(interfaceName, mac, sizeof(mac));
         printf("DEBUG: after MAC func MAC Address: %s\n", mac);
         if (mac[0] == '\0')
         {
@@ -1143,7 +1145,7 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, int cli_iter
         printf("\n==== Iteration %d%s ====\n", iter + 1, long_run ? "/∞" : "");
         // Get MAC address
         char mac[32] = {0};
-        getMacAddress(INTERFACE, mac, sizeof(mac));
+        getMacAddress(interfaceName, mac, sizeof(mac));
         printf("DEBUG: MAC Address: %s\n", mac);
         if (mac[0] == '\0') {
             strncpy(mac, DEFAULT_MAC, sizeof(mac) - 1);
@@ -1355,6 +1357,11 @@ int main(int argc, char *argv[])
     char out_dir[PATH_MAX] = DEFAULT_OUT_DIR;
     int cli_iterations = -1;
     int cli_interval = -1;
+
+	printf("Command line arguments (%d):\n", argc);
+    for (int i = 0; i < argc; i++) {
+        printf("  argv[%d]: '%s'\n", i, argv[i]);
+	}
 
     // CLI parsing and initialization
     if (argc == 1)
