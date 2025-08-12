@@ -31,6 +31,10 @@ char testSmap[128];
 Process_Info processInfoTest;
 #endif
 
+static const char interfaceName[] = INTERFACE;
+static const char xmemVersion[] = "" XMEM_MAJOR_VERSION "." XMEM_MINOR_VERSION "";
+static const char reportVersion[] =  "" REPORT_MAJOR_VERSION "." REPORT_MINOR_VERSION "";
+
 // -----------------------------
 // Utility Functions
 // -----------------------------
@@ -901,7 +905,7 @@ void printHelp(char *argv[])
  */
 void printHelpAndUsage(char *argv[], bool moreInfo)
 {
-    printf("%s (v%s)\n", XMEM_BIN, BIN_VERSION);
+    printf("%s (v%s)\n", XMEM_BIN, xmemVersion);
     printf("Usage: %s [OPTIONS]\n", XMEM_BIN);
     printf("A lightweight, configurable tool for collecting detailed system and per-process memory and CPU statistics.\n");
 
@@ -958,7 +962,7 @@ int collectSystemMemoryStats(bool includeKthreads, const char *outDir, int itera
 
         // MAC Address
         char mac[32] = {0};
-        getMacAddress(INTERFACE, mac, sizeof(mac));
+        getMacAddress(interfaceName, mac, sizeof(mac));
         if (mac[0] == '\0')
         {
             strncpy(mac, DEFAULT_MAC, sizeof(mac) - 1);
@@ -992,7 +996,7 @@ int collectSystemMemoryStats(bool includeKthreads, const char *outDir, int itera
         }
 
         fprintf(output, "FIRMWARE_NAME,MAC_ADDRESS,TIMESTAMP,REPORT_VERSION\n");
-        fprintf(output, "%s,%s,%s,%s\n\n", fwName, mac, ts, REPORT_VERSION);
+        fprintf(output, "%s,%s,%s,%s\n\n", fwName, mac, ts, reportVersion);
 
         unsigned long rssTotal = 0, pssTotal = 0, shared_clean_total = 0, private_dirty_total = 0, swap_pss_total = 0;
         DIR *proc = opendir(PROC_DIR);
@@ -1125,7 +1129,7 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, int cli_iter
         printf("\n==== Iteration %d%s ====\n", iter + 1, long_run ? "/∞" : "");
         // Get MAC address
         char mac[32] = {0};
-        getMacAddress(INTERFACE, mac, sizeof(mac));
+        getMacAddress(interfaceName, mac, sizeof(mac));
         if (mac[0] == '\0') {
             strncpy(mac, DEFAULT_MAC, sizeof(mac) - 1);
             mac[sizeof(mac) - 1] = '\0'; // Ensure null-termination
@@ -1169,7 +1173,7 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, int cli_iter
         }
 
         fprintf(output, "FIRMWARE_NAME,MAC_ADDRESS,TIMESTAMP,REPORT_VERSION\n");
-        fprintf(output, "%s,%s,%s,%s\n\n", fwName, mac, ts, REPORT_VERSION);
+        fprintf(output, "%s,%s,%s,%s\n\n", fwName, mac, ts, reportVersion);
 
         saveMeminfo(output); // TODO: based on whitelist count write content
         fprintf(output, "\nPID,EXE,RSS,PSS,SHARED_CLEAN,PRIVATE_DIRTY,SWAP_PSS,"
@@ -1330,6 +1334,13 @@ int main(int argc, char *argv[])
     char out_dir[PATH_MAX] = DEFAULT_OUT_DIR;
     int cli_iterations = -1;
     int cli_interval = -1;
+
+    printf("\n Executing: ");
+    for (int i = 0; i < argc; i++)
+    {
+        printf("%s ", argv[i]);
+    }
+    printf("\n");
 
     // CLI parsing and initialization
     if (argc == 1)

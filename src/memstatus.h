@@ -56,31 +56,39 @@
 // -----------------------------
 
 #define XMEM_BIN "xmeminsight"
-/* BIN_VERSION is track the binary version, any changes in the binary version should increment this version.
+/* XMEM_MAJOR_VERSION and XMEM_MINOR_VERSION are to track the binary version, any changes in the binary version should increment this version.
 This is used to ensure compatibility with older versions of the binary. */
-#define BIN_VERSION "1.0"
+#define XMEM_MAJOR_VERSION "1"
+#define XMEM_MINOR_VERSION "0"
 
-/* REPORT_VERSION is track the report format, any changes in the report format should increment this version.
+/* REPORT_MAJOR_VERSION and REPORT_MINOR_VERSION are to track the report format, any changes in the report format should increment this version.
 This is used to ensure compatibility with older versions of the report parser. */
-#define REPORT_VERSION "1.0"
-#define PROC_DIR "/proc"
-#define VERSION_FILE "/version.txt"
-#define DEFAULT_FW_NAME "ACTIVEFW123"
-#define FW_LEN 64
-#define DEVICE_PROP_FILE "/etc/device.properties"
+#define REPORT_MAJOR_VERSION "1"
+#define REPORT_MINOR_VERSION "0"
 
-#ifndef INTERFACE
+#ifdef BB_INTERFACE
+#define INTERFACE "erouter0"
+#else
 #define INTERFACE "eth0"
 #endif
 
+/* Paths */
+#define PROC_DIR "/proc"
+#define VERSION_FILE "/version.txt"
+#define DEVICE_PROP_FILE "/etc/device.properties"
+
+/* Default Macros */
+#define DEFAULT_FW_NAME "ACTIVEFW123"
+#define FW_LEN 64
 #define DEFAULT_ITERATIONS 1
 #define DEFAULT_INTERVAL 0
 #define DEFAULT_OUT_DIR "/tmp/meminsight"
 #define DEFAULT_LOG_LEVEL "INFO"
 #define DEFAULT_MAC "00:00:00:00:00:00"
+
 #define PF_KTHREAD 0x00200000               // Kernel thread flag
-#define STAT_PATH_FMT PROC_DIR "/%u/stat"   // Format for process stat file path
-#define SMAPS_PATH_FMT PROC_DIR "/%u/smaps" // Format for process smaps file path
+
+/* Config Macros */
 #define CONFIG_EXTN ".conf"
 #define CSV_FILE_NAME "meminsight.csv"
 #define LONG_RUN_INTERVAL 900 // 900 is Default interval for long runs in seconds
