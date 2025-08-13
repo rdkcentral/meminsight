@@ -31,6 +31,10 @@ char testSmap[128];
 Process_Info processInfoTest;
 #endif
 
+static const char deviceIdentifierName[] = DEVICE_IDENTIFIER;
+static const char xMemInsightVersion[] = "" XMEMINSIGHT_MAJOR_VERSION "." XMEMINSIGHT_MINOR_VERSION "";
+static const char reportVersion[] =  "" REPORT_MAJOR_VERSION "." REPORT_MINOR_VERSION "";
+
 // -----------------------------
 // Utility Functions
 // -----------------------------
@@ -901,42 +905,40 @@ void printHelp(char *argv[])
  */
 void printHelpAndUsage(char *argv[], bool moreInfo)
 {
-    printf("%s (v%s)\n", XMEM_BIN, BIN_VERSION);
-    printf("Usage: %s [OPTIONS]\n", XMEM_BIN);
-    printf("A lightweight, configurable tool for collecting detailed system and per-process memory and CPU statistics.\n");
+    printf("%s (v%s)\n\n", XMEMINSIGHT_BIN, xMemInsightVersion);
+    printf("Usage: %s [OPTIONS]\n", XMEMINSIGHT_BIN);
+    printf("A lightweight, configurable tool for collecting detailed system and per-process memory and CPU statistics.\n\n");
 
-    printf("\nOptions:\n");
+    printf("Options:\n");
     printf("  -a, --all                 Include kernel threads for process monitoring\n");
     printf("  -c, --config <file>       Path to configuration file with %s extension\n", CONFIG_EXTN);
     printf("  -o, --output <directory>  Output directory for generated CSV files (default: %s)\n", DEFAULT_OUT_DIR);
-    printf("      --interval <seconds>  Interval in seconds between iterations (overrides config)\n");
-    printf("      --iterations <count>  Number of iterations to run (overrides config)\n");
+    printf("      --interval <seconds>   Interval in seconds between iterations (overrides config)\n");
+    printf("      --iterations <count>   Number of iterations to run (overrides config)\n");
     printf("  -h, --help                Show this help message and exit\n");
-    printf("  -t, --test                Run in test mode with a generated minimal config\n");
-    printf("\n");
+    printf("  -t, --test                Run in test mode with a generated minimal config\n\n");
 
     if (moreInfo)
     {
-        printf("\nPrecedence:\n");
-        printf("  Command-line arguments override config file values, which override built-in defaults.\n");
+        printf("Precedence:\n");
+        printf("  Command-line arguments override config file values, which override built-in defaults.\n\n");
 
-        printf("\nDefault behavior (no flags):\n");
+        printf("Default behavior (no flags):\n");
         printf("  - Runs indefinite number of iterations, with an interval of 15 minutes, monitors all processes with log level INFO\n");
-        printf("  - Output: /tmp/<MAC>_<timestamp>_iter<iteration>_%s\n", CSV_FILE_NAME);
-        printf("\n");
+        printf("  - Output: /tmp/<MAC>_<timestamp>_iter<iteration>_%s\n\n", CSV_FILE_NAME);
 
         printf("Example:\n");
         printf("  %s\n", argv[0]);
         printf("  %s --all\n", argv[0]);
-        printf("  %s --config /etc/xmem_configuration%s\n", argv[0], CONFIG_EXTN);
+        printf("  %s --config /etc/xmeminsight_configuration%s\n", argv[0], CONFIG_EXTN);
         printf("  %s -c myconfig%s -a --interval 10 --iterations 5\n", argv[0], CONFIG_EXTN);
         printf("  %s --output /var/log/ --iterations 3\n", argv[0]);
-        printf("  %s --test\n", argv[0]);
+        printf("  %s --test\n\n", argv[0]);
 
-        printf("\nSample config file:\n");
-        printf("\n  process_whitelist=myapp,systemd,1234\n  output_dir=/var/log/\n  iterations=10\n  interval=60\n  log_level=INFO\n");
+        printf("Sample config file:\n");
+        printf("  process_whitelist=myapp,systemd,1234\n  output_dir=/var/log/\n  iterations=10\n  interval=60\n  log_level=INFO\n\n");
 
-        printf("\nNotes:\n");
+        printf("Notes:\n");
         printf("  - Supported config file extensions: %s\n", CONFIG_EXTN);
         printf("  - If both interval and iterations are set via CLI, both are used.\n");
         printf("  - If only one is set, the other uses its default or config value.\n");
@@ -958,7 +960,7 @@ int collectSystemMemoryStats(bool includeKthreads, const char *outDir, int itera
 
         // MAC Address
         char mac[32] = {0};
-        getMacAddress(INTERFACE, mac, sizeof(mac));
+        getMacAddress(deviceIdentifierName, mac, sizeof(mac));
         if (mac[0] == '\0')
         {
             strncpy(mac, DEFAULT_MAC, sizeof(mac) - 1);
@@ -992,7 +994,7 @@ int collectSystemMemoryStats(bool includeKthreads, const char *outDir, int itera
         }
 
         fprintf(output, "FIRMWARE_NAME,MAC_ADDRESS,TIMESTAMP,REPORT_VERSION\n");
-        fprintf(output, "%s,%s,%s,%s\n\n", fwName, mac, ts, REPORT_VERSION);
+        fprintf(output, "%s,%s,%s,%s\n\n", fwName, mac, ts, reportVersion);
 
         unsigned long rssTotal = 0, pssTotal = 0, shared_clean_total = 0, private_dirty_total = 0, swap_pss_total = 0;
         DIR *proc = opendir(PROC_DIR);
@@ -1125,7 +1127,7 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, int cli_iter
         printf("\n==== Iteration %d%s ====\n", iter + 1, long_run ? "/∞" : "");
         // Get MAC address
         char mac[32] = {0};
-        getMacAddress(INTERFACE, mac, sizeof(mac));
+        getMacAddress(deviceIdentifierName, mac, sizeof(mac));
         if (mac[0] == '\0') {
             strncpy(mac, DEFAULT_MAC, sizeof(mac) - 1);
             mac[sizeof(mac) - 1] = '\0'; // Ensure null-termination
@@ -1169,7 +1171,7 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, int cli_iter
         }
 
         fprintf(output, "FIRMWARE_NAME,MAC_ADDRESS,TIMESTAMP,REPORT_VERSION\n");
-        fprintf(output, "%s,%s,%s,%s\n\n", fwName, mac, ts, REPORT_VERSION);
+        fprintf(output, "%s,%s,%s,%s\n\n", fwName, mac, ts, reportVersion);
 
         saveMeminfo(output); // TODO: based on whitelist count write content
         fprintf(output, "\nPID,EXE,RSS,PSS,SHARED_CLEAN,PRIVATE_DIRTY,SWAP_PSS,"
@@ -1422,6 +1424,14 @@ int main(int argc, char *argv[])
             printHelpAndUsage(argv, false);
         }
     }
+
+    printf("\nExecuting: ");
+    for (int i = 0; i < argc; i++)
+    {
+        printf("%s ", argv[i]);
+    }
+    printf("\n");
+
     includeKthreads = enableKThreads; // Cascade to global for all code paths
     if (isConfigPresent)
     {
