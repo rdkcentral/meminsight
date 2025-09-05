@@ -41,6 +41,10 @@ OutputFormat g_outputFormat = FORMAT_JSON;
 #else
 OutputFormat g_outputFormat = FORMAT_CSV;
 #endif
+#elif defined(DEFAULT_FORMAT_CSV)
+OutputFormat g_outputFormat = FORMAT_CSV;
+#else
+OutputFormat g_outputFormat = FORMAT_CSV; // Default to CSV if not specified
 #endif
 
 static const char deviceIdentifierName[] = DEVICE_IDENTIFIER;
@@ -1334,7 +1338,7 @@ int main(int argc, char *argv[])
             {
                 if (!strncmp(argv[i+1], "json", 5))
                 {
-#ifdef ENABLE_JSON
+#ifdef ENABLE_CJSON
                     g_outputFormat = FORMAT_JSON;
 #else
                     printf("Warning: JSON format requested but cJSON support not enabled at build time.\n");

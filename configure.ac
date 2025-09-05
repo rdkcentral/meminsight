@@ -69,6 +69,7 @@ elif test "$OUTPUT_FORMAT" = "csv"; then
 else
   # Default to CSV for unknown formats
   AC_DEFINE([DEFAULT_FORMAT_CSV], [1], [Default output format is CSV])
+  AC_MSG_NOTICE([Using default CSV format])
 fi
 
 # Checks for programs.

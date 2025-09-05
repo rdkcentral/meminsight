@@ -38,25 +38,43 @@ if [ "$1" = "--clean" ]; then
 fi
 
 # Parse output format parameter
+ENABLE_CJSON="no" #Default to no cJSON support
 FORMAT="csv"  # Default to CSV
-ENABLE_CJSON="no"
-if [ "$1" = "json" ]; then
-    FORMAT="json"
-    echo "Building with default output format: JSON"
-elif [ "$1" = "csv" ]; then
-    FORMAT="csv"
-    echo "Building with default output format: CSV"
-elif [ -n "$1" ]; then
-    echo "Warning: Unknown parameter '$1'. Valid options are 'json' or 'csv'."
-    echo "Defaulting to CSV format."
+
+# First argument: cJSON support
+if [ "$1" = "--enable-cjson" ]; then
+    ENABLE_CJSON="yes"
+    echo "Building with cJSON support enabled"
+elif [ -n "$1" ] && [ "$1" != "json" ] && [ "$1" != "csv" ]; then
+    echo "Warning: Unknown first parameter '$1'. Expected '--enable-cjson'."
+    echo "Building without cJSON support."
 fi
 
-if [ "$2" = "cjson" ]; then
-    ENABLE_CJSON="yes"
-    echo "Building with cJSON support enabled."
-elif [ -n "$2" ]; then
-    echo "Warning: Unknown parameter '$2'. Valid options are 'cjson'."
-    echo "Defaulting to no cJSON support."
+# Second argument (or first if not --enable-cjson): output format
+FORMAT_ARG=""
+if [ "$1" = "json" ] || [ "$1" = "csv" ]; then
+    FORMAT_ARG="$1"
+elif [ "$2" = "json" ] || [ "$2" = "csv" ]; then
+    FORMAT_ARG="$2"
+fi
+
+# Set format based on argument and cJSON availability
+if [ "$FORMAT_ARG" = "json" ]; then
+    if [ "$ENABLE_CJSON" = "yes" ]; then
+        FORMAT="json"
+        echo "Building with JSON output format"
+    else
+        echo "Warning: JSON format requested but cJSON support not enabled."
+        echo "Use '--enable-cjson json' to enable JSON output."
+        echo "Defaulting to CSV format."
+        FORMAT="csv"
+    fi
+elif [ "$FORMAT_ARG" = "csv" ]; then
+    FORMAT="csv"
+    echo "Building with CSV output format"
+else
+    echo "No format specified, defaulting to CSV format"
+    FORMAT="csv"
 fi
 
 echo "Running build steps..."
