@@ -32,6 +32,7 @@
 int includeKthreads = 0;              // Whether to include kernel threads
 Process_Info getProcessInfo = {0};    // Temporary struct for collecting process info
 Process_Info *headProcessInfo = NULL; // Head of linked list
+int g_processLimit = -1;              // Default to unlimited processes (-1)
 
 // Initialize format based on compile-time setting
 #if defined(DEFAULT_FORMAT_JSON)
@@ -408,19 +409,30 @@ void writeProcessInfo(unsigned noOfPids, FILE *output)
     Process_Info *tmp = headProcessInfo;
     Process_Info *tofree;
     unsigned int i = 1;
+    unsigned int processCount = 0;
     while (tmp)
     {
+        // Only write up to g_processLimit if set
+        if (g_processLimit > 0 && processCount >= (unsigned)g_processLimit)
+        {
+            tofree = tmp;
+            tmp = tmp->next;
+            free(tofree);
+            continue;
+        }
         //printf("%d,%lu,%lu,%lu,%lu,%lu,%lu,%lu,%u,%s\n", i++, tmp->rssTotal, tmp->pssTotal, tmp->shared_clean_total,tmp->private_dirty_total, tmp->swap_pss_total, tmp->majFaults, tmp->cputime, tmp->pid, tmp->name);
         fprintf(output, "%u,%s,%lu,%lu,%lu,%lu,%lu,%lu,%lu\n", tmp->pid, tmp->name, tmp->rssTotal, tmp->pssTotal,
                 tmp->shared_clean_total, tmp->private_dirty_total, tmp->swap_pss_total, tmp->majFaults, tmp->cputime);
         tofree = tmp;
         tmp = tmp->next;
         free(tofree);
+        processCount++;
+        i++;
     }
     headProcessInfo = NULL;
-    if (i != noOfPids)
+    if (i != noOfPids + 1 && (g_processLimit < 0 || processCount < (unsigned)g_processLimit))
     {
-        printf("* Some process details might have been missed [%d vs actual %u]\n", i, noOfPids);
+        printf("* Some process details might have been missed [%d vs actual %u]%s\n", i-1, noOfPids, g_processLimit > 0 ? " (limited by -n option)" : "");
     }
 }
 
@@ -794,6 +806,7 @@ void printHelpAndUsage(char *argv[], bool moreInfo)
     printf("      --iterations <count>   Number of iterations to run (overrides config)\n");
     printf("      --fmt <format>         Output format: csv (default) or json\n");
     printf("  -h, --help                 Show this help message and exit\n");
+    printf("  -n, --numprocs <count>     Limit output to top N processes by PSS usage\n");
     printf("  -t, --test                 Run in test mode with a generated minimal config\n\n");
 
     if (moreInfo)
@@ -1293,6 +1306,25 @@ int main(int argc, char *argv[])
             else
             {
                 printf("Error: Missing iterations value after %s\n", argv[i]);
+                printHelpAndUsage(argv, false);
+            }
+        }
+        else if (!strncmp(argv[i], "-n", 3) || !strncmp(argv[i], "--numprocs", 10))
+        {
+            if (i + 1 < argc)
+            {
+                g_processLimit = atoi(argv[i + 1]);
+                if (g_processLimit <= 0) {
+                    printf("Warning: Invalid process count '%s', using unlimited\n", argv[i+1]);
+                    g_processLimit = -1;
+                } else {
+                    printf("* Limiting output to top %d processes\n", g_processLimit);
+                }
+                i++; // skip next arg (process count)
+            }
+            else
+            {
+                printf("Error: Missing process count value after %s\n", argv[i]);
                 printHelpAndUsage(argv, false);
             }
         }

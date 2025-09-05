@@ -140,6 +140,7 @@ extern int includeKthreads;           // Whether to include kernel threads
 extern Process_Info getProcessInfo;   // Temporary struct for collecting process info
 extern Process_Info *headProcessInfo; // Head of linked list
 extern OutputFormat g_outputFormat;   // Global output format setting
+extern int g_processLimit;            // Limit on number of processes to report
 
 // -----------------------------
 // Function Prototypes
