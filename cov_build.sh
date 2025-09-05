@@ -37,6 +37,19 @@ if [ "$1" = "--clean" ]; then
     exit 0
 fi
 
+# Parse output format parameter
+FORMAT="csv"  # Default to CSV
+if [ "$1" = "json" ]; then
+    FORMAT="json"
+    echo "Building with default output format: JSON"
+elif [ "$1" = "csv" ]; then
+    FORMAT="csv"
+    echo "Building with default output format: CSV"
+elif [ -n "$1" ]; then
+    echo "Warning: Unknown parameter '$1'. Valid options are 'json' or 'csv'."
+    echo "Defaulting to CSV format."
+fi
+
 echo "Running build steps..."
 
 # Check if required tools are installed and install them if needed
@@ -72,7 +85,7 @@ echo "Running autoreconf..."
 autoreconf --install --verbose --force
 
 echo "Running configure..."
-./configure
+./configure --with-format=$FORMAT
 
 echo "Running make..."
 make

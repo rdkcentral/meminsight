@@ -25,6 +25,23 @@ AM_INIT_AUTOMAKE([foreign subdir-objects])
 AC_CONFIG_SRCDIR([src/memstatus.c])
 AC_CONFIG_HEADERS([config.h])
 
+# Default output format
+AC_ARG_WITH([format],
+  [AS_HELP_STRING([--with-format=FORMAT],
+    [Default output format (csv or json) @<:@default=csv@:>@])],
+  [OUTPUT_FORMAT="$withval"],
+  [OUTPUT_FORMAT="csv"])
+
+# Define format in config.h
+if test "$OUTPUT_FORMAT" = "json"; then
+  AC_DEFINE([DEFAULT_FORMAT_JSON], [1], [Default output format is JSON])
+elif test "$OUTPUT_FORMAT" = "csv"; then
+  AC_DEFINE([DEFAULT_FORMAT_CSV], [1], [Default output format is CSV])
+else
+  # Default to CSV for unknown formats
+  AC_DEFINE([DEFAULT_FORMAT_CSV], [1], [Default output format is CSV])
+fi
+
 # Checks for programs.
 AC_PROG_CC
 AC_PROG_CXX

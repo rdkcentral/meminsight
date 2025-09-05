@@ -38,8 +38,6 @@
 #include <time.h>
 #include <unistd.h>
 
-#define TESTME
-
 // -----------------------------
 // Debug Macros
 // -----------------------------
@@ -47,9 +45,9 @@
 // #define PRINT_DBG printf
 //#define PRINT_DBG_INITIAL printf
 //#define PRINT_DBG_SCANNED printf
-#define PRINT_DBG(...)
-#define PRINT_DBG_INITIAL(...)
-#define PRINT_DBG_SCANNED(...)
+//#define PRINT_DBG(...)
+//#define PRINT_DBG_INITIAL(...)
+//#define PRINT_DBG_SCANNED(...)
 
 // -----------------------------
 // Macro Definitions
@@ -126,6 +124,14 @@ typedef struct config
     char logLevel[8];            // Log level (e.g., "DEBUG", "INFO", "ERROR")
 } Config_Data;
 
+/**
+ * Enum to represent the output file format.
+ */
+typedef enum {
+    FORMAT_CSV,
+    FORMAT_JSON
+} OutputFormat;
+
 // -----------------------------
 // Global Variables
 // -----------------------------
@@ -133,14 +139,7 @@ typedef struct config
 extern int includeKthreads;           // Whether to include kernel threads
 extern Process_Info getProcessInfo;   // Temporary struct for collecting process info
 extern Process_Info *headProcessInfo; // Head of linked list
-
-#ifdef TESTME
-extern int testpid; // Used for test mode with custom smap file
-extern char testSmap[128];
-extern Process_Info processInfoTest;
-void checkAndFree();
-void testList();
-#endif
+extern OutputFormat g_outputFormat;   // Global output format setting
 
 // -----------------------------
 // Function Prototypes
@@ -155,7 +154,6 @@ void saveMeminfo(FILE *out);
 int getPropertyFromFile(const char *filename, const char *property, char *propertyValue, size_t propertyValueLen);
 size_t getMacAddress(const char *iface, char *macAddress, size_t szBufSize);
 int getFirmwareImageName(char *fwName, size_t fwNameLen);
-
 int isPID(const char *str);
 int getPIDByProcessName(const char *procName, unsigned int *pidOut);
 int parseConfig(const char *configFile, Config_Data *config);
