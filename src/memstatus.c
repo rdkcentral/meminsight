@@ -22,6 +22,10 @@
 
 #include "memstatus.h"
 
+#ifdef ENABLE_CJSON
+#include <cjson/cJSON.h>
+#endif
+
 // -----------------------------
 // Global Variables
 // -----------------------------
@@ -31,9 +35,11 @@ Process_Info *headProcessInfo = NULL; // Head of linked list
 
 // Initialize format based on compile-time setting
 #if defined(DEFAULT_FORMAT_JSON)
+#ifdef ENABLE_CJSON
 OutputFormat g_outputFormat = FORMAT_JSON;
 #else
 OutputFormat g_outputFormat = FORMAT_CSV;
+#endif
 #endif
 
 static const char deviceIdentifierName[] = DEVICE_IDENTIFIER;
@@ -1296,7 +1302,13 @@ int main(int argc, char *argv[])
             {
                 if (!strncmp(argv[i+1], "json", 5))
                 {
+#ifdef ENABLE_JSON
                     g_outputFormat = FORMAT_JSON;
+#else
+                    printf("Warning: JSON format requested but cJSON support not enabled at build time.\n");
+                    printf("         Falling back to CSV format.\n");
+                    g_outputFormat = FORMAT_CSV;
+#endif
                 }
                 else if (!strncmp(argv[i+1], "csv", 4))
                 {
