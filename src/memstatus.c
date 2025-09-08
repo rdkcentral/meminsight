@@ -1323,7 +1323,103 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, int cli_iter
         }
         else
         {
-            printf("No whitelist specified in config.\n");
+            printf("No whitelist specified in config. Collecting data for all processes\n");
+            unsigned int noOfPids = 0;
+
+            DIR *proc = opendir(PROC_DIR);
+            if (proc)
+            {
+                struct dirent *entry;
+                while ((entry = readdir(proc)) != NULL)
+                {
+                    if (entry->d_name[0] != '.')
+                    {
+                        unsigned pid = atoi(entry->d_name);
+                        if (pid > 0)
+                        {
+                            unsigned flags = 0;
+                            memset(&getProcessInfo, 0, sizeof(getProcessInfo));
+                            if (!fillProcessStatFields(pid, &getProcessInfo, &flags))
+                            {
+                                printf("Failed to fill process stat fields for PID %d\n", pid);
+                                continue;
+                            }
+                            if (flags & PF_KTHREAD && !enableKThreads)
+                            {             /*PF_KTHREAD*/
+                                continue; // Skip kernel threads if not included
+                            }
+                            if (!getProcessInfos(pid))
+                            {
+                                getProcessInfo.pid = pid;
+                                // name, majFaults, cputime already filled by
+                                // fillProcessStatFields
+                                rssTotal += getProcessInfo.rssTotal;
+                                pssTotal += getProcessInfo.pssTotal;
+                                shared_clean_total += getProcessInfo.shared_clean_total;
+                                private_dirty_total += getProcessInfo.private_dirty_total;
+                                swap_pss_total += getProcessInfo.swap_pss_total;
+                                addProcessInfo(&getProcessInfo);
+                                noOfPids++;
+                            }
+                        }
+                    }
+                }
+                closedir(proc);
+                if (useJsonFormat)
+                {
+#ifdef ENABLE_CJSON
+                    cJSON *root = cJSON_CreateObject();
+                    if (root) {
+                        // Add Mem info
+                        addMemInfoJSON(root);
+
+                        // Add process info (this will also free the linked list)
+                        addProcessInfoJSON(root, noOfPids, output);
+
+                        // Add process totals
+                        addProcessTotalsJSON(root, rssTotal, pssTotal, shared_clean_total, private_dirty_total, swap_pss_total);
+
+                        char *json_string = cJSON_Print(root);
+                        if (json_string)
+                        {
+                            fprintf(output, "%s\n", json_string);
+                            free(json_string);
+                        }
+                        else
+                        {
+                            printf("Failed to print JSON string\n");
+                        }
+                        // Clean up
+                        cJSON_Delete(root);
+                        // Ensure head is reset even if addProcessInfoJSON wasn't called
+                        // or didn't complete successfully
+                        headProcessInfo = NULL;
+                    }
+#else
+                    printf("Warning: JSON format requested but cJSON support not enabled at build time.\n");
+                    printf("         Falling back to CSV format.\n");
+                    useJsonFormat = false;
+#endif
+                }
+                else
+                {
+                    fprintf(output, "FIRMWARE_NAME,MAC_ADDRESS,TIMESTAMP,REPORT_VERSION\n");
+                    fprintf(output, "%s,%s,%s,%s\n\n", fwName, mac, ts, reportVersion);
+                    saveMeminfo(output);
+                    fprintf(output, "\n\nProcesses:\nPID,EXE,RSS,PSS,SHARED_CLEAN,PRIVATE_DIRTY,SWAP_PSS,MAJ_FAULTS,CPU_TIME\n");
+                    writeProcessInfo(noOfPids, output);
+                    // Redundant but added for safety - writeProcessInfo already resets headProcessInfo
+                    // This ensures it's reset even if writeProcessInfo didn't complete successfully
+                    headProcessInfo = NULL;
+                    fprintf(output, "0,Total,%lu,%lu,%lu,%lu,%lu,0,0,0\n", rssTotal, pssTotal, shared_clean_total, private_dirty_total, swap_pss_total);
+                }
+            }
+            else
+            {
+                printf("Failed to open %s directory: %s\n", PROC_DIR, strerror(errno));
+                fclose(output);
+                return -1;
+            }
         }
         fclose(output);
 
