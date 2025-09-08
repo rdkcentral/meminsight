@@ -87,6 +87,7 @@ This is used to ensure compatibility with older versions of the report parser. *
 /* Config Macros */
 #define CONFIG_EXTN ".conf"
 #define CSV_FILE_NAME "meminsight.csv"
+#define JSON_FILE_NAME "meminsight.json"
 #define LONG_RUN_INTERVAL 900 // 900 is Default interval for long runs in seconds
 
 // -----------------------------
@@ -124,6 +125,11 @@ typedef struct config
     char logLevel[8];            // Log level (e.g., "DEBUG", "INFO", "ERROR")
 } Config_Data;
 
+#ifdef ENABLE_CJSON
+struct cJSON;
+typedef struct cJSON cJSON;
+#endif
+
 /**
  * Enum to represent the output file format.
  */
@@ -158,8 +164,16 @@ int getFirmwareImageName(char *fwName, size_t fwNameLen);
 int isPID(const char *str);
 int getPIDByProcessName(const char *procName, unsigned int *pidOut);
 int parseConfig(const char *configFile, Config_Data *config);
-int collectSystemMemoryStats(bool includeKthreads, const char *outDir, int iterations, int interval, bool long_run);
-int handleConfigMode(const char *confFile, const char *cli_out_dir, int cli_iterations, int cli_interval, bool enableKThreads, bool long_run);
+int collectSystemMemoryStats(bool includeKthreads, const char *outDir, int iterations, int interval, bool long_run, bool useJsonFormat);
+int handleConfigMode(const char *confFile, const char *cli_out_dir, int cli_iterations, int cli_interval, bool enableKThreads, bool long_run, bool useJsonFormat);
 int fillProcessStatFields(unsigned pid, Process_Info *info, unsigned *flagsOut);
+
+#ifdef ENABLE_CJSON
+void addMemInfoJSON(cJSON *root);
+void addProcessInfoJSON(cJSON *root, unsigned noOfPids, FILE *output);
+void addProcessTotalsJSON(cJSON *root, unsigned long rssTotal, unsigned long pssTotal,
+        unsigned long shared_clean_total, unsigned long private_dirty_total,
+        unsigned long swap_pss_total);
+#endif
 
 #endif // MEMSTATUS_H

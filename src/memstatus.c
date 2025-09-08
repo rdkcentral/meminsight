@@ -440,6 +440,117 @@ void writeProcessInfo(unsigned noOfPids, FILE *output)
     }
 }
 
+#ifdef ENABLE_CJSON
+/**
+ * Adds process information from the linked list to the root JSON object
+ * and frees the linked list nodes as it processes them.
+ *
+ * @param root The root JSON object to add processes to
+ * @param noOfPids Number of PIDs processed
+ * @param output FILE pointer for diagnostic messages (if needed)
+ */
+void addProcessInfoJSON(cJSON *root, unsigned noOfPids, FILE *output)
+{
+    if (!root) return;
+
+    Process_Info *tmp = headProcessInfo;
+    Process_Info *tofree;
+    unsigned int i = 1;
+    unsigned int processCount = 0;
+
+    // Create the JSON array for processes
+    cJSON *processesArray = cJSON_CreateArray();
+    if (!processesArray) {
+        fprintf(output, "\"processes\": null,\n");
+        // Still need to free the linked list
+        while (tmp) {
+            tofree = tmp;
+            tmp = tmp->next;
+            free(tofree);
+        }
+        headProcessInfo = NULL;
+        return;
+    }
+    // Process each node in the linked list
+    while (tmp) {
+        // Only output up to g_processLimit processes if set
+        if (g_processLimit > 0 && processCount >= (unsigned)g_processLimit) {
+            tofree = tmp;
+            tmp = tmp->next;
+            free(tofree);
+            continue;
+        }
+
+        // Create a JSON object for this process
+        cJSON *process = cJSON_CreateObject();
+        if (process) {
+            // Add process data
+            cJSON_AddNumberToObject(process, "pid", tmp->pid);
+            cJSON_AddStringToObject(process, "name", tmp->name);
+            cJSON_AddNumberToObject(process, "rss", tmp->rssTotal);
+            cJSON_AddNumberToObject(process, "pss", tmp->pssTotal);
+            cJSON_AddNumberToObject(process, "shared_clean", tmp->shared_clean_total);
+            cJSON_AddNumberToObject(process, "private_dirty", tmp->private_dirty_total);
+            cJSON_AddNumberToObject(process, "swap_pss", tmp->swap_pss_total);
+            cJSON_AddNumberToObject(process, "maj_faults", tmp->majFaults);
+            cJSON_AddNumberToObject(process, "cpu_time", tmp->cputime);
+
+            // Add to the array
+            cJSON_AddItemToArray(processesArray, process);
+        }
+
+        tofree = tmp;
+        tmp = tmp->next;
+        free(tofree);
+        processCount++;
+        i++;
+    }
+    // Reset the head pointer
+    headProcessInfo = NULL;
+
+    // Check if we potentially missed processes
+    if (i != noOfPids + 1 && (g_processLimit < 0 || processCount < (unsigned)g_processLimit)) {
+        printf("* Some process details might have been missed [%d vs actual %u]%s\n",
+               i-1, noOfPids, g_processLimit > 0 ? " (limited by -n option)" : "");
+    }
+    cJSON_AddItemToObject(root, "processes", processesArray);
+}
+
+/**
+ * Adds process totals to the root JSON object as "process_total"
+ *
+ * @param root The root JSON object
+ * @param rssTotal Total RSS value
+ * @param pssTotal Total PSS value
+ * @param shared_clean_total Total shared clean value
+ * @param private_dirty_total Total private dirty value
+ * @param swap_pss_total Total swap PSS value
+ */
+
+void addProcessTotalsJSON(cJSON *root, unsigned long rssTotal, unsigned long pssTotal,
+        unsigned long shared_clean_total, unsigned long private_dirty_total,
+        unsigned long swap_pss_total)
+    {
+        if (!root) return;
+
+        // Create a JSON object for process totals
+        cJSON *totals = cJSON_CreateObject();
+        if (!totals) {
+            return;
+        }
+
+        // Add the total values
+        cJSON_AddNumberToObject(totals, "rss_total", rssTotal);
+        cJSON_AddNumberToObject(totals, "pss_total", pssTotal);
+        cJSON_AddNumberToObject(totals, "shared_clean_total", shared_clean_total);
+        cJSON_AddNumberToObject(totals, "private_dirty_total", private_dirty_total);
+        cJSON_AddNumberToObject(totals, "swap_pss_total", swap_pss_total);
+
+        // Add the totals object to the root with key "process_total"
+        cJSON_AddItemToObject(root, "process_total", totals);
+    }
+#endif
+
 /**
  * Inserts a new process info node into the linked list, sorted by descending
  * pssTotal.
@@ -846,7 +957,7 @@ void printHelpAndUsage(char *argv[], bool moreInfo)
  * Collects system-wide memory statistics and writes to output file.
  * Returns 0 on success, -1 on failure.
  */
-int collectSystemMemoryStats(bool includeKthreads, const char *outDir, int iterations, int interval, bool long_run)
+int collectSystemMemoryStats(bool includeKthreads, const char *outDir, int iterations, int interval, bool long_run, bool useJsonFormat)
 {
     for (int iter = 0; long_run || iter < iterations; iter++)
     {
@@ -878,7 +989,9 @@ int collectSystemMemoryStats(bool includeKthreads, const char *outDir, int itera
         const char *dir = (outDir && outDir[0]) ? outDir : DEFAULT_OUT_DIR;
         ensure_output_dir(dir);
         char outputfile[512] = {0};
-        snprintf(outputfile, sizeof(outputfile), "%s/%s_%s_iter%d_%s", dir, mac, timestamp, iter + 1, CSV_FILE_NAME);
+
+        const char* file_ext = useJsonFormat ? JSON_FILE_NAME : CSV_FILE_NAME;
+        snprintf(outputfile, sizeof(outputfile), "%s/%s_%s_iter%d_%s", dir, mac, timestamp, iter + 1, file_ext);
 
         printf("Capturing System wide stats into %s\n", outputfile);
         FILE *output = fopen(outputfile, "w");
@@ -887,9 +1000,6 @@ int collectSystemMemoryStats(bool includeKthreads, const char *outDir, int itera
             printf("%s: Open failed, %d [%s]\n", outputfile, errno, strerror(errno));
             return -1;
         }
-
-        fprintf(output, "FIRMWARE_NAME,MAC_ADDRESS,TIMESTAMP,REPORT_VERSION\n");
-        fprintf(output, "%s,%s,%s,%s\n\n", fwName, mac, ts, reportVersion);
 
         unsigned long rssTotal = 0, pssTotal = 0, shared_clean_total = 0, private_dirty_total = 0, swap_pss_total = 0;
         DIR *proc = opendir(PROC_DIR);
@@ -938,16 +1048,62 @@ int collectSystemMemoryStats(bool includeKthreads, const char *outDir, int itera
             fclose(output);
             return -1;
         }
-        saveMeminfo(output);
-        printf("\nProcessed %u processes\n>> RSS_Total %lu\n>> PSS_Total "
+
+        if (useJsonFormat)
+        {
+#ifdef ENABLE_CJSON
+            // Create root JSON object
+            cJSON *root = cJSON_CreateObject();
+            if (root) {
+                // Add Mem info
+                addMemInfoJSON(root);
+
+                // Add process info (this will also free the linked list)
+                addProcessInfoJSON(root, noOfPids, output);
+
+                // Add process totals
+                addProcessTotalsJSON(root, rssTotal, pssTotal, shared_clean_total, private_dirty_total, swap_pss_total);
+
+                char *json_string = cJSON_Print(root);
+                if (json_string)
+                {
+                    fprintf(output, "%s\n", json_string);
+                    free(json_string);
+                }
+                else
+                {
+                    printf("Failed to print JSON string\n");
+                }
+                // Clean up
+                cJSON_Delete(root);
+                // Ensure head is reset even if addProcessInfoJSON wasn't called
+                // or didn't complete successfully
+                headProcessInfo = NULL;
+            }
+#else
+            printf("Warning: JSON format requested but cJSON support not enabled at build time.\n");
+            printf("         Falling back to CSV format.\n");
+            useJsonFormat = false;
+#endif
+        }
+        else
+        {
+            fprintf(output, "FIRMWARE_NAME,MAC_ADDRESS,TIMESTAMP,REPORT_VERSION\n");
+            fprintf(output, "%s,%s,%s,%s\n\n", fwName, mac, ts, reportVersion);
+            saveMeminfo(output);
+            printf("\nProcessed %u processes\n>> RSS_Total %lu\n>> PSS_Total "
                "%lu\n>> Shared_Clean_Total %lu\n>> Private_Dirty_Total %lu\n",
                noOfPids, rssTotal, pssTotal, shared_clean_total, private_dirty_total);
-        fprintf(output, "\n\nProcesses:\nPID,EXE,RSS,PSS,SHARED_CLEAN,PRIVATE_"
+            fprintf(output, "\n\nProcesses:\nPID,EXE,RSS,PSS,SHARED_CLEAN,PRIVATE_"
                         "DIRTY,SWAP_PSS,MAJ_FAULTS,CPU_TIME\n");
-        writeProcessInfo(noOfPids, output);
-        fprintf(output, "0,Total,%lu,%lu,%lu,%lu,%lu,0,0,0\n", rssTotal, pssTotal, shared_clean_total,
-                private_dirty_total, swap_pss_total);
+            writeProcessInfo(noOfPids, output);
+            // Redundant but added for safety - writeProcessInfo already resets headProcessInfo
+            // This ensures it's reset even if writeProcessInfo didn't run completely
+            headProcessInfo = NULL;
+            fprintf(output, "0,Total,%lu,%lu,%lu,%lu,%lu,0,0,0\n", rssTotal, pssTotal, shared_clean_total, private_dirty_total, swap_pss_total);
+        }
         fclose(output);
+
         if (interval >= 0 && (long_run || iter + 1 < iterations))
         {
             printf("* %d%s Iteration completed. Sleeping for %d seconds before next iteration... \n", iter + 1, long_run ? "/∞" : "", interval);
@@ -958,7 +1114,7 @@ int collectSystemMemoryStats(bool includeKthreads, const char *outDir, int itera
     return 0;
 }
 
-int handleConfigMode(const char *confFile, const char *cli_out_dir, int cli_iterations, int cli_interval, bool enableKThreads, bool long_run)
+int handleConfigMode(const char *confFile, const char *cli_out_dir, int cli_iterations, int cli_interval, bool enableKThreads, bool long_run, bool useJsonFormat)
 {
     Config_Data config;
     if (parseConfig(confFile, &config) != 0)
@@ -1043,9 +1199,11 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, int cli_iter
         // Generate output file name
         char outputFilePath[PATH_MAX * 2] = {0};
         ensure_output_dir(final_out_dir);
-        snprintf(outputFilePath, sizeof(outputFilePath), "%s/%s_%s_iter%d_%s", final_out_dir, mac, timestamp, iter+1, CSV_FILE_NAME);
 
-        printf("Capturing Process stats into %s\n", outputFilePath);
+        const char* file_ext = useJsonFormat ? JSON_FILE_NAME : CSV_FILE_NAME;
+        snprintf(outputFilePath, sizeof(outputFilePath), "%s/%s_%s_iter%d_meminsight.%s", final_out_dir, mac, timestamp, iter+1, file_ext);
+
+        printf("Capturing Config based  stats into %s\n", outputFilePath);
         // Open output file
         FILE *output = fopen(outputFilePath, "w");
         if (!output)
@@ -1064,13 +1222,6 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, int cli_iter
             }
             return -1;
         }
-
-        fprintf(output, "FIRMWARE_NAME,MAC_ADDRESS,TIMESTAMP,REPORT_VERSION\n");
-        fprintf(output, "%s,%s,%s,%s\n\n", fwName, mac, ts, reportVersion);
-
-        saveMeminfo(output); // TODO: based on whitelist count write content
-        fprintf(output, "\nPID,EXE,RSS,PSS,SHARED_CLEAN,PRIVATE_DIRTY,SWAP_PSS,"
-                        "MAJ_FAULTS,CPU_TIME\n"); // TODO: bring inside loop
 
         unsigned long rssTotal = 0, pssTotal = 0, shared_clean_total = 0, private_dirty_total = 0, swap_pss_total = 0;
         unsigned actualCount = 0;
@@ -1121,14 +1272,59 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, int cli_iter
                     printf("Failed to get process info for PID %u\n", pid);
                 }
             }
-            writeProcessInfo(actualCount, output);
+
+            if (useJsonFormat)
+            {
+#ifdef ENABLE_CJSON
+                cJSON *root = cJSON_CreateObject();
+                if (root) {
+                    // Add Mem info
+                    addMemInfoJSON(root);
+
+                    // Add process info (this will also free the linked list)
+                    addProcessInfoJSON(root, actualCount, output);
+
+                    // Add process totals
+                    addProcessTotalsJSON(root, rssTotal, pssTotal, shared_clean_total, private_dirty_total, swap_pss_total);
+
+                    char *json_string = cJSON_Print(root);
+                    if (json_string)
+                    {
+                        fprintf(output, "%s\n", json_string);
+                        free(json_string);
+                    }
+                    else
+                    {
+                        printf("Failed to print JSON string\n");
+                    }
+                    // Clean up
+                    cJSON_Delete(root);
+                    // Ensure head is reset even if addProcessInfoJSON wasn't called
+                    // or didn't complete successfully
+                    headProcessInfo = NULL;
+                }
+#else
+                printf("Warning: JSON format requested but cJSON support not enabled at build time.\n");
+                printf("         Falling back to CSV format.\n");
+                useJsonFormat = false;
+#endif
+            }
+            else
+            {
+                fprintf(output, "FIRMWARE_NAME,MAC_ADDRESS,TIMESTAMP,REPORT_VERSION\n");
+                fprintf(output, "%s,%s,%s,%s\n\n", fwName, mac, ts, reportVersion);
+                saveMeminfo(output); // TODO: based on whitelist count write content
+                fprintf(output, "\nPID,EXE,RSS,PSS,SHARED_CLEAN,PRIVATE_DIRTY,SWAP_PSS,"
+                    "MAJ_FAULTS,CPU_TIME\n"); // TODO: bring inside loop
+                writeProcessInfo(actualCount, output);
+                fprintf(output, "0,Total,%lu,%lu,%lu,%lu\n", rssTotal, pssTotal, shared_clean_total, private_dirty_total);
+            }
             headProcessInfo = NULL; // Reset for next iteration
         }
         else
         {
             printf("No whitelist specified in config.\n");
         }
-        fprintf(output, "0,Total,%lu,%lu,%lu,%lu\n", rssTotal, pssTotal, shared_clean_total, private_dirty_total);
         fclose(output);
 
         if (final_interval > 0 && iter + 1 < final_iterations)
@@ -1207,6 +1403,39 @@ void saveMeminfo(FILE *out)
     }
 }
 
+#ifdef ENABLE_CJSON
+/**
+ * Adds memory information to the root JSON object
+ */
+void addMemInfoJSON(cJSON *root)
+{
+    if (!root) return;
+    char tmp[128];
+    char name[64];
+    unsigned long value;
+
+    cJSON *memInfo = cJSON_CreateObject();
+    if (!memInfo) {
+        return;
+    }
+
+    FILE *meminfo_file = fopen("/proc/meminfo", "r");
+    if (meminfo_file) {
+        while (fgets(tmp, sizeof(tmp) - 1, meminfo_file)) {
+            if (sscanf(tmp, "%s %lu kB", name, &value) == 2) {
+                name[strlen(name) - 1] = '\0'; // Remove trailing ':'
+                cJSON_AddNumberToObject(memInfo, name, value);
+            }
+        }
+        fclose(meminfo_file);
+        cJSON_AddItemToObject(root, "memory_info", memInfo);
+    } else {
+        // Failed to open meminfo
+        cJSON_Delete(memInfo);
+    }
+}
+#endif
+
 // -----------------------------
 // Main Program
 // -----------------------------
@@ -1227,6 +1456,7 @@ int main(int argc, char *argv[])
     char out_dir[PATH_MAX] = DEFAULT_OUT_DIR;
     int cli_iterations = -1;
     int cli_interval = -1;
+    bool useJsonFormat = false;
 
     // CLI parsing and initialization
     if (argc == 1)
@@ -1340,6 +1570,7 @@ int main(int argc, char *argv[])
                 {
 #ifdef ENABLE_CJSON
                     g_outputFormat = FORMAT_JSON;
+                    useJsonFormat = true;
 #else
                     printf("Warning: JSON format requested but cJSON support not enabled at build time.\n");
                     printf("         Falling back to CSV format.\n");
@@ -1385,7 +1616,7 @@ int main(int argc, char *argv[])
     includeKthreads = enableKThreads; // Cascade to global for all code paths
     if (isConfigPresent)
     {
-        handleConfigMode(confFile, out_dir, cli_iterations, cli_interval, enableKThreads, long_run);
+        handleConfigMode(confFile, out_dir, cli_iterations, cli_interval, enableKThreads, long_run, useJsonFormat);
     }
     else if (isSystemWide)
     {
@@ -1399,7 +1630,7 @@ int main(int argc, char *argv[])
             final_iterations = (cli_iterations <= 1) ? ((final_interval > 0) ? 2 : DEFAULT_ITERATIONS) : cli_iterations;
         }
         printf("* Running %d iterations with %ds interval (indefinitely?: %s)\n", final_iterations, final_interval, long_run ? "yes" : "no");
-        collectSystemMemoryStats(enableKThreads, out_dir, final_iterations, final_interval, long_run);
+        collectSystemMemoryStats(enableKThreads, out_dir, final_iterations, final_interval, long_run, useJsonFormat);
     }
     else if (isTestMode)
     {
