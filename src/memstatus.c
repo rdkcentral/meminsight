@@ -1064,7 +1064,7 @@ int collectSystemMemoryStats(bool includeKthreads, const char *outDir, int itera
                 // Add process totals
                 addProcessTotalsJSON(root, rssTotal, pssTotal, shared_clean_total, private_dirty_total, swap_pss_total);
 
-                char *json_string = cJSON_Print(root);
+                char *json_string = cJSON_PrintUnformatted(root);
                 if (json_string)
                 {
                     fprintf(output, "%s\n", json_string);
@@ -1287,7 +1287,7 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, int cli_iter
                     // Add process totals
                     addProcessTotalsJSON(root, rssTotal, pssTotal, shared_clean_total, private_dirty_total, swap_pss_total);
 
-                    char *json_string = cJSON_Print(root);
+                    char *json_string = cJSON_PrintUnformatted(root);
                     if (json_string)
                     {
                         fprintf(output, "%s\n", json_string);
@@ -1379,7 +1379,7 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, int cli_iter
                         // Add process totals
                         addProcessTotalsJSON(root, rssTotal, pssTotal, shared_clean_total, private_dirty_total, swap_pss_total);
 
-                        char *json_string = cJSON_Print(root);
+                        char *json_string = cJSON_PrintUnformatted(root);
                         if (json_string)
                         {
                             fprintf(output, "%s\n", json_string);
