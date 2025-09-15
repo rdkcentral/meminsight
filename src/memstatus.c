@@ -29,11 +29,11 @@
 // -----------------------------
 // Global Variables
 // -----------------------------
-int includeKthreads = 0;              // Whether to include kernel threads
-Process_Info getProcessInfo = {0};    // Temporary struct for collecting process info
-Process_Info *headProcessInfo = NULL; // Head of linked list
-int g_processLimit = -1;              // Default to unlimited processes (-1)
-unsigned long int g_memTotal = 0;     // System's total memory (initialized to 0)
+int includeKthreads = 0;                  // Whether to include kernel threads
+Process_Info getProcessInfo = {0};        // Temporary struct for collecting process info
+Process_Info *headProcessInfo = NULL;     // Head of linked list
+int g_processLimit = DEFAULT_PROCESS_NUM; // Default to showing top 15 processes
+unsigned long int g_memTotal = 0;         // System's total memory (initialized to 0)
 
 // Initialize format based on compile-time setting
 #if defined(DEFAULT_FORMAT_JSON)
@@ -418,7 +418,7 @@ void writeProcessInfo(unsigned noOfPids, FILE *output)
     while (tmp)
     {
         // Only write up to g_processLimit if set
-        if (g_processLimit > 0 && processCount >= (unsigned)g_processLimit)
+        if (processCount >= (unsigned)g_processLimit)
         {
             tofree = tmp;
             tmp = tmp->next;
@@ -435,9 +435,9 @@ void writeProcessInfo(unsigned noOfPids, FILE *output)
         i++;
     }
     headProcessInfo = NULL;
-    if (i != noOfPids + 1 && (g_processLimit < 0 || processCount < (unsigned)g_processLimit))
+    if (i != noOfPids + 1 && processCount < (unsigned)g_processLimit)
     {
-        printf("* Some process details might have been missed [%d vs actual %u]%s\n", i-1, noOfPids, g_processLimit > 0 ? " (limited by -n option)" : "");
+        printf("* Some process details might have been missed [%d vs actual %u] (limited to top %d processes)\n", i-1, noOfPids, g_processLimit);
     }
 }
 
@@ -475,7 +475,7 @@ void addProcessInfoJSON(cJSON *root, unsigned noOfPids, FILE *output)
     // Process each node in the linked list
     while (tmp) {
         // Only output up to g_processLimit processes if set
-        if (g_processLimit > 0 && processCount >= (unsigned)g_processLimit) {
+        if (processCount >= (unsigned)g_processLimit) {
             tofree = tmp;
             tmp = tmp->next;
             free(tofree);
@@ -510,8 +510,8 @@ void addProcessInfoJSON(cJSON *root, unsigned noOfPids, FILE *output)
     headProcessInfo = NULL;
 
     // Check if we potentially missed processes
-    if (i != noOfPids + 1 && (g_processLimit < 0 || processCount < (unsigned)g_processLimit)) {
-        printf("* Some process details might have been missed [%d vs actual %u]%s\n", i-1, noOfPids, g_processLimit > 0 ? " (limited by -n option)" : "");
+    if (i != noOfPids + 1 && processCount < (unsigned)g_processLimit) {
+        printf("* Some process details might have been missed [%d vs actual %u] (limited to top %d processes)\n", i-1, noOfPids, g_processLimit);
     }
     cJSON_AddItemToObject(root, "processes", processesArray);
 }
@@ -921,7 +921,7 @@ void printHelpAndUsage(char *argv[], bool moreInfo)
     printf("      --iterations <count>   Number of iterations to run (overrides config)\n");
     printf("      --fmt <format>         Output format: csv (default) or json\n");
     printf("  -h, --help                 Show this help message and exit\n");
-    printf("  -n, --numprocs <count>     Limit output to top N processes by PSS usage\n");
+    printf("  -n, --numprocs <count>     Limit output to top N processes by PSS usage (default: 15)\n");
     printf("  -t, --test                 Run in test mode with a generated minimal config\n\n");
 
     if (moreInfo)
@@ -1758,8 +1758,8 @@ int main(int argc, char *argv[])
             {
                 g_processLimit = atoi(argv[i + 1]);
                 if (g_processLimit <= 0) {
-                    printf("Warning: Invalid process count '%s', using unlimited\n", argv[i+1]);
-                    g_processLimit = -1;
+                    printf("Warning: Invalid process count '%s', using default (15)\n", argv[i+1]);
+                    g_processLimit = 15;
                 } else {
                     printf("* Limiting output to top %d processes\n", g_processLimit);
                 }

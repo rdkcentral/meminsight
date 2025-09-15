@@ -90,6 +90,7 @@ This is used to ensure compatibility with older versions of the report parser. *
 #define CSV_FILE_NAME "meminsight.csv"
 #define JSON_FILE_NAME "meminsight.json"
 #define LONG_RUN_INTERVAL 900 // 900 is Default interval for long runs in seconds
+#define DEFAULT_PROCESS_NUM 15
 
 // -----------------------------
 // Data Structures
