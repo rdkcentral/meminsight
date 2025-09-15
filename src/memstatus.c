@@ -33,6 +33,7 @@ int includeKthreads = 0;              // Whether to include kernel threads
 Process_Info getProcessInfo = {0};    // Temporary struct for collecting process info
 Process_Info *headProcessInfo = NULL; // Head of linked list
 int g_processLimit = -1;              // Default to unlimited processes (-1)
+unsigned long int g_memTotal = 0;     // System's total memory (initialized to 0)
 
 // Initialize format based on compile-time setting
 #if defined(DEFAULT_FORMAT_JSON)
@@ -510,8 +511,7 @@ void addProcessInfoJSON(cJSON *root, unsigned noOfPids, FILE *output)
 
     // Check if we potentially missed processes
     if (i != noOfPids + 1 && (g_processLimit < 0 || processCount < (unsigned)g_processLimit)) {
-        printf("* Some process details might have been missed [%d vs actual %u]%s\n",
-               i-1, noOfPids, g_processLimit > 0 ? " (limited by -n option)" : "");
+        printf("* Some process details might have been missed [%d vs actual %u]%s\n", i-1, noOfPids, g_processLimit > 0 ? " (limited by -n option)" : "");
     }
     cJSON_AddItemToObject(root, "processes", processesArray);
 }
@@ -1091,11 +1091,8 @@ int collectSystemMemoryStats(bool includeKthreads, const char *outDir, int itera
             fprintf(output, "FIRMWARE_NAME,MAC_ADDRESS,TIMESTAMP,REPORT_VERSION\n");
             fprintf(output, "%s,%s,%s,%s\n\n", fwName, mac, ts, reportVersion);
             saveMeminfo(output);
-            printf("\nProcessed %u processes\n>> RSS_Total %lu\n>> PSS_Total "
-               "%lu\n>> Shared_Clean_Total %lu\n>> Private_Dirty_Total %lu\n",
-               noOfPids, rssTotal, pssTotal, shared_clean_total, private_dirty_total);
-            fprintf(output, "\n\nProcesses:\nPID,EXE,RSS,PSS,SHARED_CLEAN,PRIVATE_"
-                        "DIRTY,SWAP_PSS,MAJ_FAULTS,CPU_TIME\n");
+            //printf("\nProcessed %u processes\n>> RSS_Total %lu\n>> PSS_Total%lu\n>> Shared_Clean_Total %lu\n>> Private_Dirty_Total %lu\n", noOfPids, rssTotal, pssTotal, shared_clean_total, private_dirty_total);
+            fprintf(output, "Processes:\nPID,EXE,RSS,PSS,SHARED_CLEAN,PRIVATE_DIRTY,SWAP_PSS,MAJ_FAULTS,CPU_TIME\n");
             writeProcessInfo(noOfPids, output);
             // Redundant but added for safety - writeProcessInfo already resets headProcessInfo
             // This ensures it's reset even if writeProcessInfo didn't run completely
@@ -1452,51 +1449,97 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, int cli_iter
  */
 void saveMeminfo(FILE *out)
 {
-    unsigned long val[50];
-    unsigned count = 0;
-    char tmp[128];
-    char name[64];
+    if (!out) return;
 
-    FILE *meminfo = fopen("/proc/meminfo", "r");
-    if (meminfo)
-    {
-        int first = 1;
-        // print header
-        while (fgets(tmp, 127, meminfo) && count < 50)
-        {
-            if (sscanf(tmp, "%s %lu kB", name, &val[count]) == 2)
-            {
-                name[strlen(name) - 1] = '\0'; // Remove trailing ':'
-                if (!first)
-                {
-                    fprintf(out, ",");
+    FILE *meminfo = fopen(PROC_MEMINFO, "r");
+    if (!meminfo) return;
+
+    // Static variables to remember positions across calls
+    static int initialized = 0;
+    static int linesToSkipForFields[13] = {0}; // 13 fields
+    static const char *fieldNames[] = {
+        // MemTotal removed from this list
+        "MemFree", "MemAvailable", "Buffers", "Cached",
+        "Active(anon)", "Active(file)", "AnonPages", "Shmem", "Slab",
+        "KernelStack", "Inactive(anon)", "Inactive(file)", "VmallocUsed"
+    };
+
+    char line[256];
+    char name[64];
+    unsigned long value;
+
+    // First run: learn the positions and get MemTotal
+    if (!initialized) {
+        int lineNum = 0;
+        int fieldsFound = 0;
+
+        // Find and record positions for each field
+        while (fgets(line, sizeof(line), meminfo) && (g_memTotal == 0 || fieldsFound < 13)) {
+            lineNum++;
+
+            if (sscanf(line, "%63[^:]: %lu", name, &value) == 2) {
+                // Check for MemTotal separately
+                if (g_memTotal == 0 && strcmp(name, "MemTotal") == 0) {
+                    g_memTotal = value;
+                    fprintf(out, "MemTotal: %lu kB\n", g_memTotal);
+                    continue;
                 }
-                fprintf(out, "%s", name);
-                first = 0;
-                count++;
+                // Check if this is one of our target fields
+                for (int i = 0; i < 13; i++) { // Fixed: loop to 13 elements
+                    if (linesToSkipForFields[i] == 0 && strcmp(name, fieldNames[i]) == 0) {
+                        linesToSkipForFields[i] = lineNum;
+                        fprintf(out, "%s: %lu kB\n", name, value);
+                        fieldsFound++;
+                        break;
+                    }
+                }
             }
         }
-        fprintf(out, "\n");
-        fseek(meminfo, 0, SEEK_SET); // Reset file pointer to start
-        count = 0;
-        first = 1;
-        // Print values
-        while (fgets(tmp, 127, meminfo) && count < 50)
-        {
-            if (sscanf(tmp, "%s %lu kB", name, &val[count]) == 2)
-            {
-                if (!first)
-                {
-                    fprintf(out, ",");
-                }
-                fprintf(out, "%lu", val[count]);
-                first = 0;
-                count++;
-            }
-        }
-        fprintf(out, "\n\n"); // Blank line after meminfo block
-        fclose(meminfo);
+        initialized = 1;
     }
+    // Subsequent runs: use known positions
+    else {
+        // Output MemTotal from global variable
+        fprintf(out, "MemTotal: %lu kB\n", g_memTotal);
+
+        int lineNum = 0;
+        int fieldsFound = 0;
+        int nextFieldIndex = 0;
+        int nextFieldLine = 0;
+
+        // Find the first field to look for
+        for (int i = 0; i < 13; i++) { // Fixed: loop to 13 elements
+            if (linesToSkipForFields[i] > 0 && (nextFieldLine == 0 || linesToSkipForFields[i] < nextFieldLine)) {
+                nextFieldLine = linesToSkipForFields[i];
+                nextFieldIndex = i;
+            }
+        }
+
+        // Process fields in order of appearance in file
+        while (fgets(line, sizeof(line), meminfo) && fieldsFound < 13) {
+            lineNum++;
+
+            // Check if we've reached a line containing a field we want
+            if (lineNum == nextFieldLine) {
+                if (sscanf(line, "%63[^:]: %lu", name, &value) == 2) {
+                    fprintf(out, "%s: %lu kB\n", name, value);
+                    fieldsFound++;
+                }
+                // Find the next field to look for
+                nextFieldLine = 0;
+                for (int i = 0; i < 13; i++) { // Fixed: loop to 13 elements
+                    if (linesToSkipForFields[i] > lineNum && (nextFieldLine == 0 || linesToSkipForFields[i] < nextFieldLine)) {
+                        nextFieldLine = linesToSkipForFields[i];
+                        nextFieldIndex = i;
+                    }
+                }
+                // If no more fields, we're done
+                if (nextFieldLine == 0) break;
+            }
+        }
+    }
+    fprintf(out, "\n");
+    fclose(meminfo);
 }
 
 #ifdef ENABLE_CJSON
@@ -1506,29 +1549,99 @@ void saveMeminfo(FILE *out)
 void addMemInfoJSON(cJSON *root)
 {
     if (!root) return;
-    char tmp[128];
-    char name[64];
-    unsigned long value;
-
     cJSON *memInfo = cJSON_CreateObject();
-    if (!memInfo) {
+    if (!memInfo) return;
+    FILE *meminfo_file = fopen(PROC_MEMINFO, "r");
+    if (!meminfo_file) {
+        cJSON_Delete(memInfo);
         return;
     }
 
-    FILE *meminfo_file = fopen("/proc/meminfo", "r");
-    if (meminfo_file) {
-        while (fgets(tmp, sizeof(tmp) - 1, meminfo_file)) {
-            if (sscanf(tmp, "%s %lu kB", name, &value) == 2) {
-                name[strlen(name) - 1] = '\0'; // Remove trailing ':'
-                cJSON_AddNumberToObject(memInfo, name, value);
+    // Static variables to remember positions across calls
+    static int initialized = 0;
+    static int linesToSkipForFields[13] = {0}; // 13 fields
+    static const char *fieldNames[] = {
+        // MemTotal removed from this list
+        "MemFree", "MemAvailable", "Buffers", "Cached",
+        "Active(anon)", "Active(file)", "AnonPages", "Shmem", "Slab",
+        "KernelStack", "Inactive(anon)", "Inactive(file)", "VmallocUsed"
+    };
+
+    char line[256];
+    char name[64];
+    unsigned long value;
+
+    // First run: learn the positions and get MemTotal
+    if (!initialized) {
+        int lineNum = 0;
+        int fieldsFound = 0;
+
+        // Find and record positions for each field
+        while (fgets(line, sizeof(line), meminfo_file) && (g_memTotal == 0 || fieldsFound < 13)) {
+            lineNum++;
+
+            if (sscanf(line, "%63[^:]: %lu", name, &value) == 2) {
+                // Check for MemTotal separately
+                if (g_memTotal == 0 && strcmp(name, "MemTotal") == 0) {
+                    g_memTotal = value;
+                    cJSON_AddNumberToObject(memInfo, "MemTotal", g_memTotal);
+                    continue;
+                }
+                // Check if this is one of our target fields
+                for (int i = 0; i < 13; i++) { // Fixed: loop to 13 elements
+                    if (linesToSkipForFields[i] == 0 && strcmp(name, fieldNames[i]) == 0) {
+                        linesToSkipForFields[i] = lineNum;
+                        cJSON_AddNumberToObject(memInfo, name, value);
+                        fieldsFound++;
+                        break;
+                    }
+                }
             }
         }
-        fclose(meminfo_file);
-        cJSON_AddItemToObject(root, "memory_info", memInfo);
-    } else {
-        // Failed to open meminfo
-        cJSON_Delete(memInfo);
+        initialized = 1;
     }
+    // Subsequent runs: use known positions
+    else {
+        // Add MemTotal from global variable
+        cJSON_AddNumberToObject(memInfo, "MemTotal", g_memTotal);
+        int lineNum = 0;
+        int fieldsFound = 0;
+        int nextFieldIndex = 0;
+        int nextFieldLine = 0;
+        // Find the first field to look for
+        for (int i = 0; i < 13; i++) { // Fixed: loop to 13 elements
+            if (linesToSkipForFields[i] > 0 && (nextFieldLine == 0 || linesToSkipForFields[i] < nextFieldLine)) {
+                nextFieldLine = linesToSkipForFields[i];
+                nextFieldIndex = i;
+            }
+        }
+
+        // Process fields in order of appearance in file
+        while (fgets(line, sizeof(line), meminfo_file) && fieldsFound < 13) {
+            lineNum++;
+
+            // Check if we've reached a line containing a field we want
+            if (lineNum == nextFieldLine) {
+                if (sscanf(line, "%63[^:]: %lu", name, &value) == 2) {
+                    cJSON_AddNumberToObject(memInfo, name, value);
+                    fieldsFound++;
+                }
+
+                // Find the next field to look for
+                nextFieldLine = 0;
+                for (int i = 0; i < 13; i++) { // Fixed: loop to 13 elements
+                    if (linesToSkipForFields[i] > lineNum && (nextFieldLine == 0 || linesToSkipForFields[i] < nextFieldLine)) {
+                        nextFieldLine = linesToSkipForFields[i];
+                        nextFieldIndex = i;
+                    }
+                }
+                // If no more fields, we're done
+                if (nextFieldLine == 0) break;
+            }
+        }
+    }
+    fclose(meminfo_file);
+    cJSON_AddItemToObject(root, "memory_info", memInfo);
 }
 #endif
 

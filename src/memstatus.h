@@ -72,6 +72,7 @@ This is used to ensure compatibility with older versions of the report parser. *
 #define PROC_DIR "/proc"
 #define VERSION_FILE "/version.txt"
 #define DEVICE_PROP_FILE "/etc/device.properties"
+#define PROC_MEMINFO PROC_DIR "/meminfo"
 
 /* Default Macros */
 #define DEFAULT_FW_NAME "ACTIVEFW123"
@@ -147,6 +148,7 @@ extern Process_Info getProcessInfo;   // Temporary struct for collecting process
 extern Process_Info *headProcessInfo; // Head of linked list
 extern OutputFormat g_outputFormat;   // Global output format setting
 extern int g_processLimit;            // Limit on number of processes to report
+extern unsigned long int g_memTotal;  // System's total memory
 
 // -----------------------------
 // Function Prototypes
