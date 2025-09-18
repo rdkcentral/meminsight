@@ -60,8 +60,9 @@ static const char reportVersion[] =  "" REPORT_MAJOR_VERSION "." REPORT_MINOR_VE
  * Ensures that the specified output directory exists.
  * If it doesn't exist, it attempts to create it.
  */
-static void ensure_output_dir(const char *dir)
+static bool ensure_output_dir(const char *dir)
 {
+    bool status = false;
     struct stat st = {0};
     if (stat(dir, &st) == -1)
     {
@@ -69,7 +70,11 @@ static void ensure_output_dir(const char *dir)
         {
             printf("Failed to create output directory '%s': %s\n", dir, strerror(errno));
         }
+        else {
+            status = true;
+        }
     }
+    return status;
 }
 
 /**
@@ -210,6 +215,33 @@ size_t getMacAddress(const char *iface, char *macAddress, size_t szBufSize)
     size_t ret = snprintf(macAddress, szBufSize, "%02x%02x%02x%02x%02x%02x", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
     return ret;
 }
+
+SetupInfo initializeSetup(const char *outDir, bool useJsonFormat)
+{
+    SetupInfo info = {0};
+
+    // Output Directory
+    info.outputDir = (outDir && *outDir) ? outDir : DEFAULT_OUT_DIR;
+
+    // Ensure output directory exists
+    info.dirCreated = ensure_output_dir(info.outputDir);
+    
+    // Get MAC Address
+    getMacAddress(deviceIdentifierName, info.mac, sizeof(info.mac));
+    if (info.mac[0] == '\0') {
+        strncpy(info.mac, DEFAULT_MAC, sizeof(info.mac) - 1);
+        info.mac[sizeof(info.mac) - 1] = '\0';
+    }
+
+    // Firmware image name
+    getFirmwareImageName(info.fwName, sizeof(info.fwName));
+    
+    // File extension based on format
+    info.fileExt = useJsonFormat ? JSON_FILE_NAME : CSV_FILE_NAME;
+
+    return info;
+}
+
 
 /**
  * Checks if a string represents a valid PID (all digits).
@@ -359,7 +391,7 @@ int parseConfig(const char *configPath, Config_Data *config)
         while (end > val && (*end == '\n' || *end == ','))
             *end-- = '\0';
 
-        if (strcmp(key, "process_whitelist") == 0)
+        if (strncmp(key, "process_whitelist", sizeof("process_whitelist") - 1) == 0)
         {
             // Comma separated
             int count = 1;
@@ -378,20 +410,20 @@ int parseConfig(const char *configPath, Config_Data *config)
                 tok = strtok(NULL, ",");
             }
         }
-        else if (strcmp(key, "output_dir") == 0)
+        else if (strncmp(key, "output_dir", sizeof("output_dir") - 1) == 0)
         {
             strncpy(config->outputDir, val, PATH_MAX - 1);
             config->outputDir[PATH_MAX - 1] = '\0';
         }
-        else if (strcmp(key, "iterations") == 0)
+        else if (strncmp(key, "iterations", sizeof("iterations") - 1) == 0)
         {
             config->iterations = atoi(val);
         }
-        else if (strcmp(key, "interval") == 0)
+        else if (strncmp(key, "interval", sizeof("interval") - 1) == 0)
         {
             config->interval = atoi(val);
         }
-        else if (strcmp(key, "log_level") == 0)
+        else if (strncmp(key, "log_level", sizeof("log_level") - 1) == 0)
         {
             strncpy(config->logLevel, val, sizeof(config->logLevel) - 1);
             config->logLevel[sizeof(config->logLevel) - 1] = '\0';
@@ -959,21 +991,14 @@ void printHelpAndUsage(char *argv[], bool moreInfo)
  */
 int collectSystemMemoryStats(bool includeKthreads, const char *outDir, int iterations, int interval, bool long_run, bool useJsonFormat)
 {
+    SetupInfo setup = initializeSetup(outDir, useJsonFormat);
+
     for (int iter = 0; long_run || iter < iterations; iter++)
     {
         printf("\n==== Iteration %d%s ====\n", iter + 1, long_run ? "/∞" : "");
         unsigned int noOfPids = 0;
 
-        // MAC Address
-        char mac[32] = {0};
-        getMacAddress(deviceIdentifierName, mac, sizeof(mac));
-        if (mac[0] == '\0')
-        {
-            strncpy(mac, DEFAULT_MAC, sizeof(mac) - 1);
-            mac[sizeof(mac) - 1] = '\0';
-        }
-
-        // Current timestamp
+        // Current iteration timestamp
         time_t timenow = time(NULL);
         struct tm *tm_info = localtime(&timenow);
         char timestamp[32] = {0};
@@ -981,17 +1006,8 @@ int collectSystemMemoryStats(bool includeKthreads, const char *outDir, int itera
         strftime(ts, sizeof(ts), "%Y-%m-%d %H:%M:%S", tm_info);
         strftime(timestamp, sizeof(timestamp), "%Y%m%d%H%M%S", tm_info);
 
-        // Firmware image name
-        char fwName[FW_LEN] = {0};
-        getFirmwareImageName(fwName, sizeof(fwName));
-
-        // outDir or default /tmp/meminsight
-        const char *dir = (outDir && outDir[0]) ? outDir : DEFAULT_OUT_DIR;
-        ensure_output_dir(dir);
         char outputfile[512] = {0};
-
-        const char* file_ext = useJsonFormat ? JSON_FILE_NAME : CSV_FILE_NAME;
-        snprintf(outputfile, sizeof(outputfile), "%s/%s_%s_iter%d_%s", dir, mac, timestamp, iter + 1, file_ext);
+        snprintf(outputfile, sizeof(outputfile), "%s/%s_%s_iter%d_%s", setup.outputDir, setup.mac, timestamp, iter + 1, setup.fileExt);
 
         printf("Capturing System wide stats into %s\n", outputfile);
         FILE *output = fopen(outputfile, "w");
@@ -1089,7 +1105,7 @@ int collectSystemMemoryStats(bool includeKthreads, const char *outDir, int itera
         else
         {
             fprintf(output, "FIRMWARE_NAME,MAC_ADDRESS,TIMESTAMP,REPORT_VERSION\n");
-            fprintf(output, "%s,%s,%s,%s\n\n", fwName, mac, ts, reportVersion);
+            fprintf(output, "%s,%s,%s,%s\n\n", setup.fwName, setup.mac, ts, reportVersion);
             saveMeminfo(output);
             //printf("\nProcessed %u processes\n>> RSS_Total %lu\n>> PSS_Total%lu\n>> Shared_Clean_Total %lu\n>> Private_Dirty_Total %lu\n", noOfPids, rssTotal, pssTotal, shared_clean_total, private_dirty_total);
             fprintf(output, "Processes:\nPID,EXE,RSS,PSS,SHARED_CLEAN,PRIVATE_DIRTY,SWAP_PSS,MAJ_FAULTS,CPU_TIME\n");
@@ -1124,6 +1140,8 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, int cli_iter
     const char *final_out_dir = (cli_out_dir[0] && strncmp(cli_out_dir, DEFAULT_OUT_DIR, strlen(DEFAULT_OUT_DIR) + 1) != 0)
                                     ? cli_out_dir
                                     : (config.outputDir[0] ? config.outputDir : DEFAULT_OUT_DIR);
+
+    SetupInfo setup = initializeSetup(final_out_dir, useJsonFormat);
 
     // Interval/Iterations logic (CLI > config > default)
     int final_iterations = config.iterations;
@@ -1173,13 +1191,6 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, int cli_iter
     for (int iter = 0; long_run || iter < final_iterations; iter++)
     {
         printf("\n==== Iteration %d%s ====\n", iter + 1, long_run ? "/∞" : "");
-        // Get MAC address
-        char mac[32] = {0};
-        getMacAddress(deviceIdentifierName, mac, sizeof(mac));
-        if (mac[0] == '\0') {
-            strncpy(mac, DEFAULT_MAC, sizeof(mac) - 1);
-            mac[sizeof(mac) - 1] = '\0'; // Ensure null-termination
-        }
 
         // Get timestamp
         time_t timenow = time(NULL);
@@ -1189,16 +1200,9 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, int cli_iter
         strftime(ts, sizeof(ts), "%Y-%m-%d %H:%M:%S", tm_info);
         strftime(timestamp, sizeof(timestamp), "%Y%m%d%H%M%S", tm_info);
 
-        // Firmware image name
-        char fwName[FW_LEN] = {0};
-        getFirmwareImageName(fwName, sizeof(fwName));
-
         // Generate output file name
         char outputFilePath[PATH_MAX * 2] = {0};
-        ensure_output_dir(final_out_dir);
-
-        const char* file_ext = useJsonFormat ? JSON_FILE_NAME : CSV_FILE_NAME;
-        snprintf(outputFilePath, sizeof(outputFilePath), "%s/%s_%s_iter%d_meminsight.%s", final_out_dir, mac, timestamp, iter+1, file_ext);
+        snprintf(outputFilePath, sizeof(outputFilePath), "%s/%s_%s_iter%d_meminsight.%s", setup.outputDir, setup.mac, timestamp, iter+1, setup.fileExt);
 
         printf("Capturing Config based  stats into %s\n", outputFilePath);
         // Open output file
@@ -1309,7 +1313,7 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, int cli_iter
             else
             {
                 fprintf(output, "FIRMWARE_NAME,MAC_ADDRESS,TIMESTAMP,REPORT_VERSION\n");
-                fprintf(output, "%s,%s,%s,%s\n\n", fwName, mac, ts, reportVersion);
+                fprintf(output, "%s,%s,%s,%s\n\n", setup.fwName, setup.mac, ts, reportVersion);
                 saveMeminfo(output); // TODO: based on whitelist count write content
                 fprintf(output, "\nPID,EXE,RSS,PSS,SHARED_CLEAN,PRIVATE_DIRTY,SWAP_PSS,"
                     "MAJ_FAULTS,CPU_TIME\n"); // TODO: bring inside loop
@@ -1401,7 +1405,7 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, int cli_iter
                 else
                 {
                     fprintf(output, "FIRMWARE_NAME,MAC_ADDRESS,TIMESTAMP,REPORT_VERSION\n");
-                    fprintf(output, "%s,%s,%s,%s\n\n", fwName, mac, ts, reportVersion);
+                    fprintf(output, "%s,%s,%s,%s\n\n", setup.fwName, setup.mac, ts, reportVersion);
                     saveMeminfo(output);
                     fprintf(output, "\n\nProcesses:\nPID,EXE,RSS,PSS,SHARED_CLEAN,PRIVATE_DIRTY,SWAP_PSS,MAJ_FAULTS,CPU_TIME\n");
                     writeProcessInfo(noOfPids, output);
@@ -1479,14 +1483,14 @@ void saveMeminfo(FILE *out)
 
             if (sscanf(line, "%63[^:]: %lu", name, &value) == 2) {
                 // Check for MemTotal separately
-                if (g_memTotal == 0 && strcmp(name, "MemTotal") == 0) {
+                if (g_memTotal == 0 && strncmp(name, "MemTotal", sizeof("MemTotal") - 1) == 0) {
                     g_memTotal = value;
                     fprintf(out, "MemTotal: %lu kB\n", g_memTotal);
                     continue;
                 }
                 // Check if this is one of our target fields
                 for (int i = 0; i < 13; i++) { // Fixed: loop to 13 elements
-                    if (linesToSkipForFields[i] == 0 && strcmp(name, fieldNames[i]) == 0) {
+                    if (linesToSkipForFields[i] == 0 && strncmp(name, fieldNames[i], sizeof(fieldNames[i]) - 1) == 0) {
                         linesToSkipForFields[i] = lineNum;
                         fprintf(out, "%s: %lu kB\n", name, value);
                         fieldsFound++;
@@ -1582,14 +1586,14 @@ void addMemInfoJSON(cJSON *root)
 
             if (sscanf(line, "%63[^:]: %lu", name, &value) == 2) {
                 // Check for MemTotal separately
-                if (g_memTotal == 0 && strcmp(name, "MemTotal") == 0) {
+                if (g_memTotal == 0 && strncmp(name, "MemTotal", sizeof("MemTotal") - 1) == 0) {
                     g_memTotal = value;
                     cJSON_AddNumberToObject(memInfo, "MemTotal", g_memTotal);
                     continue;
                 }
                 // Check if this is one of our target fields
                 for (int i = 0; i < 13; i++) { // Fixed: loop to 13 elements
-                    if (linesToSkipForFields[i] == 0 && strcmp(name, fieldNames[i]) == 0) {
+                    if (linesToSkipForFields[i] == 0 && strncmp(name, fieldNames[i], sizeof(fieldNames[i]) - 1) == 0) {
                         linesToSkipForFields[i] = lineNum;
                         cJSON_AddNumberToObject(memInfo, name, value);
                         fieldsFound++;

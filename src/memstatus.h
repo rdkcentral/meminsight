@@ -77,6 +77,7 @@ This is used to ensure compatibility with older versions of the report parser. *
 /* Default Macros */
 #define DEFAULT_FW_NAME "ACTIVEFW123"
 #define FW_LEN 64
+#define MAC_LEN 32
 #define DEFAULT_ITERATIONS 1
 #define DEFAULT_INTERVAL 0
 #define DEFAULT_OUT_DIR "/tmp/meminsight"
@@ -127,6 +128,14 @@ typedef struct config
     char logLevel[8];            // Log level (e.g., "DEBUG", "INFO", "ERROR")
 } Config_Data;
 
+typedef struct {
+    char mac[MAC_LEN];
+    char fwName[FW_LEN];
+    const char *outputDir;
+    const char *fileExt;
+    bool dirCreated;
+} SetupInfo;
+
 #ifdef ENABLE_CJSON
 struct cJSON;
 typedef struct cJSON cJSON;
@@ -155,6 +164,7 @@ extern unsigned long int g_memTotal;  // System's total memory
 // Function Prototypes
 // -----------------------------
 
+SetupInfo initializeSetup(const char *outDir, bool useJsonFormat);
 void writeProcessInfo(unsigned noOfpids, FILE *output);
 void addProcessInfo(Process_Info *addPInfo);
 int getProcessInfos(unsigned pid);
