@@ -39,6 +39,7 @@ unsigned long int g_memTotal = 0;         // System's total memory (initialized 
 #if defined(DEFAULT_FORMAT_JSON)
 #ifdef ENABLE_CJSON
 OutputFormat g_outputFormat = FORMAT_JSON;
+bool g_jsonPrettyPrint = false; // Do not pretty print JSON by default
 #else
 OutputFormat g_outputFormat = FORMAT_CSV;
 #endif
@@ -954,7 +955,8 @@ void printHelpAndUsage(char *argv[], bool moreInfo)
     printf("      --fmt <format>         Output format: csv (default) or json\n");
     printf("  -h, --help                 Show this help message and exit\n");
     printf("  -n, --numprocs <count>     Limit output to top N processes by PSS usage (default: 15)\n");
-    printf("  -t, --test                 Run in test mode with a generated minimal config\n\n");
+    printf("  -t, --test                 Run in test mode with a generated minimal config\n");
+    printf("  --json-pretty              Pretty-print JSON output (requires --fmt json)\n\n");
 
     if (moreInfo)
     {
@@ -1079,8 +1081,15 @@ int collectSystemMemoryStats(bool includeKthreads, const char *outDir, int itera
 
                 // Add process totals
                 addProcessTotalsJSON(root, rssTotal, pssTotal, shared_clean_total, private_dirty_total, swap_pss_total);
-
-                char *json_string = cJSON_PrintUnformatted(root);
+                char *json_string = NULL;
+                if (g_jsonPrettyPrint)
+                {
+                    json_string = cJSON_Print(root);
+                }
+                else
+                {
+                    json_string = cJSON_PrintUnformatted(root);
+                }
                 if (json_string)
                 {
                     fprintf(output, "%s\n", json_string);
@@ -1287,8 +1296,15 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, int cli_iter
 
                     // Add process totals
                     addProcessTotalsJSON(root, rssTotal, pssTotal, shared_clean_total, private_dirty_total, swap_pss_total);
-
-                    char *json_string = cJSON_PrintUnformatted(root);
+                    char *json_string = NULL;
+                    if (g_jsonPrettyPrint)
+                    {
+                        json_string = cJSON_Print(root);
+                    }
+                    else
+                    {
+                        json_string = cJSON_PrintUnformatted(root);
+                    }
                     if (json_string)
                     {
                         fprintf(output, "%s\n", json_string);
@@ -1379,8 +1395,15 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, int cli_iter
 
                         // Add process totals
                         addProcessTotalsJSON(root, rssTotal, pssTotal, shared_clean_total, private_dirty_total, swap_pss_total);
-
-                        char *json_string = cJSON_PrintUnformatted(root);
+                        char *json_string = NULL;
+                        if (g_jsonPrettyPrint)
+                        {
+                            json_string = cJSON_Print(root);
+                        }
+                        else
+                        {
+                            json_string = cJSON_PrintUnformatted(root);
+                        }
                         if (json_string)
                         {
                             fprintf(output, "%s\n", json_string);
@@ -1811,6 +1834,19 @@ int main(int argc, char *argv[])
         else if (!strncmp(argv[i], "-v", 3) || !strncmp(argv[i], "--version", 10))
         {
             printf("%s v%s (Report v%s)\n", XMEMINSIGHT_BIN, xMemInsightVersion, reportVersion);
+        }
+        else if (!strncmp(argv[i], "--json-pretty", 14))
+        {
+#ifdef ENABLE_CJSON
+            if (useJsonFormat) {
+                g_jsonPrettyPrint = true;
+            }
+            else {
+                printf("Warning: --json-pretty specified but JSON format not selected. Ignoring.\n");
+            }
+#else
+            printf("Warning: --json-pretty specified but cJSON support not enabled at build time. Ignoring.\n");
+#endif
         }
         else
         {

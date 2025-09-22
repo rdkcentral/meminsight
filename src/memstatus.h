@@ -157,6 +157,7 @@ extern int includeKthreads;           // Whether to include kernel threads
 extern Process_Info getProcessInfo;   // Temporary struct for collecting process info
 extern Process_Info *headProcessInfo; // Head of linked list
 extern OutputFormat g_outputFormat;   // Global output format setting
+extern bool g_jsonPrettyPrint;     // Whether to pretty-print JSON output
 extern int g_processLimit;            // Limit on number of processes to report
 extern unsigned long int g_memTotal;  // System's total memory
 
