@@ -29,11 +29,15 @@
 // -----------------------------
 // Global Variables
 // -----------------------------
-int includeKthreads = 0;                  // Whether to include kernel threads
+bool g_includeKthreads = false;           // Whether to include kernel threads
 Process_Info getProcessInfo = {0};        // Temporary struct for collecting process info
 Process_Info *headProcessInfo = NULL;     // Head of linked list
 int g_processLimit = DEFAULT_PROCESS_NUM; // Default to showing top 15 processes
 unsigned long int g_memTotal = 0;         // System's total memory (initialized to 0)
+
+Process_Info *memBufferData = NULL;       // Holds previous iteration's process info
+Process_Info *memCompareData = NULL;      // Holds current iteration's process info
+ProcessPssDelta *memPssDeltaData = NULL;  // Holds PSS delta information
 
 // Initialize format based on compile-time setting
 #if defined(DEFAULT_FORMAT_JSON)
@@ -56,6 +60,15 @@ static const char reportVersion[] =  "" REPORT_MAJOR_VERSION "." REPORT_MINOR_VE
 // -----------------------------
 // Utility Functions
 // -----------------------------
+
+static void trim_whitespace(char *s) {
+    if (!s) return;
+    char *p = s;
+    while (*p && isspace((unsigned char)*p)) p++;
+    if (p != s) memmove(s, p, strlen(p) + 1);
+    size_t len = strlen(s);
+    while (len > 0 && isspace((unsigned char)s[len - 1])) { s[len - 1] = '\0'; len--; }
+}
 
 /**
  * Ensures that the specified output directory exists.
@@ -127,8 +140,8 @@ int getPropertyFromFile(const char *filename, const char *property, char *proper
                 valueLen = propertyValueLen - 1;
             }
             // Copy the value into the output buffer
-            strncpy(propertyValue, val, valueLen);
-            propertyValue[valueLen] = '\0';
+            strncpy(propertyValue, val, propertyValueLen - 1);
+            propertyValue[propertyValueLen - 1] = '\0';
             found = 1;
             break;
         }
@@ -202,7 +215,8 @@ size_t getMacAddress(const char *iface, char *macAddress, size_t szBufSize)
         return 0;
     }
     memset(&ifr, 0, sizeof(ifr));
-    strncpy(ifr.ifr_name, iface, IFNAMSIZ - 1);
+    strncpy(ifr.ifr_name, iface, sizeof(ifr.ifr_name) - 1);
+    ifr.ifr_name[sizeof(ifr.ifr_name) - 1] = '\0';
     ifr.ifr_addr.sa_family = AF_INET;
     if (ioctl(fd, SIOCGIFHWADDR, &ifr) == -1)
     {
@@ -214,7 +228,162 @@ size_t getMacAddress(const char *iface, char *macAddress, size_t szBufSize)
 
     unsigned char *mac = (unsigned char *)ifr.ifr_hwaddr.sa_data;
     size_t ret = snprintf(macAddress, szBufSize, "%02x%02x%02x%02x%02x%02x", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+    if (ret >= szBufSize)
+    {
+        printf("MAC address buffer too small\n");
+        return 0;
+    }
     return ret;
+}
+
+void free_process_info_list(Process_Info *head) {
+    while(head) {
+        Process_Info *tmp = head;
+        head = head->next;
+        free(tmp);
+    }
+}
+
+void free_process_pss_delta_list(ProcessPssDelta *head) {
+    while(head) {
+        ProcessPssDelta *tmp = head;
+        head = head->next;
+        free(tmp);
+    }
+}
+
+void insert_or_replace_by_pid(Process_Info **head, Process_Info *newNode) {
+    if (!head || !newNode) return;
+    Process_Info **pp = head;
+    while(*pp && (*pp)->pid < newNode->pid) {
+        pp = &(*pp)->next;
+    }
+    if (*pp && (*pp)->pid == newNode->pid) {
+        // Replace existing node
+        newNode->next = (*pp)->next;
+        free(*pp);
+        *pp = newNode;
+    } else {
+        // Insert new node
+        newNode->next = *pp;
+        *pp = newNode;
+    }
+}
+
+void writePssDeltaCSV(ProcessPssDelta *head, FILE *output, int limit) {
+    fprintf(output, "PID,EXE,RSS,PSS,SHARED_CLEAN,PRIVATE_DIRTY,SWAP_PSS,MAJ_FAULTS,CPU_TIME,PSS_DELTA\n");
+    int count = 0;
+    while (head && count < limit) {
+        fprintf(output, "%u,%s,%lu,%lu,%lu,%lu,%lu,%lu,%lu,%ld\n",
+            head->pid, head->name, head->rssTotal, head->pssTotal,
+            head->shared_clean_total, head->private_dirty_total,
+            head->swap_pss_total, head->majFaults, head->cputime, head->pssDelta);
+        head = head->next;
+        count++;
+    }
+}
+
+#ifdef ENABLE_CJSON
+void writePssDeltaJSON(ProcessPssDelta *head, FILE *output, int limit) {
+    cJSON *root = cJSON_CreateObject();
+    addMemInfoJSON(root);
+
+    /* accumulate totals while building array */
+    unsigned long rssSum = 0, pssSum = 0, sharedSum = 0, privateSum = 0, swapSum = 0;
+
+    cJSON *array = cJSON_CreateArray();
+    int count = 0;
+    while (head && count < limit) {
+        cJSON *obj = cJSON_CreateObject();
+        cJSON_AddNumberToObject(obj, "pid", head->pid);
+        cJSON_AddStringToObject(obj, "name", head->name);
+        cJSON_AddNumberToObject(obj, "rss", head->rssTotal);
+        cJSON_AddNumberToObject(obj, "pss", head->pssTotal);
+        cJSON_AddNumberToObject(obj, "shared_clean", head->shared_clean_total);
+        cJSON_AddNumberToObject(obj, "private_dirty", head->private_dirty_total);
+        cJSON_AddNumberToObject(obj, "swap_pss", head->swap_pss_total);
+        cJSON_AddNumberToObject(obj, "maj_faults", head->majFaults);
+        cJSON_AddNumberToObject(obj, "cpu_time", head->cputime);
+        cJSON_AddNumberToObject(obj, "pss_delta", head->pssDelta);
+        cJSON_AddItemToArray(array, obj);
+
+        /* update sums */
+        rssSum += head->rssTotal;
+        pssSum += head->pssTotal;
+        sharedSum += head->shared_clean_total;
+        privateSum += head->private_dirty_total;
+        swapSum += head->swap_pss_total;
+
+        head = head->next;
+        count++;
+    }
+    cJSON_AddItemToObject(root, "process_data", array);
+    addProcessTotalsJSON(root, rssSum, pssSum, sharedSum, privateSum, swapSum);
+    char *json_string = g_jsonPrettyPrint ? cJSON_Print(root) : cJSON_PrintUnformatted(root);
+    if (json_string) {
+        fprintf(output, "%s\n", json_string);
+        free(json_string);
+    }
+    cJSON_Delete(root);
+}
+#endif
+
+void insert_sorted_by_pss_delta(ProcessPssDelta **head, ProcessPssDelta *newNode) {
+    if (!head || !newNode) return;
+    if (!*head || newNode->pssDelta > (*head)->pssDelta) {
+        newNode->next = *head;
+        *head = newNode;
+        return;
+    }
+    ProcessPssDelta *curr = *head;
+    while (curr->next && curr->next->pssDelta >= newNode->pssDelta) {
+        curr = curr->next;
+    }
+    newNode->next = curr->next;
+    curr->next = newNode;
+}
+
+Process_Info* find_process_info(Process_Info *head, unsigned pid, const char *name) {
+    while (head) {
+        if (head->pid == pid && strncmp(head->name, name, sizeof(head->name)) == 0) {
+            return head;
+        }
+        head = head->next;
+    }
+    return NULL;
+}
+
+void add_process_pss_delta(Process_Info *current, Process_Info *previous, ProcessPssDelta **resultHead) {
+    if (!current || !resultHead) return;
+
+    ProcessPssDelta *node = (ProcessPssDelta *)malloc(sizeof(ProcessPssDelta));
+    if (!node) return;
+
+    node->pid = current->pid;
+    strncpy(node->name, current->name, sizeof(node->name) - 1);
+    node->name[sizeof(node->name) - 1] = '\0';
+    node->rssTotal = current->rssTotal;
+    node->pssTotal = current->pssTotal;
+    node->shared_clean_total = current->shared_clean_total;
+    node->private_dirty_total = current->private_dirty_total;
+    node->swap_pss_total = current->swap_pss_total;
+    node->majFaults = current->majFaults;
+    node->cputime = current->cputime;
+    node->pssDelta = previous ? ((long)current->pssTotal - (long)previous->pssTotal) : (long)current->pssTotal;
+    node->next = NULL;
+
+    insert_sorted_by_pss_delta(resultHead, node);
+}
+
+void build_pss_delta_result(void) {
+    free_process_pss_delta_list(memPssDeltaData);
+    memPssDeltaData = NULL;
+    Process_Info *curr = memCompareData;
+    while (curr) {
+        Process_Info *prev = find_process_info(memBufferData, curr->pid, curr->name);
+        add_process_pss_delta(curr, prev, &memPssDeltaData);
+        curr = curr->next;
+    }
 }
 
 SetupInfo initializeSetup(const char *outDir, bool useJsonFormat)
@@ -364,13 +533,12 @@ int parseConfig(const char *configPath, Config_Data *config)
         return -1;
     }
 
-    config->whitelist = NULL;
-    config->whiteListCount = 0;
-    // config->outputFile = NULL;
-    config->outputDir[0] = '\0';
-    config->iterations = DEFAULT_ITERATIONS; // Default to 1 iteration
-    config->interval = DEFAULT_INTERVAL;     // Default to 0 seconds interval
-    strncpy(config->logLevel, DEFAULT_LOG_LEVEL, sizeof(config->logLevel) - 1);
+    if(!config) return -1;
+    memset(config, 0, sizeof(*config));
+    config->iterations = DEFAULT_ITERATIONS;
+    config->interval = DEFAULT_INTERVAL;
+    strncpy(config->logLevel, DEFAULT_LOG_LEVEL, sizeof(config->logLevel)-1);
+    config->logLevel[sizeof(config->logLevel)-1] = '\0';
 
     FILE *fp = fopen(configPath, "r");
     if (!fp)
@@ -387,13 +555,25 @@ int parseConfig(const char *configPath, Config_Data *config)
         *eq = '\0';
         char *key = line;
         char *val = eq + 1;
+
+        trim_whitespace(key);
+        trim_whitespace(val);
         // Remove trailing newline and commas
         char *end = val + strlen(val) - 1;
         while (end > val && (*end == '\n' || *end == ','))
             *end-- = '\0';
-
+        trim_whitespace(val);
         if (strncmp(key, "process_whitelist", sizeof("process_whitelist") - 1) == 0)
         {
+            // Defensive: free any previous whitelist before reallocating
+            if (config->whitelist) {
+                for (unsigned j = 0; j < config->whiteListCount; j++) {
+                    if (config->whitelist[j]) free(config->whitelist[j]);
+                }
+                free(config->whitelist);
+                config->whitelist = NULL;
+                config->whiteListCount = 0;
+            }
             // Comma separated
             int count = 1;
             for (char *p = val; *p; p++)
@@ -401,20 +581,36 @@ int parseConfig(const char *configPath, Config_Data *config)
                     count++;
             config->whiteListCount = count;
             config->whitelist = (char **)calloc(count, sizeof(char *));
+            if (!config->whitelist) {
+                fclose(fp);
+                return -1;
+            }
             int idx = 0;
             char *tok = strtok(val, ",");
             while (tok && idx < count)
             {
                 while (*tok == ' ')
                     tok++;
-                config->whitelist[idx++] = strdup(tok);
+                config->whitelist[idx] = strdup(tok);
+                if (!config->whitelist[idx]) {
+                    // Free already allocated
+                    for (int k = 0; k < idx; k++) {
+                        if (config->whitelist[k]) free(config->whitelist[k]);
+                    }
+                    free(config->whitelist);
+                    config->whitelist = NULL;
+                    config->whiteListCount = 0;
+                    fclose(fp);
+                    return -1;
+                }
+                idx++;
                 tok = strtok(NULL, ",");
             }
         }
         else if (strncmp(key, "output_dir", sizeof("output_dir") - 1) == 0)
         {
-            strncpy(config->outputDir, val, PATH_MAX - 1);
-            config->outputDir[PATH_MAX - 1] = '\0';
+            strncpy(config->outputDir, val, sizeof(config->outputDir) - 1);
+            config->outputDir[sizeof(config->outputDir) - 1] = '\0';
         }
         else if (strncmp(key, "iterations", sizeof("iterations") - 1) == 0)
         {
@@ -476,80 +672,6 @@ void writeProcessInfo(unsigned noOfPids, FILE *output)
 
 #ifdef ENABLE_CJSON
 /**
- * Adds process information from the linked list to the root JSON object
- * and frees the linked list nodes as it processes them.
- *
- * @param root The root JSON object to add processes to
- * @param noOfPids Number of PIDs processed
- * @param output FILE pointer for diagnostic messages (if needed)
- */
-void addProcessInfoJSON(cJSON *root, unsigned noOfPids, FILE *output)
-{
-    if (!root) return;
-
-    Process_Info *tmp = headProcessInfo;
-    Process_Info *tofree;
-    unsigned int i = 1;
-    unsigned int processCount = 0;
-
-    // Create the JSON array for processes
-    cJSON *processesArray = cJSON_CreateArray();
-    if (!processesArray) {
-        fprintf(output, "\"processes\": null,\n");
-        // Still need to free the linked list
-        while (tmp) {
-            tofree = tmp;
-            tmp = tmp->next;
-            free(tofree);
-        }
-        headProcessInfo = NULL;
-        return;
-    }
-    // Process each node in the linked list
-    while (tmp) {
-        // Only output up to g_processLimit processes if set
-        if (processCount >= (unsigned)g_processLimit) {
-            tofree = tmp;
-            tmp = tmp->next;
-            free(tofree);
-            continue;
-        }
-
-        // Create a JSON object for this process
-        cJSON *process = cJSON_CreateObject();
-        if (process) {
-            // Add process data
-            cJSON_AddNumberToObject(process, "pid", tmp->pid);
-            cJSON_AddStringToObject(process, "name", tmp->name);
-            cJSON_AddNumberToObject(process, "rss", tmp->rssTotal);
-            cJSON_AddNumberToObject(process, "pss", tmp->pssTotal);
-            cJSON_AddNumberToObject(process, "shared_clean", tmp->shared_clean_total);
-            cJSON_AddNumberToObject(process, "private_dirty", tmp->private_dirty_total);
-            cJSON_AddNumberToObject(process, "swap_pss", tmp->swap_pss_total);
-            cJSON_AddNumberToObject(process, "maj_faults", tmp->majFaults);
-            cJSON_AddNumberToObject(process, "cpu_time", tmp->cputime);
-
-            // Add to the array
-            cJSON_AddItemToArray(processesArray, process);
-        }
-
-        tofree = tmp;
-        tmp = tmp->next;
-        free(tofree);
-        processCount++;
-        i++;
-    }
-    // Reset the head pointer
-    headProcessInfo = NULL;
-
-    // Check if we potentially missed processes
-    if (i != noOfPids + 1 && processCount < (unsigned)g_processLimit) {
-        printf("* Some process details might have been missed [%d vs actual %u] (limited to top %d processes)\n", i-1, noOfPids, g_processLimit);
-    }
-    cJSON_AddItemToObject(root, "processes", processesArray);
-}
-
-/**
  * Adds process totals to the root JSON object as "process_total"
  *
  * @param root The root JSON object
@@ -590,12 +712,14 @@ void addProcessTotalsJSON(cJSON *root, unsigned long rssTotal, unsigned long pss
  */
 void addProcessInfo(Process_Info *addPInfo)
 {
+    if (!addPInfo) return;
     Process_Info *addNode = (Process_Info *)malloc(sizeof(Process_Info));
     if (addNode)
     {
+        memcpy(addNode, addPInfo, sizeof(Process_Info));
+        addNode->next = NULL;
         Process_Info *tmp = headProcessInfo;
         Process_Info *prev = NULL;
-        memcpy(addNode, addPInfo, sizeof(Process_Info));
         while (tmp)
         {
             if (tmp->pssTotal < addNode->pssTotal)
@@ -987,13 +1111,12 @@ void printHelpAndUsage(char *argv[], bool moreInfo)
     exit(1);
 }
 
-/**
- * Collects system-wide memory statistics and writes to output file.
- * Returns 0 on success, -1 on failure.
- */
-int collectSystemMemoryStats(bool includeKthreads, const char *outDir, int iterations, int interval, bool long_run, bool useJsonFormat)
-{
+int collectSystemMemoryStats(bool includeKthreads, const char *outDir, int iterations, int interval, bool long_run, bool useJsonFormat){
     SetupInfo setup = initializeSetup(outDir, useJsonFormat);
+    // Reset globals
+    free_process_info_list(memBufferData); memBufferData = NULL;
+    free_process_info_list(memCompareData); memCompareData = NULL;
+    free_process_pss_delta_list(memPssDeltaData); memPssDeltaData = NULL;
 
     for (int iter = 0; long_run || iter < iterations; iter++)
     {
@@ -1008,18 +1131,8 @@ int collectSystemMemoryStats(bool includeKthreads, const char *outDir, int itera
         strftime(ts, sizeof(ts), "%Y-%m-%d %H:%M:%S", tm_info);
         strftime(timestamp, sizeof(timestamp), "%Y%m%d%H%M%S", tm_info);
 
-        char outputfile[512] = {0};
-        snprintf(outputfile, sizeof(outputfile), "%s/%s_%s_iter%d_%s", setup.outputDir, setup.mac, timestamp, iter + 1, setup.fileExt);
-
-        printf("Capturing System wide stats into %s\n", outputfile);
-        FILE *output = fopen(outputfile, "w");
-        if (NULL == output)
-        {
-            printf("%s: Open failed, %d [%s]\n", outputfile, errno, strerror(errno));
-            return -1;
-        }
-
-        unsigned long rssTotal = 0, pssTotal = 0, shared_clean_total = 0, private_dirty_total = 0, swap_pss_total = 0;
+        // -- Collect Process Info onto memCompareData linked list --
+        free_process_info_list(memCompareData); memCompareData = NULL;
         DIR *proc = opendir(PROC_DIR);
         if (proc)
         {
@@ -1033,112 +1146,91 @@ int collectSystemMemoryStats(bool includeKthreads, const char *outDir, int itera
                     {
                         unsigned flags = 0;
                         memset(&getProcessInfo, 0, sizeof(getProcessInfo));
-                        if (!fillProcessStatFields(pid, &getProcessInfo, &flags))
-                        {
-                            printf("Failed to fill process stat fields for PID %d\n", pid);
-                            continue;
-                        }
-                        if (flags & PF_KTHREAD && !includeKthreads)
-                        {             /*PF_KTHREAD*/
-                            continue; // Skip kernel threads if not included
-                        }
-                        if (!getProcessInfos(pid))
-                        {
+                        if (!fillProcessStatFields(pid, &getProcessInfo, &flags)) continue;
+                        if (flags & PF_KTHREAD && !includeKthreads) continue;
+                        if (!getProcessInfos(pid)) {
                             getProcessInfo.pid = pid;
-                            // name, majFaults, cputime already filled by
-                            // fillProcessStatFields
-                            rssTotal += getProcessInfo.rssTotal;
-                            pssTotal += getProcessInfo.pssTotal;
-                            shared_clean_total += getProcessInfo.shared_clean_total;
-                            private_dirty_total += getProcessInfo.private_dirty_total;
-                            swap_pss_total += getProcessInfo.swap_pss_total;
-                            addProcessInfo(&getProcessInfo);
-                            noOfPids++;
+                            Process_Info *newNode = malloc(sizeof(Process_Info));
+                            if (newNode) {
+                                memcpy(newNode, &getProcessInfo, sizeof(Process_Info));
+                                newNode->next = NULL;
+                                insert_or_replace_by_pid(&memCompareData, newNode);
+                            }
                         }
                     }
                 }
             }
             closedir(proc);
-        }
-        else
-        {
+        } else {
             printf("Failed to open %s directory: %s\n", PROC_DIR, strerror(errno));
-            fclose(output);
             return -1;
         }
 
-        if (useJsonFormat)
-        {
-#ifdef ENABLE_CJSON
-            // Create root JSON object
-            cJSON *root = cJSON_CreateObject();
-            if (root) {
-                // Add Mem info
-                addMemInfoJSON(root);
+        if (iter == 0) {
+            // First Iteration - Buffer the data, do not create output file
+            free_process_info_list(memBufferData);
+            memBufferData = memCompareData;
+            memCompareData = NULL;
+            printf("* First iteration completed. Buffered data for delta calculations in subsequent iterations.\n");
+        } else {
+            // Only from second iteration onwards, create output file and write
+            char outputfile[512] = {0};
+            snprintf(outputfile, sizeof(outputfile), "%s/%s_%s_iter%d_%s",
+                setup.outputDir, setup.mac, timestamp, iter, setup.fileExt); // iter, not iter+1
 
-                // Add process info (this will also free the linked list)
-                addProcessInfoJSON(root, noOfPids, output);
-
-                // Add process totals
-                addProcessTotalsJSON(root, rssTotal, pssTotal, shared_clean_total, private_dirty_total, swap_pss_total);
-                char *json_string = NULL;
-                if (g_jsonPrettyPrint)
-                {
-                    json_string = cJSON_Print(root);
-                }
-                else
-                {
-                    json_string = cJSON_PrintUnformatted(root);
-                }
-                if (json_string)
-                {
-                    fprintf(output, "%s\n", json_string);
-                    free(json_string);
-                }
-                else
-                {
-                    printf("Failed to print JSON string\n");
-                }
-                // Clean up
-                cJSON_Delete(root);
-                // Ensure head is reset even if addProcessInfoJSON wasn't called
-                // or didn't complete successfully
-                headProcessInfo = NULL;
+            printf("Capturing System wide stats into %s\n", outputfile);
+            FILE *output = fopen(outputfile, "w");
+            if (!output) {
+                printf("%s: Open failed, %d [%s]\n", outputfile, errno, strerror(errno));
+                return -1;
             }
+            build_pss_delta_result();
+            if (useJsonFormat)
+            {
+#ifdef ENABLE_CJSON
+                writePssDeltaJSON(memPssDeltaData, output, g_processLimit);
 #else
-            printf("Warning: JSON format requested but cJSON support not enabled at build time.\n");
-            printf("         Falling back to CSV format.\n");
-            useJsonFormat = false;
+                printf("Warning: JSON format requested but cJSON support not enabled at build time.\n");
+                printf("         Falling back to CSV format.\n");
+                useJsonFormat = false;
 #endif
+            }
+            else
+            {
+                fprintf(output, "FIRMWARE_NAME,MAC_ADDRESS,TIMESTAMP,REPORT_VERSION\n");
+                fprintf(output, "%s,%s,%s,%s\n\n", setup.fwName, setup.mac, ts, reportVersion);
+                saveMeminfo(output);
+                writePssDeltaCSV(memPssDeltaData, output, g_processLimit);
+            }
+
+            fclose(output);
+
+            // Update buffer for next iteration
+            free_process_info_list(memBufferData);
+            memBufferData = memCompareData;
+            memCompareData = NULL;
+            free_process_pss_delta_list(memPssDeltaData);
+            memPssDeltaData = NULL;
         }
-        else
-        {
-            fprintf(output, "FIRMWARE_NAME,MAC_ADDRESS,TIMESTAMP,REPORT_VERSION\n");
-            fprintf(output, "%s,%s,%s,%s\n\n", setup.fwName, setup.mac, ts, reportVersion);
-            saveMeminfo(output);
-            //printf("\nProcessed %u processes\n>> RSS_Total %lu\n>> PSS_Total%lu\n>> Shared_Clean_Total %lu\n>> Private_Dirty_Total %lu\n", noOfPids, rssTotal, pssTotal, shared_clean_total, private_dirty_total);
-            fprintf(output, "Processes:\nPID,EXE,RSS,PSS,SHARED_CLEAN,PRIVATE_DIRTY,SWAP_PSS,MAJ_FAULTS,CPU_TIME\n");
-            writeProcessInfo(noOfPids, output);
-            // Redundant but added for safety - writeProcessInfo already resets headProcessInfo
-            // This ensures it's reset even if writeProcessInfo didn't run completely
-            headProcessInfo = NULL;
-            fprintf(output, "0,Total,%lu,%lu,%lu,%lu,%lu,0,0,0\n", rssTotal, pssTotal, shared_clean_total, private_dirty_total, swap_pss_total);
-        }
-        fclose(output);
 
         if (interval >= 0 && (long_run || iter + 1 < iterations))
         {
-            printf("* %d%s Iteration completed. Sleeping for %d seconds before next iteration... \n", iter + 1, long_run ? "/∞" : "", interval);
+            if (iter != 0) {
+                printf("* %d%s Iteration completed. Sleeping for %d seconds before next iteration... \n", iter, long_run ? "/∞" : "", interval);
+            }
             sleep(interval);
         }
     }
+    free_process_info_list(memBufferData); memBufferData = NULL;
+    free_process_info_list(memCompareData); memCompareData = NULL;
+    free_process_pss_delta_list(memPssDeltaData); memPssDeltaData = NULL;
     printf("\n---- Completed Data Capture ----\n");
     return 0;
 }
 
 int handleConfigMode(const char *confFile, const char *cli_out_dir, int cli_iterations, int cli_interval, bool enableKThreads, bool long_run, bool useJsonFormat)
 {
-    Config_Data config;
+    Config_Data config = {0};
     if (parseConfig(confFile, &config) != 0)
     {
         printf("Error: Failed to parse config file '%s'\n", confFile);
@@ -1151,7 +1243,6 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, int cli_iter
                                     : (config.outputDir[0] ? config.outputDir : DEFAULT_OUT_DIR);
 
     SetupInfo setup = initializeSetup(final_out_dir, useJsonFormat);
-
     // Interval/Iterations logic (CLI > config > default)
     int final_iterations = config.iterations;
     int final_interval = config.interval;
@@ -1196,6 +1287,9 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, int cli_iter
     {
         long_run = false; // If both interval and iterations are specified, it's not a long run
     }
+    free_process_info_list(memBufferData); memBufferData = NULL;
+    free_process_info_list(memCompareData); memCompareData = NULL;
+    free_process_pss_delta_list(memPssDeltaData); memPssDeltaData = NULL;
 
     for (int iter = 0; long_run || iter < final_iterations; iter++)
     {
@@ -1209,34 +1303,42 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, int cli_iter
         strftime(ts, sizeof(ts), "%Y-%m-%d %H:%M:%S", tm_info);
         strftime(timestamp, sizeof(timestamp), "%Y%m%d%H%M%S", tm_info);
 
-        // Generate output file name
-        char outputFilePath[PATH_MAX * 2] = {0};
-        snprintf(outputFilePath, sizeof(outputFilePath), "%s/%s_%s_iter%d_meminsight.%s", setup.outputDir, setup.mac, timestamp, iter+1, setup.fileExt);
+        /* Reset current-iteration container */
+        free_process_info_list(memCompareData); memCompareData = NULL;
+        free_process_pss_delta_list(memPssDeltaData); memPssDeltaData = NULL;
 
-        printf("Capturing Config based  stats into %s\n", outputFilePath);
-        // Open output file
-        FILE *output = fopen(outputFilePath, "w");
-        if (!output)
-        {
-            printf("Error: Failed to open output file '%s' for writing\n", outputFilePath);
-            for (unsigned j = 0; j < config.whiteListCount; j++)
-            {
-                if (config.whitelist[j] != NULL)
-                {
-                    free(config.whitelist[j]);
-                }
-            }
-            if (config.whitelist != NULL)
-            {
-                free(config.whitelist);
-            }
-            return -1;
-        }
+        // // Generate output file name
+        // char outputFilePath[PATH_MAX * 2] = {0};
+        // snprintf(outputFilePath, sizeof(outputFilePath), "%s/%s_%s_iter%d_meminsight.%s", setup.outputDir, setup.mac, timestamp, iter+1, setup.fileExt);
 
-        unsigned long rssTotal = 0, pssTotal = 0, shared_clean_total = 0, private_dirty_total = 0, swap_pss_total = 0;
-        unsigned actualCount = 0;
+        // printf("Capturing Config based stats into %s\n", outputFilePath);
+        // // Open output file
+        // FILE *output = fopen(outputFilePath, "w");
+        // if (!output)
+        // {
+        //     printf("Error: Failed to open output file '%s' for writing\n", outputFilePath);
+        //     for (unsigned j = 0; j < config.whiteListCount; j++)
+        //     {
+        //         if (config.whitelist[j] != NULL)
+        //         {
+        //             free(config.whitelist[j]);
+        //         }
+        //     }
+        //     if (config.whitelist != NULL)
+        //     {
+        //         free(config.whitelist);
+        //     }
+        //     return -1;
+        // }
+
+        // unsigned long rssTotal = 0, pssTotal = 0, shared_clean_total = 0, private_dirty_total = 0, swap_pss_total = 0;
+        // unsigned actualCount = 0;
+
         if (config.whiteListCount > 0)
         {
+            unsigned long rssTotal = 0, pssTotal = 0, shared_clean_total = 0, private_dirty_total = 0, swap_pss_total = 0;
+            unsigned actualCount = 0;
+
             for (unsigned i = 0; i < config.whiteListCount; i++)
             {
                 unsigned int pid = 0;
@@ -1261,20 +1363,24 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, int cli_iter
                     continue; // Skip to next item
                 }
                 if (flags & PF_KTHREAD && !enableKThreads)
-                {             /*PF_KTHREAD*/
+                {
                     continue; // Skip kernel threads if not included
                 }
                 if (!getProcessInfos(pid))
                 {
                     getProcessInfo.pid = pid;
-                    // name, majFaults, cputime already filled by
-                    // fillProcessStatFields
+                    // create node and insert into memCompareData (for delta processing later)
+                    Process_Info *newNode = malloc(sizeof(Process_Info));
+                    if (newNode) {
+                        memcpy(newNode, &getProcessInfo, sizeof(Process_Info));
+                        newNode->next = NULL;
+                        insert_or_replace_by_pid(&memCompareData, newNode);
+                    }
                     rssTotal += getProcessInfo.rssTotal;
                     pssTotal += getProcessInfo.pssTotal;
                     shared_clean_total += getProcessInfo.shared_clean_total;
                     private_dirty_total += getProcessInfo.private_dirty_total;
                     swap_pss_total += getProcessInfo.swap_pss_total;
-                    addProcessInfo(&getProcessInfo);
                     actualCount++;
                 }
                 else
@@ -1283,66 +1389,59 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, int cli_iter
                 }
             }
 
-            if (useJsonFormat)
-            {
-#ifdef ENABLE_CJSON
-                cJSON *root = cJSON_CreateObject();
-                if (root) {
-                    // Add Mem info
-                    addMemInfoJSON(root);
+            if(iter == 0) {
+                free_process_info_list(memBufferData);
+                memBufferData = memCompareData;
+                memCompareData = NULL;
+                printf("* First iteration completed. Buffered whitelist data for delta calculations in subsequent iterations.\n");
+            }
+            else {
+                /* Build pss delta list comparing memCompareData (current) vs memBufferData (previous) */
+                build_pss_delta_result();
 
-                    // Add process info (this will also free the linked list)
-                    addProcessInfoJSON(root, actualCount, output);
+                /* Create output file and write results (JSON/CSV) */
+                char outputFilePath[PATH_MAX * 2] = {0};
+                snprintf(outputFilePath, sizeof(outputFilePath), "%s/%s_%s_iter%d_meminsight.%s", setup.outputDir, setup.mac, timestamp, iter, setup.fileExt);
 
-                    // Add process totals
-                    addProcessTotalsJSON(root, rssTotal, pssTotal, shared_clean_total, private_dirty_total, swap_pss_total);
-                    char *json_string = NULL;
-                    if (g_jsonPrettyPrint)
-                    {
-                        json_string = cJSON_Print(root);
-                    }
-                    else
-                    {
-                        json_string = cJSON_PrintUnformatted(root);
-                    }
-                    if (json_string)
-                    {
-                        fprintf(output, "%s\n", json_string);
-                        free(json_string);
-                    }
-                    else
-                    {
-                        printf("Failed to print JSON string\n");
-                    }
-                    // Clean up
-                    cJSON_Delete(root);
-                    // Ensure head is reset even if addProcessInfoJSON wasn't called
-                    // or didn't complete successfully
-                    headProcessInfo = NULL;
+                printf("Capturing Config based stats into %s\n", outputFilePath);
+                FILE *output = fopen(outputFilePath, "w");
+
+                if (!output)
+                {
+                    printf("Error: Failed to open output file '%s' for writing\n", outputFilePath);
+                    /* cleanup whitelist strings and memory */
+                    for (unsigned j = 0; j < config.whiteListCount; j++) if (config.whitelist[j]) free(config.whitelist[j]);
+                    if (config.whitelist) free(config.whitelist);
+                    return -1;
                 }
+                if (useJsonFormat)
+                {
+#ifdef ENABLE_CJSON
+                    writePssDeltaJSON(memPssDeltaData, output, g_processLimit);
 #else
-                printf("Warning: JSON format requested but cJSON support not enabled at build time.\n");
-                printf("         Falling back to CSV format.\n");
-                useJsonFormat = false;
+                    printf("Warning: JSON format requested but cJSON support not enabled at build time.\n");
+                    printf("         Falling back to CSV format.\n");
+                    writePssDeltaCSV(memPssDeltaData, output, g_processLimit);
 #endif
+                }
+                else {
+                    fprintf(output, "FIRMWARE_NAME,MAC_ADDRESS,TIMESTAMP,REPORT_VERSION\n");
+                    fprintf(output, "%s,%s,%s,%s\n\n", setup.fwName, setup.mac, ts, reportVersion);
+                    saveMeminfo(output);
+                    writePssDeltaCSV(memPssDeltaData, output, g_processLimit);
+                }
+                fclose(output);
+
+                free_process_info_list(memBufferData);
+                memBufferData = memCompareData;
+                memCompareData = NULL;
+                free_process_pss_delta_list(memPssDeltaData);
+                memPssDeltaData = NULL;
             }
-            else
-            {
-                fprintf(output, "FIRMWARE_NAME,MAC_ADDRESS,TIMESTAMP,REPORT_VERSION\n");
-                fprintf(output, "%s,%s,%s,%s\n\n", setup.fwName, setup.mac, ts, reportVersion);
-                saveMeminfo(output); // TODO: based on whitelist count write content
-                fprintf(output, "\nPID,EXE,RSS,PSS,SHARED_CLEAN,PRIVATE_DIRTY,SWAP_PSS,"
-                    "MAJ_FAULTS,CPU_TIME\n"); // TODO: bring inside loop
-                writeProcessInfo(actualCount, output);
-                fprintf(output, "0,Total,%lu,%lu,%lu,%lu\n", rssTotal, pssTotal, shared_clean_total, private_dirty_total);
-            }
-            headProcessInfo = NULL; // Reset for next iteration
         }
-        else
-        {
+        else {
             printf("No whitelist specified in config. Collecting data for all processes\n");
             unsigned int noOfPids = 0;
-
             DIR *proc = opendir(PROC_DIR);
             if (proc)
             {
@@ -1361,68 +1460,55 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, int cli_iter
                                 printf("Failed to fill process stat fields for PID %d\n", pid);
                                 continue;
                             }
-                            if (flags & PF_KTHREAD && !enableKThreads)
-                            {             /*PF_KTHREAD*/
-                                continue; // Skip kernel threads if not included
-                            }
+                            if (flags & PF_KTHREAD && !enableKThreads) continue; // Skip kernel threads if not included
                             if (!getProcessInfos(pid))
                             {
                                 getProcessInfo.pid = pid;
-                                // name, majFaults, cputime already filled by
-                                // fillProcessStatFields
-                                rssTotal += getProcessInfo.rssTotal;
-                                pssTotal += getProcessInfo.pssTotal;
-                                shared_clean_total += getProcessInfo.shared_clean_total;
-                                private_dirty_total += getProcessInfo.private_dirty_total;
-                                swap_pss_total += getProcessInfo.swap_pss_total;
-                                addProcessInfo(&getProcessInfo);
-                                noOfPids++;
+                                Process_Info *newNode = malloc(sizeof(Process_Info));
+                                if (newNode) {
+                                    memcpy(newNode, &getProcessInfo, sizeof(Process_Info));
+                                    newNode->next = NULL;
+                                    insert_or_replace_by_pid(&memCompareData, newNode);
+                                }
                             }
                         }
                     }
                 }
                 closedir(proc);
+            } else {
+                printf("Failed to open %s directory: %s\n", PROC_DIR, strerror(errno));
+                for (unsigned j = 0; j < config.whiteListCount; j++) if (config.whitelist[j]) free(config.whitelist[j]);
+                if (config.whitelist != NULL) free(config.whitelist);
+                return -1;
+            }
+
+            if (iter == 0) {
+                free_process_info_list(memBufferData);
+                memBufferData = memCompareData;
+                memCompareData = NULL;
+                printf("* First iteration completed. Buffered data for delta calculations in subsequent iterations.\n");
+            } else {
+                // Only from second iteration onwards, create output file and write
+                char outputfile[512] = {0};
+                snprintf(outputfile, sizeof(outputfile), "%s/%s_%s_iter%d_%s", setup.outputDir, setup.mac, timestamp, iter, setup.fileExt);
+
+                printf("Capturing System wide stats into %s\n", outputfile);
+                FILE *output = fopen(outputfile, "w");
+                if (!output) {
+                    printf("%s: Open failed, %d [%s]\n", outputfile, errno, strerror(errno));
+                    for (unsigned j = 0; j < config.whiteListCount; j++) if (config.whitelist[j]) free(config.whitelist[j]);
+                    if (config.whitelist) free(config.whitelist);
+                    return -1;
+                }
+                build_pss_delta_result();
                 if (useJsonFormat)
                 {
 #ifdef ENABLE_CJSON
-                    cJSON *root = cJSON_CreateObject();
-                    if (root) {
-                        // Add Mem info
-                        addMemInfoJSON(root);
-
-                        // Add process info (this will also free the linked list)
-                        addProcessInfoJSON(root, noOfPids, output);
-
-                        // Add process totals
-                        addProcessTotalsJSON(root, rssTotal, pssTotal, shared_clean_total, private_dirty_total, swap_pss_total);
-                        char *json_string = NULL;
-                        if (g_jsonPrettyPrint)
-                        {
-                            json_string = cJSON_Print(root);
-                        }
-                        else
-                        {
-                            json_string = cJSON_PrintUnformatted(root);
-                        }
-                        if (json_string)
-                        {
-                            fprintf(output, "%s\n", json_string);
-                            free(json_string);
-                        }
-                        else
-                        {
-                            printf("Failed to print JSON string\n");
-                        }
-                        // Clean up
-                        cJSON_Delete(root);
-                        // Ensure head is reset even if addProcessInfoJSON wasn't called
-                        // or didn't complete successfully
-                        headProcessInfo = NULL;
-                    }
+                    writePssDeltaJSON(memPssDeltaData, output, g_processLimit);q
 #else
                     printf("Warning: JSON format requested but cJSON support not enabled at build time.\n");
                     printf("         Falling back to CSV format.\n");
-                    useJsonFormat = false;
+                    writePssDeltaCSV(memPssDeltaData, output, g_processLimit);
 #endif
                 }
                 else
@@ -1430,31 +1516,29 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, int cli_iter
                     fprintf(output, "FIRMWARE_NAME,MAC_ADDRESS,TIMESTAMP,REPORT_VERSION\n");
                     fprintf(output, "%s,%s,%s,%s\n\n", setup.fwName, setup.mac, ts, reportVersion);
                     saveMeminfo(output);
-                    fprintf(output, "\n\nProcesses:\nPID,EXE,RSS,PSS,SHARED_CLEAN,PRIVATE_DIRTY,SWAP_PSS,MAJ_FAULTS,CPU_TIME\n");
-                    writeProcessInfo(noOfPids, output);
-                    // Redundant but added for safety - writeProcessInfo already resets headProcessInfo
-                    // This ensures it's reset even if writeProcessInfo didn't complete successfully
-                    headProcessInfo = NULL;
-                    fprintf(output, "0,Total,%lu,%lu,%lu,%lu,%lu,0,0,0\n", rssTotal, pssTotal, shared_clean_total, private_dirty_total, swap_pss_total);
+                    writePssDeltaCSV(memPssDeltaData, output, g_processLimit);
                 }
-            }
-            else
-            {
-                printf("Failed to open %s directory: %s\n", PROC_DIR, strerror(errno));
                 fclose(output);
-                return -1;
+
+                /* Rotate buffers */
+                free_process_info_list(memBufferData);
+                memBufferData = memCompareData;
+                memCompareData = NULL;
+                free_process_pss_delta_list(memPssDeltaData);
+                memPssDeltaData = NULL;
             }
         }
-        fclose(output);
 
-        if (final_interval > 0 && iter + 1 < final_iterations)
+        if (final_interval > 0 && (long_run || iter + 1 < final_iterations))
         {
-            printf("* %d/%d Completed. Sleeping for %d seconds before next iteration... \n", iter+1, final_iterations, final_interval);
+            if (iter != 0) {
+                printf("* %d/%d Completed. Sleeping for %d seconds before next iteration... \n", iter+1, final_iterations, final_interval);
+            }
             sleep(final_interval);
         }
     }
 
-    // Free the whitelist memory
+    // Now do cleanup and return
     for (unsigned j = 0; j < config.whiteListCount; j++)
     {
         if (config.whitelist[j] != NULL)
@@ -1481,91 +1565,90 @@ void saveMeminfo(FILE *out)
     FILE *meminfo = fopen(PROC_MEMINFO, "r");
     if (!meminfo) return;
 
-    // Static variables to remember positions across calls
+    /* remember learned file-line positions between calls */
     static int initialized = 0;
-    static int linesToSkipForFields[13] = {0}; // 13 fields
+    static int linesToSkipForFields[13] = {0}; /* 13 fields to track */
     static const char *fieldNames[] = {
-        // MemTotal removed from this list
         "MemFree", "MemAvailable", "Buffers", "Cached",
         "Active(anon)", "Active(file)", "AnonPages", "Shmem", "Slab",
         "KernelStack", "Inactive(anon)", "Inactive(file)", "VmallocUsed"
     };
+    const int FIELD_COUNT = (int)(sizeof(fieldNames) / sizeof(fieldNames[0]));
 
     char line[256];
     char name[64];
     unsigned long value;
 
-    // First run: learn the positions and get MemTotal
-    if (!initialized) {
-        int lineNum = 0;
-        int fieldsFound = 0;
+    /* values[0] == MemTotal, values[1..] correspond to fieldNames[] */
+    unsigned long values[FIELD_COUNT + 1];
+    for (int i = 0; i < FIELD_COUNT + 1; ++i) values[i] = 0;
 
-        // Find and record positions for each field
-        while (fgets(line, sizeof(line), meminfo) && (g_memTotal == 0 || fieldsFound < 13)) {
-            lineNum++;
+    int lineNum = 0;
+    int fieldsFound = 0;
 
-            if (sscanf(line, "%63[^:]: %lu", name, &value) == 2) {
-                // Check for MemTotal separately
-                if (g_memTotal == 0 && strncmp(name, "MemTotal", sizeof("MemTotal") - 1) == 0) {
-                    g_memTotal = value;
-                    fprintf(out, "MemTotal: %lu kB\n", g_memTotal);
-                    continue;
-                }
-                // Check if this is one of our target fields
-                for (int i = 0; i < 13; i++) { // Fixed: loop to 13 elements
-                    if (linesToSkipForFields[i] == 0 && strncmp(name, fieldNames[i], sizeof(fieldNames[i]) - 1) == 0) {
-                        linesToSkipForFields[i] = lineNum;
-                        fprintf(out, "%s: %lu kB\n", name, value);
-                        fieldsFound++;
-                        break;
-                    }
-                }
+    /* single linear scan of /proc/meminfo; either learn positions (first run)
+       or use previously learned line numbers to pick values (subsequent runs).
+       No rewind, no fseek — just a single pass over the newly opened stream. */
+    while (fgets(line, sizeof(line), meminfo) &&
+           ( (!initialized && (g_memTotal == 0 || fieldsFound < FIELD_COUNT))
+             || ( initialized && fieldsFound < FIELD_COUNT) ))
+    {
+        lineNum++;
+        if (sscanf(line, "%63[^:]: %lu", name, &value) != 2) continue;
+
+        if (!initialized) {
+            /* learn MemTotal once */
+            if (g_memTotal == 0 && strcmp(name, "MemTotal") == 0) {
+                g_memTotal = value;
+                values[0] = g_memTotal;
+                continue;
             }
-        }
-        initialized = 1;
-    }
-    // Subsequent runs: use known positions
-    else {
-        // Output MemTotal from global variable
-        fprintf(out, "MemTotal: %lu kB\n", g_memTotal);
 
-        int lineNum = 0;
-        int fieldsFound = 0;
-        int nextFieldIndex = 0;
-        int nextFieldLine = 0;
-
-        // Find the first field to look for
-        for (int i = 0; i < 13; i++) { // Fixed: loop to 13 elements
-            if (linesToSkipForFields[i] > 0 && (nextFieldLine == 0 || linesToSkipForFields[i] < nextFieldLine)) {
-                nextFieldLine = linesToSkipForFields[i];
-                nextFieldIndex = i;
-            }
-        }
-
-        // Process fields in order of appearance in file
-        while (fgets(line, sizeof(line), meminfo) && fieldsFound < 13) {
-            lineNum++;
-
-            // Check if we've reached a line containing a field we want
-            if (lineNum == nextFieldLine) {
-                if (sscanf(line, "%63[^:]: %lu", name, &value) == 2) {
-                    fprintf(out, "%s: %lu kB\n", name, value);
+            /* learn field positions and capture their current values */
+            for (int i = 0; i < FIELD_COUNT; ++i) {
+                if (linesToSkipForFields[i] == 0 && strcmp(name, fieldNames[i]) == 0) {
+                    linesToSkipForFields[i] = lineNum;
+                    values[i + 1] = value;
                     fieldsFound++;
+                    break;
                 }
-                // Find the next field to look for
-                nextFieldLine = 0;
-                for (int i = 0; i < 13; i++) { // Fixed: loop to 13 elements
-                    if (linesToSkipForFields[i] > lineNum && (nextFieldLine == 0 || linesToSkipForFields[i] < nextFieldLine)) {
-                        nextFieldLine = linesToSkipForFields[i];
-                        nextFieldIndex = i;
-                    }
+            }
+        } else {
+            /* subsequent runs: use recorded line numbers to capture values */
+            if (strcmp(name, "MemTotal") == 0) {
+                /* prefer cached total if available */
+                values[0] = g_memTotal ? g_memTotal : value;
+                continue;
+            }
+            for (int i = 0; i < FIELD_COUNT; ++i) {
+                if (linesToSkipForFields[i] == lineNum) {
+                    values[i + 1] = value;
+                    fieldsFound++;
+                    break;
                 }
-                // If no more fields, we're done
-                if (nextFieldLine == 0) break;
             }
         }
+    }
+
+    /* mark initialized after first learning pass */
+    if (!initialized) initialized = 1;
+
+    /* ensure MemTotal has a value */
+    if (values[0] == 0 && g_memTotal) values[0] = g_memTotal;
+
+    /* emit CSV header and a single values line (no units, no trailing comma) */
+    fprintf(out, "MemTotal");
+    for (int i = 0; i < FIELD_COUNT; ++i) {
+        fprintf(out, ",%s", fieldNames[i]);
     }
     fprintf(out, "\n");
+
+    fprintf(out, "%lu", values[0]);
+    for (int i = 1; i < FIELD_COUNT + 1; ++i) {
+        fprintf(out, ",%lu", values[i]);
+    }
+    fprintf(out, "\n\n");
+
     fclose(meminfo);
 }
 
@@ -1684,7 +1767,6 @@ int main(int argc, char *argv[])
 {
     // set defaults
     bool isConfigPresent = false;
-    bool enableKThreads = false;
     bool isTestMode = false;
     bool isSystemWide = true;
     bool long_run = true;
@@ -1693,6 +1775,8 @@ int main(int argc, char *argv[])
     int cli_iterations = -1;
     int cli_interval = -1;
     bool useJsonFormat = false;
+    bool jsonPrettyPrintRequested = false;
+    int exit_code = 0;
 
     // CLI parsing and initialization
     if (argc == 1)
@@ -1706,7 +1790,8 @@ int main(int argc, char *argv[])
         { // config file
             if (i + 1 < argc)
             {
-                strncpy(confFile, argv[i + 1], PATH_MAX - 1);
+                strncpy(confFile, argv[i + 1], sizeof(confFile) - 1);
+                confFile[sizeof(confFile) - 1] = '\0';
                 FILE *fp = fopen(confFile, "r");
                 if (!fp)
                 {
@@ -1728,7 +1813,7 @@ int main(int argc, char *argv[])
         }
         else if (!strncmp(argv[i], "-a", 3) || !strncmp(argv[i], "--all", 6))
         { // include kernel threads
-            enableKThreads = true;
+            g_includeKthreads = true;
         }
         else if (!strncmp(argv[i], "-h", 3) || !strncmp(argv[i], "--help", 7))
         { // help
@@ -1742,7 +1827,8 @@ int main(int argc, char *argv[])
         { // output directory
             if (i + 1 < argc)
             {
-                strncpy(out_dir, argv[i + 1], PATH_MAX - 1);
+                strncpy(out_dir, argv[i + 1], sizeof(out_dir) - 1);
+                out_dir[sizeof(out_dir) - 1] = '\0';
                 i++; // skip next arg (output directory)
             }
             else
@@ -1780,7 +1866,7 @@ int main(int argc, char *argv[])
             }
         }
         else if (!strncmp(argv[i], "-n", 3) || !strncmp(argv[i], "--numprocs", 10))
-        {
+               {
             if (i + 1 < argc)
             {
                 g_processLimit = atoi(argv[i + 1]);
@@ -1797,6 +1883,14 @@ int main(int argc, char *argv[])
                 printf("Error: Missing process count value after %s\n", argv[i]);
                 printHelpAndUsage(argv, false);
             }
+        }
+        else if (!strncmp(argv[i], "--json-pretty", 14))
+        {
+#ifdef ENABLE_CJSON
+            jsonPrettyPrintRequested = true;
+#else
+            printf("Warning: --json-pretty specified but cJSON support not enabled at build time. Ignoring.\n");
+#endif
         }
         else if (!strncmp(argv[i], "--fmt", 6))
         {
@@ -1835,25 +1929,24 @@ int main(int argc, char *argv[])
         {
             printf("%s v%s (Report v%s)\n", XMEMINSIGHT_BIN, xMemInsightVersion, reportVersion);
         }
-        else if (!strncmp(argv[i], "--json-pretty", 14))
-        {
-#ifdef ENABLE_CJSON
-            if (useJsonFormat) {
-                g_jsonPrettyPrint = true;
-            }
-            else {
-                printf("Warning: --json-pretty specified but JSON format not selected. Ignoring.\n");
-            }
-#else
-            printf("Warning: --json-pretty specified but cJSON support not enabled at build time. Ignoring.\n");
-#endif
-        }
+
         else
         {
             printf("Error: Unrecognized argument '%s'\n", argv[i]);
             printHelpAndUsage(argv, false);
         }
     }
+
+#ifdef ENABLE_CJSON
+    if (jsonPrettyPrintRequested) {
+        if (useJsonFormat) {
+            g_jsonPrettyPrint = true;
+            printf("* JSON pretty-print enabled\n");
+        } else {
+            printf("Warning: --json-pretty specified but JSON format not selected. Ignoring.\n");
+        }
+    }
+#endif
 
     printf("\nExecuting: ");
     for (int i = 0; i < argc; i++)
@@ -1862,10 +1955,9 @@ int main(int argc, char *argv[])
     }
     printf("\n");
 
-    includeKthreads = enableKThreads; // Cascade to global for all code paths
     if (isConfigPresent)
     {
-        handleConfigMode(confFile, out_dir, cli_iterations, cli_interval, enableKThreads, long_run, useJsonFormat);
+        exit_code = handleConfigMode(confFile, out_dir, cli_iterations, cli_interval, g_includeKthreads, long_run, useJsonFormat);
     }
     else if (isSystemWide)
     {
@@ -1879,11 +1971,14 @@ int main(int argc, char *argv[])
             final_iterations = (cli_iterations <= 1) ? ((final_interval > 0) ? 2 : DEFAULT_ITERATIONS) : cli_iterations;
         }
         printf("* Running %d iterations with %ds interval (indefinitely?: %s)\n", final_iterations, final_interval, long_run ? "yes" : "no");
-        collectSystemMemoryStats(enableKThreads, out_dir, final_iterations, final_interval, long_run, useJsonFormat);
+        exit_code = collectSystemMemoryStats(g_includeKthreads, out_dir, final_iterations, final_interval, long_run, useJsonFormat);
     }
     else if (isTestMode)
     {
         printf("Running in test mode with minimal config...\n");
         printf("TO BE IMPLEMENTED\n"); // TODO: Implement test mode logic
+        exit_code = 0;
     }
+
+    return exit_code;
 }

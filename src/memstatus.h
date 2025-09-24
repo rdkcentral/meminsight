@@ -37,6 +37,7 @@
 #include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
+#include <ctype.h>
 
 // -----------------------------
 // Debug Macros
@@ -115,6 +116,15 @@ typedef struct process_info
     struct process_info *next;         // Next node in linked list
 } Process_Info;
 
+typedef struct process_pss_delta {
+    unsigned pid;
+    char name[PATH_MAX + 8];
+    unsigned long rssTotal, pssTotal, shared_clean_total, private_dirty_total, swap_pss_total;
+    unsigned long majFaults, cputime;
+    long pssDelta; // signed difference
+    struct process_pss_delta *next;
+} ProcessPssDelta;
+
 /**
  * Struct to hold configuration data parsed from config file.
  */
@@ -153,7 +163,7 @@ typedef enum {
 // Global Variables
 // -----------------------------
 
-extern int includeKthreads;           // Whether to include kernel threads
+extern bool g_includeKthreads;           // Whether to include kernel threads
 extern Process_Info getProcessInfo;   // Temporary struct for collecting process info
 extern Process_Info *headProcessInfo; // Head of linked list
 extern OutputFormat g_outputFormat;   // Global output format setting
@@ -181,13 +191,19 @@ int parseConfig(const char *configFile, Config_Data *config);
 int collectSystemMemoryStats(bool includeKthreads, const char *outDir, int iterations, int interval, bool long_run, bool useJsonFormat);
 int handleConfigMode(const char *confFile, const char *cli_out_dir, int cli_iterations, int cli_interval, bool enableKThreads, bool long_run, bool useJsonFormat);
 int fillProcessStatFields(unsigned pid, Process_Info *info, unsigned *flagsOut);
+void add_process_pss_delta(Process_Info *current, Process_Info *previous, ProcessPssDelta **resultHead);
+void insert_sorted_by_pss_delta(ProcessPssDelta **head, ProcessPssDelta *newNode);
+Process_Info* find_process_info(Process_Info *head, unsigned pid, const char *name);
+void build_pss_delta_result(void);
+void free_process_info_list(Process_Info *head);
+void free_process_pss_delta_list(ProcessPssDelta *head);
+void writePssDeltaCSV(ProcessPssDelta *head, FILE *output, int limit);
 
 #ifdef ENABLE_CJSON
+void writePssDeltaJSON(ProcessPssDelta *head, FILE *output, int limit);
 void addMemInfoJSON(cJSON *root);
 void addProcessInfoJSON(cJSON *root, unsigned noOfPids, FILE *output);
-void addProcessTotalsJSON(cJSON *root, unsigned long rssTotal, unsigned long pssTotal,
-        unsigned long shared_clean_total, unsigned long private_dirty_total,
-        unsigned long swap_pss_total);
+void addProcessTotalsJSON(cJSON *root, unsigned long rssTotal, unsigned long pssTotal, unsigned long shared_clean_total, unsigned long private_dirty_total, unsigned long swap_pss_total);
 #endif
 
 #endif // MEMSTATUS_H
