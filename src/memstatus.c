@@ -40,18 +40,13 @@ Process_Info *memCompareData = NULL;      // Holds current iteration's process i
 ProcessPssDelta *memPssDeltaData = NULL;  // Holds PSS delta information
 
 // Initialize format based on compile-time setting
-#if defined(DEFAULT_FORMAT_JSON)
-#ifdef ENABLE_CJSON
+#if defined(DEFAULT_FORMAT_JSON) && defined(ENABLE_CJSON)
 OutputFormat g_outputFormat = FORMAT_JSON;
-bool g_jsonPrettyPrint = false; // Do not pretty print JSON by default
 #else
 OutputFormat g_outputFormat = FORMAT_CSV;
 #endif
-#elif defined(DEFAULT_FORMAT_CSV)
-OutputFormat g_outputFormat = FORMAT_CSV;
-#else
-OutputFormat g_outputFormat = FORMAT_CSV; // Default to CSV if not specified
-#endif
+
+bool g_jsonPrettyPrint = false;
 
 static const char deviceIdentifierName[] = DEVICE_IDENTIFIER;
 static const char xMemInsightVersion[] = "" XMEMINSIGHT_MAJOR_VERSION "." XMEMINSIGHT_MINOR_VERSION "";
@@ -1504,7 +1499,7 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, int cli_iter
                 if (useJsonFormat)
                 {
 #ifdef ENABLE_CJSON
-                    writePssDeltaJSON(memPssDeltaData, output, g_processLimit);q
+                    writePssDeltaJSON(memPssDeltaData, output, g_processLimit);
 #else
                     printf("Warning: JSON format requested but cJSON support not enabled at build time.\n");
                     printf("         Falling back to CSV format.\n");
