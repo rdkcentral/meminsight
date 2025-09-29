@@ -697,7 +697,7 @@ int getProcessInfos(unsigned pid)
                         {
                             PRINT_DBG_SCANNED("Read shared_clean (%u)  %u/%u lines --> %s\r", shared_clean, skipped,
                                               lines_To_skip, tmp);
-                            getProcessInfo.shared_clean_total += shared_clean;
+                            getProcessInfo.shared_clean_total += shared_clean? pss:0;
 
                             if (!prev_pss)
                             {
