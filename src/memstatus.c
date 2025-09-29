@@ -866,9 +866,9 @@ int getProcessInfos(unsigned pid)
                         // shared_clean = 0;
                         if (sscanf(tmp, "Shared_Clean: %u kB", &shared_clean))
                         {
-                            //PRINT_DBG_SCANNED("Read shared_clean (%u)  %u/%u lines --> %s\r", shared_clean, skipped, lines_To_skip, tmp);
-                            getProcessInfo.shared_clean_total += shared_clean;
 
+                            //PRINT_DBG_SCANNED("Read shared_clean (%u)  %u/%u lines --> %s\r", shared_clean, skipped, lines_To_skip, tmp);
+                            getProcessInfo.shared_clean_total += shared_clean? pss: 0;
                             if (!prev_pss)
                             {
                                 // No need to look at private dirty and swap pss
