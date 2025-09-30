@@ -29,18 +29,28 @@ jobs:
         run: |
           sh cov_build.sh
 
+      - name: Verify build output
+        run: |
+          ls -la xmeminsight || echo "Build artifact not found"
+          file xmeminsight || echo "Cannot check file type"
+          echo "Build verification complete"
+
       - name: Locate built binary and expose at repo root
         run: |
           # look for an executable named xmeminsight anywhere under the repo
           BINARY=$(find . -type f -name xmeminsight -perm /111 -print -quit || true)
           if [ -z "$BINARY" ]; then
             echo "ERROR: xmeminsight binary not found after build. Listing likely locations for debugging:"
-            find . -maxdepth 4 -type f -name 'xmeminsight*' -print || true
+            find . -maxdepth 6 -type f -name 'xmeminsight*' -print || true
             exit 1
           fi
           echo "Found xmeminsight at: $BINARY"
-          cp "$BINARY" ./xmeminsight
-          chmod +x ./xmeminsight
+          if [ "$BINARY" = "./xmeminsight" ]; then
+            echo "Binary already at repo root; skipping copy"
+          else
+            cp "$BINARY" ./xmeminsight
+            chmod +x ./xmeminsight
+          fi
           ls -la ./xmeminsight
 
       - name: Install Dependencies (valgrind, yes)
