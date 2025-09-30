@@ -55,25 +55,22 @@ if command -v ldd >/dev/null 2>&1; then
 fi
 
 echo "==== Case 1: direct args ===="
-echo "Running: valgrind ${VALGRIND_OPTS} ${BIN} --interval 2 --iterations 5 -n 2 --fmt json"
-valgrind ${VALGRIND_OPTS} "${BIN}" --interval 2 --iterations 5 -n 2 --fmt json || echo "Case 1 exited non-zero"
+echo "Running: valgrind ${VALGRIND_OPTS} ${BIN} --interval 2 --iterations 5"
+valgrind ${VALGRIND_OPTS} "${BIN}" --interval 2 --iterations 5 || echo "Case 1 exited non-zero"
 
 echo
 echo "==== Case 2: config file + background yes ===="
 cat > "${CONF}" <<'EOF'
 # sample.conf for xmeminsight
-# Output directory for reports
-output_dir = /tmp/xmeminsight_reports
-# Number of iterations to run
-iterations = 5
-# Interval (in seconds) between iterations
-interval = 2
-# Log level
+process_whitelist=1,yes
+output_dir=/tmp/xmeminsight_reports
+iterations=5
+interval=2
 log_level = INFO
-# Whitelist of process names or PIDs to monitor (comma-separated)
-process_whitelist = 1,yes
-EOF
 
+EOF
+echo "==== Conf file:"
+cat ${CONF}
 # start yes in background
 yes >/dev/null 2>&1 &
 YES_PID=$!
