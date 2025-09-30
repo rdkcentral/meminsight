@@ -35,8 +35,17 @@ jobs:
           file xmeminsight || echo "Cannot check file type"
           echo "Build verification complete"
 
-      # - name: Run tests (optional)
-      #   run: |
-      #     # If you have tests to run after building, you can add them here
-      #     # For example:
-      #     make test
+      - name: Install Dependencies (valgrind, yes)
+        run: |
+          apt-get update
+          apt-get install -y valgrind coreutils
+
+      - name: Ensure runner script is executable
+        run: |
+          chmod +x ./safe_run_xmem.sh || true
+          ls -la ./safe_run_xmem.sh || echo "safe_run_xmem.sh not found"
+
+      - name: Run Valgrind cases using safe_run_xmem.sh
+        run: |
+          ./safe_run_xmem.sh
+
