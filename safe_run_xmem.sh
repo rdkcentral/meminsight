@@ -26,9 +26,37 @@ CONF="${ROOT_DIR}/sample.conf"
 
 VALGRIND_OPTS="-s --leak-check=full --show-leak-kinds=all --track-origins=yes"
 
+# Try to locate binary if not present at expected location
+if [ ! -f "${BIN}" ]; then
+  echo "xmeminsight not found at ${BIN}, searching the repo..."
+  FOUND=$(find "${ROOT_DIR}" -type f -name xmeminsight -print -quit 2>/dev/null || true)
+  if [ -n "${FOUND}" ]; then
+    BIN="${FOUND}"
+    echo "Found xmeminsight at: ${BIN}"
+  else
+    echo "ERROR: xmeminsight binary not found after build."
+    find "${ROOT_DIR}" -maxdepth 6 -type f -name 'xmeminsight*' -print || true
+    exit 1
+  fi
+fi
+
+echo "Using binary: ${BIN}"
+ls -la "${BIN}" || true
+file "${BIN}" || true
+
+# Show dynamic linker / missing libs info
+if command -v readelf >/dev/null 2>&1; then
+  echo "ELF program headers (interpreter if any):"
+  readelf -l "${BIN}" 2>/dev/null | awk '/INTERP/ {print;exit}' || true
+fi
+if command -v ldd >/dev/null 2>&1; then
+  echo "ldd output (may fail for non-native binaries):"
+  ldd "${BIN}" 2>&1 || true
+fi
+
 echo "==== Case 1: direct args ===="
-echo "Running: valgrind ${VALGRIND_OPTS} ${BIN} --interval 2 --iterations 5 -n 2"
-valgrind ${VALGRIND_OPTS} "${BIN}" --interval 2 --iterations 5 -n 2 || echo "Case 1 exited non-zero"
+echo "Running: valgrind ${VALGRIND_OPTS} ${BIN} --interval 2 --iterations 5 -n 2 --fmt json"
+valgrind ${VALGRIND_OPTS} "${BIN}" --interval 2 --iterations 5 -n 2 --fmt json || echo "Case 1 exited non-zero"
 
 echo
 echo "==== Case 2: config file + background yes ===="
@@ -36,16 +64,12 @@ cat > "${CONF}" <<'EOF'
 # sample.conf for xmeminsight
 # Output directory for reports
 output_dir = /tmp/xmeminsight_reports
-
 # Number of iterations to run
 iterations = 5
-
 # Interval (in seconds) between iterations
 interval = 2
-
 # Log level
 log_level = INFO
-
 # Whitelist of process names or PIDs to monitor (comma-separated)
 process_whitelist = 1,yes
 EOF
