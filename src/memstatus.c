@@ -56,6 +56,18 @@ static const char reportVersion[] =  "" REPORT_MAJOR_VERSION "." REPORT_MINOR_VE
 // Utility Functions
 // -----------------------------
 
+/**
+ * @brief Trim leading and trailing whitespace from a NUL-terminated string in-place.
+ *
+ * Removes characters for which isspace((unsigned char)c) returns true from the
+ * start and end of the string. If the string pointer is NULL the function is a no-op.
+ *
+ * @param[in,out] s Pointer to mutable NUL-terminated string to trim.
+ *
+ * @note The trimming is done in-place; the input buffer contents are shifted
+ *       using memmove when leading whitespace is present.
+ * @thread-safety Not thread-safe for the same buffer; callers must synchronize.
+ */
 static void trim_whitespace(char *s) {
     if (!s) return;
     char *p = s;
@@ -66,8 +78,16 @@ static void trim_whitespace(char *s) {
 }
 
 /**
- * Ensures that the specified output directory exists.
- * If it doesn't exist, it attempts to create it.
+ * @brief Ensure a directory exists, creating it if necessary.
+ *
+ * If the directory does not exist, attempts to create it with mode 0755.
+ *
+ * @param[in] dir Path to the directory to ensure (must be a valid C string).
+ * @return true if the directory already existed or was created successfully.
+ * @return false if the directory could not be created or stat failed.
+ *
+ * @note This function is not recursive: parent directories must already exist.
+ * @note On failure a diagnostic message is printed using strerror(errno).
  */
 static bool ensure_output_dir(const char *dir)
 {
@@ -87,8 +107,22 @@ static bool ensure_output_dir(const char *dir)
 }
 
 /**
- * Reads a property value from a file in "key=value" format.
- * Returns 1 if found, 0 otherwise.
+ * @brief Read a property value from a "key=value" style file.
+ *
+ * Scans the given file line-by-line for a key that exactly matches the provided
+ * property name and returns the corresponding value (trimmed of leading/trailing
+ * whitespace and newline characters).
+ *
+ * @param[in]  filename         Path to the property file to open.
+ * @param[in]  property         Property name to look up (exact match).
+ * @param[out] propertyValue    Buffer to receive the property's value (may be NULL).
+ * @param[in]  propertyValueLen Size of propertyValue buffer in bytes.
+ * @return 1 if the property was found and copied (propertyValue set when non-NULL).
+ * @return 0 if the property was not found or the file could not be opened.
+ *
+ * @note If propertyValue is provided it is always NUL-terminated. If not found
+ *       and propertyValue is provided it is set to an empty string.
+ * @thread-safety Not thread-safe with respect to the same output buffer.
  */
 int getPropertyFromFile(const char *filename, const char *property, char *propertyValue, size_t propertyValueLen)
 {
@@ -148,52 +182,77 @@ int getPropertyFromFile(const char *filename, const char *property, char *proper
 }
 
 /**
- * Reads the firmware image name from /version.txt.
- * Returns 1 if found, 0 otherwise. Writes result to fwName buffer.
+ * @brief Read the firmware image name from VERSION_FILE.
+ *
+ * Searches VERSION_FILE for the first occurrence of the literal "imagename:"
+ * and copies the text that follows (trimmed of leading whitespace and up to the
+ * next newline/carriage return) into the provided buffer.
+ *
+ * @param[out] fwName    Buffer to receive the firmware image name (must be non-NULL).
+ * @param[in]  fwNameLen Size of fwName buffer in bytes.
+ * @return 1 if an image name was found and written to fwName.
+ * @return 0 on any error or if the imagename was not found; on failure the
+ *         DEFAULT_FW_NAME is copied into fwName (if fwName is valid).
+ *
+ * @note On invalid parameters the function prints an error and returns 0.
+ * @thread-safety Not thread-safe for the same buffer.
  */
-
- int getFirmwareImageName(char *fwName, size_t fwNameLen)
- {
-    if (!fwName || fwNameLen == 0)
-    {
-        printf("Invalid parameter for firmware name\n");
-        return 0;
-    }
-    FILE *fp = fopen(VERSION_FILE, "r");
-    if (!fp)
-    {
-        strncpy(fwName, DEFAULT_FW_NAME, fwNameLen - 1);
-        fwName[fwNameLen - 1] = '\0';
-        return 0;
-    }
-    char line[FW_LEN + 32] = {0};
-    if (fgets(line, sizeof(line), fp))
-    {
-        char *p = strstr(line, "imagename:");
-        if (p)
-        {
-            p += strlen("imagename:");
-            while (*p == ' ' || *p == '\t') p++;
-            size_t len = strcspn(p, "\r\n");
-            if (len >= fwNameLen)
-            {
-                len = fwNameLen - 1;
-            }
-            strncpy(fwName, p, len);
-            fwName[len] = '\0';
-            fclose(fp);
-            return 1;
-        }
-    }
-    fclose(fp);
-    strncpy(fwName, DEFAULT_FW_NAME, fwNameLen - 1);
-    fwName[fwNameLen - 1] = '\0';
-    return 0;
- }
+int getFirmwareImageName(char *fwName, size_t fwNameLen)
+{
+   if (!fwName || fwNameLen == 0)
+   {
+       printf("Invalid parameter for firmware name\n");
+       return 0;
+   }
+   FILE *fp = fopen(VERSION_FILE, "r");
+   if (!fp)
+   {
+       strncpy(fwName, DEFAULT_FW_NAME, fwNameLen - 1);
+       fwName[fwNameLen - 1] = '\0';
+       return 0;
+   }
+   char line[FW_LEN + 32] = {0};
+   if (fgets(line, sizeof(line), fp))
+   {
+       char *p = strstr(line, "imagename:");
+       if (p)
+       {
+           p += strlen("imagename:");
+           while (*p == ' ' || *p == '\t') p++;
+           size_t len = strcspn(p, "\r\n");
+           if (len >= fwNameLen)
+           {
+               len = fwNameLen - 1;
+           }
+           strncpy(fwName, p, len);
+           fwName[len] = '\0';
+           fclose(fp);
+           return 1;
+       }
+   }
+   fclose(fp);
+   strncpy(fwName, DEFAULT_FW_NAME, fwNameLen - 1);
+   fwName[fwNameLen - 1] = '\0';
+   return 0;
+}
 
 /**
- * Retrieves the MAC address for a given network interface.
- * Returns the number of characters written to macAddress.
+ * @brief Retrieve the hardware (MAC) address for a network interface.
+ *
+ * Queries the kernel via ioctl(SIOCGIFHWADDR) for the interface hardware
+ * address and formats it as a lowercase hex string without separators:
+ * e.g. "012345abcdef".
+ *
+ * @param[in]  iface     Network interface name (e.g. "eth0").
+ * @param[out] macAddress Buffer to receive the formatted MAC string.
+ * @param[in]  szBufSize Size of macAddress buffer; should be at least 18 bytes.
+ * @return Number of characters written (excluding terminating NUL) on success.
+ * @return 0 on failure.
+ *
+ * @note On failure diagnostic messages are printed. Caller must provide a
+ *       sufficiently sized buffer; when ret >= szBufSize the function treats
+ *       it as an error and returns 0.
+ * @thread-safety Not thread-safe for the same buffer.
  */
 size_t getMacAddress(const char *iface, char *macAddress, size_t szBufSize)
 {
@@ -231,6 +290,14 @@ size_t getMacAddress(const char *iface, char *macAddress, size_t szBufSize)
     return ret;
 }
 
+/**
+ * @brief Free a linked list of Process_Info nodes.
+ *
+ * Frees every node in the singly-linked list via free(). The function does not
+ * free any external strings since Process_Info fields are embedded arrays.
+ *
+ * @param[in] head Head of the Process_Info list (may be NULL).
+ */
 void free_process_info_list(Process_Info *head) {
     while(head) {
         Process_Info *tmp = head;
@@ -239,6 +306,14 @@ void free_process_info_list(Process_Info *head) {
     }
 }
 
+/**
+ * @brief Free a linked list of ProcessPssDelta nodes.
+ *
+ * Frees every node in the singly-linked list via free(). The function does not
+ * free any external strings since ProcessPssDelta fields are embedded arrays.
+ *
+ * @param[in] head Head of the ProcessPssDelta list (may be NULL).
+ */
 void free_process_pss_delta_list(ProcessPssDelta *head) {
     while(head) {
         ProcessPssDelta *tmp = head;
@@ -247,6 +322,19 @@ void free_process_pss_delta_list(ProcessPssDelta *head) {
     }
 }
 
+/**
+ * @brief Insert newNode into a PID-sorted singly-linked Process_Info list,
+ *        replacing any existing node with the same pid.
+ *
+ * Maintains ascending order by pid. If a node with newNode->pid already exists
+ * it will be freed and replaced; ownership of newNode transfers to the list.
+ *
+ * @param[in,out] head    Pointer to the head pointer of the list.
+ * @param[in]     newNode Node to insert (must be heap-allocated).
+ *
+ * @note If head or newNode is NULL the function does nothing.
+ * @thread-safety Callers must synchronize concurrent access to the list.
+ */
 void insert_or_replace_by_pid(Process_Info **head, Process_Info *newNode) {
     if (!head || !newNode) return;
     Process_Info **pp = head;
@@ -265,6 +353,19 @@ void insert_or_replace_by_pid(Process_Info **head, Process_Info *newNode) {
     }
 }
 
+/**
+ * @brief Write PSS-delta process data to an open FILE in CSV format.
+ *
+ * Emits a CSV header then up to 'limit' rows from the ProcessPssDelta list.
+ * Does not close the provided FILE*.
+ *
+ * CSV columns:
+ *   PID,EXE,RSS,PSS,SHARED_CLEAN,PRIVATE_DIRTY,SWAP_PSS,MAJ_FAULTS,CPU_TIME,PSS_DELTA
+ *
+ * @param[in] head   Head of ProcessPssDelta linked list (may be NULL).
+ * @param[in] output Open FILE* to write CSV data to (must be non-NULL).
+ * @param[in] limit  Maximum number of rows to write; if limit <= 0 no rows are written.
+ */
 void writePssDeltaCSV(ProcessPssDelta *head, FILE *output, int limit) {
     fprintf(output, "PID,EXE,RSS,PSS,SHARED_CLEAN,PRIVATE_DIRTY,SWAP_PSS,MAJ_FAULTS,CPU_TIME,PSS_DELTA\n");
     int count = 0;
@@ -323,6 +424,16 @@ void writePssDeltaJSON(ProcessPssDelta *head, FILE *output, int limit) {
 }
 #endif
 
+/**
+ * @brief Insert a ProcessPssDelta node into a list sorted by descending pssDelta.
+ *
+ * Inserts newNode into *head maintaining descending order by node->pssDelta.
+ * If *head is NULL newNode becomes the head. This function does not copy or
+ * duplicate newNode; ownership is transferred to the list.
+ *
+ * @param[in,out] head    Pointer to the list head pointer.
+ * @param[in]     newNode Node to insert (must be heap allocated and non-NULL).
+ */
 void insert_sorted_by_pss_delta(ProcessPssDelta **head, ProcessPssDelta *newNode) {
     if (!head || !newNode) return;
     if (!*head || newNode->pssDelta > (*head)->pssDelta) {
@@ -338,6 +449,18 @@ void insert_sorted_by_pss_delta(ProcessPssDelta **head, ProcessPssDelta *newNode
     curr->next = newNode;
 }
 
+/**
+ * @brief Find a Process_Info node by pid and name.
+ *
+ * Walks the singly-linked list starting at head and returns the first node
+ * whose pid equals the provided pid and whose name matches (bounded by the
+ * node's name buffer size).
+ *
+ * @param[in] head Head of the Process_Info list.
+ * @param[in] pid  PID to match.
+ * @param[in] name Process name to match (NUL-terminated).
+ * @return Pointer to the matching Process_Info node, or NULL if not found.
+ */
 Process_Info* find_process_info(Process_Info *head, unsigned pid, const char *name) {
     while (head) {
         if (head->pid == pid && strncmp(head->name, name, sizeof(head->name)) == 0) {
@@ -348,6 +471,18 @@ Process_Info* find_process_info(Process_Info *head, unsigned pid, const char *na
     return NULL;
 }
 
+/**
+ * @brief Create a ProcessPssDelta node from current and previous Process_Info and insert it.
+ *
+ * Allocates a ProcessPssDelta node, populates it from the current Process_Info,
+ * computes pssDelta as (current.pssTotal - previous.pssTotal) if previous is
+ * non-NULL, otherwise uses current.pssTotal. The new node is inserted into the
+ * result list pointed to by resultHead in descending pssDelta order.
+ *
+ * @param[in]  current    Current iteration Process_Info (required).
+ * @param[in]  previous   Previous iteration Process_Info for same process (may be NULL).
+ * @param[in,out] resultHead Pointer to the head pointer of the ProcessPssDelta list.
+ */
 void add_process_pss_delta(Process_Info *current, Process_Info *previous, ProcessPssDelta **resultHead) {
     if (!current || !resultHead) return;
 
@@ -370,6 +505,13 @@ void add_process_pss_delta(Process_Info *current, Process_Info *previous, Proces
     insert_sorted_by_pss_delta(resultHead, node);
 }
 
+/**
+ * @brief Build the PSS-delta result list by comparing current vs previous buffers.
+ *
+ * Frees any existing memPssDeltaData, then for each Process_Info node in
+ * memCompareData finds the corresponding previous node in memBufferData and
+ * produces a sorted ProcessPssDelta list stored in memPssDeltaData.
+ */
 void build_pss_delta_result(void) {
     free_process_pss_delta_list(memPssDeltaData);
     memPssDeltaData = NULL;
@@ -381,6 +523,20 @@ void build_pss_delta_result(void) {
     }
 }
 
+/**
+ * @brief Initialize runtime setup information (output dir, MAC, firmware, ext).
+ *
+ * Populates a SetupInfo struct:
+ *   - chooses an output directory (outDir or default),
+ *   - attempts to create the directory,
+ *   - retrieves device MAC into info.mac (falls back to DEFAULT_MAC on failure),
+ *   - reads firmware image name into info.fwName (falls back to DEFAULT_FW_NAME),
+ *   - sets file extension based on useJsonFormat.
+ *
+ * @param[in] outDir        Preferred output directory (may be NULL or empty).
+ * @param[in] useJsonFormat True to use JSON file extension, otherwise CSV.
+ * @return SetupInfo populated structure (by-value).
+ */
 SetupInfo initializeSetup(const char *outDir, bool useJsonFormat)
 {
     SetupInfo info = {0};
@@ -407,9 +563,11 @@ SetupInfo initializeSetup(const char *outDir, bool useJsonFormat)
     return info;
 }
 
-
 /**
- * Checks if a string represents a valid PID (all digits).
+ * @brief Check whether a string is a valid PID (contains only digits).
+ *
+ * @param[in] str NUL-terminated string to test.
+ * @return 1 if str is non-empty and contains only digits, otherwise 0.
  */
 int isPID(const char *str)
 {
@@ -419,8 +577,14 @@ int isPID(const char *str)
 }
 
 /**
- * Finds the PID of a process by its name.
- * Returns 1 if found, 0 otherwise.
+ * @brief Find the PID for a process by its executable name.
+ *
+ * Scans /proc for numeric entries, reads /proc/<pid>/comm and compares the
+ * process name to procName. On success writes the PID to pidOut.
+ *
+ * @param[in]  procName Target process name (NUL-terminated).
+ * @param[out] pidOut   Pointer to receive the found PID on success.
+ * @return 1 if a matching process was found and pidOut set, otherwise 0.
  */
 int getPIDByProcessName(const char *procName, unsigned int *pidOut)
 {
@@ -462,8 +626,17 @@ int getPIDByProcessName(const char *procName, unsigned int *pidOut)
 }
 
 /**
- * Fills process statistics fields from /proc/[pid]/stat.
- * Returns 1 on success, 0 on failure.
+ * @brief Populate Process_Info fields from /proc/<pid>/stat.
+ *
+ * Opens and parses the /proc/<pid>/stat file to extract the process name,
+ * flags, major faults, and CPU time (utime + stime). The name is copied into
+ * info->name (bounded by the buffer size). If flagsOut is non-NULL the parsed
+ * process flags are written to *flagsOut.
+ *
+ * @param[in]  pid      PID of the process to inspect.
+ * @param[out] info     Pointer to Process_Info to populate (must be non-NULL).
+ * @param[out] flagsOut Optional pointer to receive parsed flags (may be NULL).
+ * @return 1 on success, 0 on failure (file open/parse errors).
  */
 int fillProcessStatFields(unsigned pid, Process_Info *info, unsigned *flagsOut)
 {
@@ -516,8 +689,21 @@ int fillProcessStatFields(unsigned pid, Process_Info *info, unsigned *flagsOut)
 // -----------------------------
 
 /**
- * Parses a configuration file for whitelist, output file, iterations,
- * interval, and log level. Returns 0 on success, -1 on failure.
+ * @brief Parse a .conf configuration file into a Config_Data struct.
+ *
+ * Recognizes keys:
+ *   - process_whitelist (comma-separated list)
+ *   - output_dir
+ *   - iterations
+ *   - interval
+ *   - log_level
+ *
+ * Allocates memory for config->whitelist entries (caller must free on error
+ * or when done). Performs defensive cleanup on allocation failures.
+ *
+ * @param[in]  configPath Path to the .conf file (must end with ".conf").
+ * @param[out] config     Pointer to Config_Data to populate (must be non-NULL).
+ * @return 0 on success, -1 on failure.
  */
 int parseConfig(const char *configPath, Config_Data *config)
 {
@@ -630,8 +816,12 @@ int parseConfig(const char *configPath, Config_Data *config)
 // -----------------------------
 
 /**
- * Writes all process info from the linked list to stdout and the output file.
+ * @brief Write all process info from the linked list to stdout and the output file.
+ *
  * Frees each node after writing.
+ *
+ * @param[in] noOfPids Number of PIDs expected (used for diagnostics).
+ * @param[in] output   Open FILE* to write CSV lines to (must be non-NULL).
  */
 void writeProcessInfo(unsigned noOfPids, FILE *output)
 {
@@ -667,16 +857,18 @@ void writeProcessInfo(unsigned noOfPids, FILE *output)
 
 #ifdef ENABLE_CJSON
 /**
- * Adds process totals to the root JSON object as "process_total"
+ * @brief Add process totals to a cJSON root object as "process_total".
  *
- * @param root The root JSON object
- * @param rssTotal Total RSS value
- * @param pssTotal Total PSS value
- * @param shared_clean_total Total shared clean value
- * @param private_dirty_total Total private dirty value
- * @param swap_pss_total Total swap PSS value
+ * Adds rss_total, pss_total, shared_clean_total, private_dirty_total and
+ * swap_pss_total fields to the provided JSON object.
+ *
+ * @param[in] root                cJSON root object (must be non-NULL).
+ * @param[in] rssTotal            Total RSS value.
+ * @param[in] pssTotal            Total PSS value.
+ * @param[in] shared_clean_total  Total shared clean value.
+ * @param[in] private_dirty_total Total private dirty value.
+ * @param[in] swap_pss_total      Total swap PSS value.
  */
-
 void addProcessTotalsJSON(cJSON *root, unsigned long rssTotal, unsigned long pssTotal,
         unsigned long shared_clean_total, unsigned long private_dirty_total,
         unsigned long swap_pss_total)
@@ -702,8 +894,12 @@ void addProcessTotalsJSON(cJSON *root, unsigned long rssTotal, unsigned long pss
 #endif
 
 /**
- * Inserts a new process info node into the linked list, sorted by descending
- * pssTotal.
+ * @brief Insert a new Process_Info node into the linked list sorted by descending pssTotal.
+ *
+ * Copies the provided structure into a heap node and inserts it so the list
+ * remains ordered by pssTotal (largest first).
+ *
+ * @param[in] addPInfo Pointer to Process_Info to insert (must be non-NULL).
  */
 void addProcessInfo(Process_Info *addPInfo)
 {
@@ -750,8 +946,13 @@ void addProcessInfo(Process_Info *addPInfo)
 // -----------------------------
 
 /**
- * Parses /proc/[pid]/smaps for a given process and accumulates memory
- * statistics. Returns 0 on success, 1 on failure.
+ * @brief Parse /proc/[pid]/smaps for a process and accumulate memory statistics.
+ *
+ * Reads the smaps file and accumulates rssTotal, pssTotal, shared_clean_total,
+ * private_dirty_total and swap_pss_total into the global getProcessInfo struct.
+ *
+ * @param[in] pid PID of the process to parse.
+ * @return 0 on success, 1 on failure (e.g. file open error).
  */
 int getProcessInfos(unsigned pid)
 {
@@ -1056,7 +1257,10 @@ int getProcessInfos(unsigned pid)
 }
 
 /**
- * Prints detailed help and usage information and exits.
+ * @brief Print detailed help and usage information and exit.
+ *
+ * @param[in] argv     Program argv array (used for examples).
+ * @param[in] moreInfo If true prints extended help.
  */
 void printHelpAndUsage(char *argv[], bool moreInfo)
 {
@@ -1106,6 +1310,20 @@ void printHelpAndUsage(char *argv[], bool moreInfo)
     exit(1);
 }
 
+/**
+ * @brief Collect system-wide memory and per-process stats across iterations and write files.
+ *
+ * Coordinates scanning processes, building PSS-delta results, and writing
+ * outputs (CSV or JSON) using initializeSetup for environment info.
+ *
+ * @param[in] includeKthreads Include kernel threads in collection.
+ * @param[in] outDir         Output directory path.
+ * @param[in] iterations     Number of iterations to perform.
+ * @param[in] interval       Sleep interval in seconds between iterations.
+ * @param[in] long_run       If true run indefinitely (ignore iterations).
+ * @param[in] useJsonFormat  If true produce JSON output (requires cJSON).
+ * @return 0 on success, non-zero on failure.
+ */
 int collectSystemMemoryStats(bool includeKthreads, const char *outDir, int iterations, int interval, bool long_run, bool useJsonFormat){
     SetupInfo setup = initializeSetup(outDir, useJsonFormat);
     // Reset globals
@@ -1223,6 +1441,21 @@ int collectSystemMemoryStats(bool includeKthreads, const char *outDir, int itera
     return 0;
 }
 
+/**
+ * @brief Handle operation in config mode: load config and collect stats accordingly.
+ *
+ * Parses the provided config file, resolves CLI vs config precedence, and runs
+ * collections constrained to the whitelist or system-wide as configured.
+ *
+ * @param[in] confFile      Path to the config file.
+ * @param[in] cli_out_dir   Output directory from CLI (may be empty).
+ * @param[in] cli_iterations CLI-provided iterations (-1 if not set).
+ * @param[in] cli_interval  CLI-provided interval (-1 if not set).
+ * @param[in] enableKThreads Include kernel threads if true.
+ * @param[in] long_run      If true run indefinitely.
+ * @param[in] useJsonFormat If true produce JSON output.
+ * @return 0 on success, non-zero on failure.
+ */
 int handleConfigMode(const char *confFile, const char *cli_out_dir, int cli_iterations, int cli_interval, bool enableKThreads, bool long_run, bool useJsonFormat)
 {
     Config_Data config = {0};
@@ -1550,8 +1783,11 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, int cli_iter
 }
 
 /**
- * Reads /proc/meminfo and writes the first 50 fields and their values to the
- * output file.
+ * @brief Read /proc/meminfo and emit selected fields as CSV to the given FILE.
+ *
+ * Learns field line positions on the first call and reuses them on subsequent calls.
+ *
+ * @param[in] out Open FILE* to write CSV header and values (must be non-NULL).
  */
 void saveMeminfo(FILE *out)
 {
@@ -1649,7 +1885,12 @@ void saveMeminfo(FILE *out)
 
 #ifdef ENABLE_CJSON
 /**
- * Adds memory information to the root JSON object
+ * @brief Add memory information to the root cJSON object.
+ *
+ * Reads /proc/meminfo, learns and reuses line positions for selected fields,
+ * and adds them into a JSON object attached to the provided root.
+ *
+ * @param[in] root cJSON root object to receive "memory_info".
  */
 void addMemInfoJSON(cJSON *root)
 {
@@ -1755,8 +1996,11 @@ void addMemInfoJSON(cJSON *root)
 // -----------------------------
 
 /**
- * Main entry point: parses arguments, scans processes, collects stats, writes
- * output.
+ * @brief Main entry point: parse arguments, scan processes, collect stats, write output.
+ *
+ * @param[in] argc Argument count.
+ * @param[in] argv Argument vector.
+ * @return exit code (0 success, non-zero on error).
  */
 int main(int argc, char *argv[])
 {
