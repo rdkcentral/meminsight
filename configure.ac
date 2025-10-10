@@ -25,6 +25,53 @@ AM_INIT_AUTOMAKE([foreign subdir-objects])
 AC_CONFIG_SRCDIR([src/memstatus.c])
 AC_CONFIG_HEADERS([config.h])
 
+# Default output format
+AC_ARG_WITH([format],
+  [AS_HELP_STRING([--with-format=FORMAT],
+    [Default output format (csv or json) @<:@default=csv@:>@])],
+  [OUTPUT_FORMAT="$withval"],
+  [OUTPUT_FORMAT="csv"])
+
+# cJSON support
+AC_ARG_ENABLE([cjson],
+  [AS_HELP_STRING([--enable-cjson],
+    [Enable cJSON support for JSON output @<:@default=no@:>@])],
+  [case "${enableval}" in
+    yes) enable_cjson=yes ;;
+    no)  enable_cjson=no ;;
+    *)   AC_MSG_ERROR([bad value ${enableval} for --enable-cjson]) ;;
+   esac],
+  [enable_cjson=no])
+
+# Check for cJSON if enabled
+AS_IF([test "x$enable_cjson" = "xyes"], [
+  AC_CHECK_HEADER([cjson/cJSON.h],
+    [AC_DEFINE([ENABLE_CJSON], [1], [Define if cJSON is enabled])
+     AC_SEARCH_LIBS([cJSON_Parse], [cjson],
+       [],
+       [AC_MSG_ERROR([cJSON library not found, install libcjson-dev or similar])])],
+    [AC_MSG_ERROR([cJSON headers not found, install libcjson-dev or similar])])
+])
+
+# Define conditional for automake
+AM_CONDITIONAL([ENABLE_CJSON], [test "x$enable_cjson" = "xyes"])
+
+# Define format in config.h
+if test "$OUTPUT_FORMAT" = "json"; then
+  if test "x$enable_cjson" != "xyes"; then
+    AC_MSG_WARN([JSON format requested but cJSON support not enabled. Building with CSV format as default.])
+    AC_DEFINE([DEFAULT_FORMAT_CSV], [1], [Default output format is CSV])
+  else
+    AC_DEFINE([DEFAULT_FORMAT_JSON], [1], [Default output format is JSON])
+  fi
+elif test "$OUTPUT_FORMAT" = "csv"; then
+  AC_DEFINE([DEFAULT_FORMAT_CSV], [1], [Default output format is CSV])
+else
+  # Default to CSV for unknown formats
+  AC_DEFINE([DEFAULT_FORMAT_CSV], [1], [Default output format is CSV])
+  AC_MSG_NOTICE([Using default CSV format])
+fi
+
 # Checks for programs.
 AC_PROG_CC
 AC_PROG_CXX

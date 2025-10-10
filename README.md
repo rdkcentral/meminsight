@@ -32,15 +32,14 @@
 ### 🛠️ **Flexible Configuration**
 - **Process Whitelisting** - Monitor specific processes by name or PID
 - **Configurable Sampling** - Set iterations and intervals for data collection
-- **Multiple Output Formats** - CSV export with timestamps and metadata
+- **Multiple Output Formats** - CSV and JSON export with timestamps and metadata (JSON requires cJSON)
 - **Kernel Thread Support** - Optional inclusion of kernel threads
 - **Long-running Mode** - Extended monitoring with automatic intervals
 
 ### 🔧 **Advanced Capabilities**
 - **Network Interface Detection** - Automatic MAC address retrieval
 - **Firmware Information** - System version and device property extraction
-- **Memory Leak Detection** - Track memory growth over time
-- **Performance Profiling** - CPU and memory correlation analysis
+- **Optimized Memory Parsing** - Learning-based algorithm reduces parsing overhead
 - **Embedded System Optimized** - Minimal overhead for resource-constrained environments
 
 ## 🚀 Quick Start
@@ -56,7 +55,10 @@
 ./xmeminsight --config myconfig.conf --iterations 10 --interval 30
 
 # Include kernel threads in analysis
-./xmeminsight --include-kthreads --output-dir /tmp/memreports
+./xmeminsight --all --output /tmp/memreports
+
+# Output in JSON format (requires cJSON support)
+./xmeminsight --fmt json
 ```
 
 ## 🔨 Installation
@@ -66,6 +68,7 @@
 - GCC compiler
 - GNU Autotools (autoconf, automake)
 - Standard C library with POSIX support
+- libcjson-dev (optional, for JSON output support)
 
 ### Building from Source
 
@@ -76,7 +79,7 @@ cd meminsight/
 # Generate configure script
 autoreconf -fiv
 
-# Configure build environment
+# Configure build environment (add --enable-cjson for JSON support)
 ./configure
 
 # Compile the binary
@@ -94,15 +97,16 @@ sudo make install
 xmeminsight [OPTIONS]
 
 OPTIONS:
-  --config FILE              Use configuration file
+  -v, --version              Display version information
+  -a, --all                  Include kernel threads in analysis
+  -c, --config FILE          Use configuration file
   --iterations N             Number of sampling iterations (default: 1)
   --interval SECONDS         Seconds between samples (default: 0)
-  --output-dir DIR           Output directory (default: /tmp/meminsight)
-  --include-kthreads         Include kernel threads in analysis
-  --long-run                 Enable long-running mode (900s intervals)
-  --log-level LEVEL          Set logging level (DEBUG, INFO, ERROR)
-  --help                     Show help message
-  --test                     Run internal test suite
+  -o, --output DIR           Output directory (default: /tmp/meminsight)
+  --fmt FORMAT               Output format: csv (default) or json
+  -n, --numprocs COUNT       Limit output to top N processes by PSS (default: 15)
+  -h, --help                 Show help message
+  -t, --test                 Run internal test suite
 ```
 
 ### Basic Usage Examples
@@ -115,10 +119,10 @@ OPTIONS:
 ./xmeminsight --iterations 12 --interval 300
 
 # Continuous monitoring with configuration file
-./xmeminsight --config production.conf --long-run
+./xmeminsight --config production.conf
 
-# Debug mode with kernel thread inclusion
-./xmeminsight --include-kthreads --log-level DEBUG
+# Debug mode with kernel thread inclusion and JSON output
+./xmeminsight --all --fmt json
 ```
 
 ## ⚙️ Configuration
@@ -160,6 +164,27 @@ CPPFLAGS="-DDEVICE_IDENTIFIER=\"erouter0\"" make clean && make
 
 ## 🔬 Advanced Features
 
+### JSON Output Format
+
+When compiled with cJSON support, xmeminsight can output data in JSON format:
+
+```bash
+# Enable JSON output
+./xmeminsight --fmt json
+```
+
+### Process Limiting
+
+By default, xmeminsight shows only the top 15 processes by PSS usage:
+
+```bash
+# Show top 50 processes instead
+./xmeminsight --numprocs 50
+
+# Show all processes
+./xmeminsight --numprocs 0
+```
+
 ### Memory Leak Detection
 
 ```bash
@@ -179,7 +204,7 @@ echo "process_whitelist=systemd,NetworkManager,sshd" > services.conf
 
 ```bash
 # 24/7 monitoring with 15-minute intervals
-./xmeminsight --long-run --output-dir /var/log/meminsight/
+./xmeminsight
 ```
 
 ### Test Mode for Validation
@@ -198,8 +223,8 @@ echo "process_whitelist=systemd,NetworkManager,sshd" > services.conf
 
 The project uses GNU Autotools for cross-platform compatibility:
 
-- **`configure.ac`** - Autoconf configuration
-- **`Makefile.am`** - Automake build rules
+- **configure.ac** - Autoconf configuration
+- **Makefile.am** - Automake build rules
 - **Generated files** - `configure`, `Makefile.in`, `config.h`
 
 ### Build Targets
@@ -229,18 +254,30 @@ make install
 2. **Statistics Parsing** - Read `/proc/[pid]/stat` and `/proc/[pid]/smaps`
 3. **Data Aggregation** - Calculate totals and averages
 4. **Sorting & Filtering** - Apply whitelist and sort by PSS
-5. **Output Generation** - Write CSV with metadata
+5. **Output Generation** - Write CSV or JSON with metadata
+
+### Optimized Memory Information Collection
+
+xmeminsight uses a learning-based algorithm to efficiently parse system memory information:
+
+1. **First Run**: Learns the structure and position of target fields in memory files
+2. **Subsequent Runs**: Uses learned positions to directly access relevant data
+3. **Early Termination**: Stops parsing once all target fields are found
+4. **Minimal Comparisons**: Reduces string comparison overhead
 
 ### Key Functions
 
 | Function | Purpose | Location |
 |----------|---------|----------|
-| `collectSystemMemoryStats()` | Main collection orchestrator | memstatus.c |
-| `getProcessInfos()` | Parse per-process smaps data | memstatus.c |
-| `fillProcessStatFields()` | Extract stat file information | memstatus.c |
-| `addProcessInfo()` | Maintain sorted process list | memstatus.c |
-| `getMacAddress()` | Network interface detection | memstatus.c |
-| `parseConfig()` | Configuration file processing | memstatus.c |
+| `collectSystemMemoryStats()` | Main collection orchestrator | src/memstatus.c |
+| `getProcessInfos()` | Parse per-process smaps data | src/memstatus.c |
+| `fillProcessStatFields()` | Extract stat file information | src/memstatus.c |
+| `addProcessInfo()` | Maintain sorted process list | src/memstatus.c |
+| `getMacAddress()` | Network interface detection | src/memstatus.c |
+| `parseConfig()` | Configuration file processing | src/memstatus.c |
+| `saveMeminfo()` | Efficiently extract memory information | src/memstatus.c |
+| `addMemInfoJSON()` | Generate JSON memory information | src/memstatus.c |
+| `initializeSetup()` | Prepare MAC, firmware, and output paths | src/memstatus.c |
 
 ---
 
@@ -261,13 +298,14 @@ EOF
 ./xmeminsight --config webserver.conf
 ```
 
-### Example 2: Database Performance Analysis
+### Example 2: Database Performance Analysis with JSON Output
 
 ```bash
 # Monitor database memory usage every minute for 2 hours
 ./xmeminsight --iterations 120 --interval 60 \
-              --output-dir /tmp/db-analysis \
-              --config database.conf
+              --output /tmp/db-analysis \
+              --config database.conf \
+              --fmt json
 ```
 
 ### Example 3: Embedded System Monitoring
@@ -275,7 +313,7 @@ EOF
 ```bash
 # Lightweight monitoring for embedded systems
 CPPFLAGS="-DDEVICE_IDENTIFIER=\"eth0\"" make clean && make
-./xmeminsight --iterations 24 --interval 3600 --output-dir /mnt/logs/
+./xmeminsight --iterations 24 --interval 3600 --output /mnt/logs/ --numprocs 10
 ```
 
 ## 🔧 Troubleshooting
@@ -293,6 +331,13 @@ sudo ./xmeminsight
 ```bash
 # Solution: Reduce monitoring frequency or use whitelisting
 ./xmeminsight --interval 300 --config lightweight.conf
+```
+
+**Issue**: Missing JSON support
+```bash
+# Solution: Rebuild with CJSON support
+./configure --enable-cjson
+make clean && make
 ```
 
 ## 🤝 Contributing
@@ -321,5 +366,3 @@ make
 # Run test suite
 ./xmeminsight --test
 ```
-
----

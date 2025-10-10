@@ -37,6 +37,46 @@ if [ "$1" = "--clean" ]; then
     exit 0
 fi
 
+# Parse output format parameter
+ENABLE_CJSON="no" #Default to no cJSON support
+FORMAT="csv"  # Default to CSV
+
+# First argument: cJSON support
+if [ "$1" = "--enable-cjson" ]; then
+    ENABLE_CJSON="yes"
+    echo "Building with cJSON support enabled"
+elif [ -n "$1" ] && [ "$1" != "json" ] && [ "$1" != "csv" ]; then
+    echo "Warning: Unknown first parameter '$1'. Expected '--enable-cjson'."
+    echo "Building without cJSON support."
+fi
+
+# Second argument (or first if not --enable-cjson): output format
+FORMAT_ARG=""
+if [ "$1" = "json" ] || [ "$1" = "csv" ]; then
+    FORMAT_ARG="$1"
+elif [ "$2" = "json" ] || [ "$2" = "csv" ]; then
+    FORMAT_ARG="$2"
+fi
+
+# Set format based on argument and cJSON availability
+if [ "$FORMAT_ARG" = "json" ]; then
+    if [ "$ENABLE_CJSON" = "yes" ]; then
+        FORMAT="json"
+        echo "Building with JSON output format"
+    else
+        echo "Warning: JSON format requested but cJSON support not enabled."
+        echo "Use '--enable-cjson json' to enable JSON output."
+        echo "Defaulting to CSV format."
+        FORMAT="csv"
+    fi
+elif [ "$FORMAT_ARG" = "csv" ]; then
+    FORMAT="csv"
+    echo "Building with CSV output format"
+else
+    echo "No format specified, defaulting to CSV format"
+    FORMAT="csv"
+fi
+
 echo "Running build steps..."
 
 # Check if required tools are installed and install them if needed
@@ -72,7 +112,11 @@ echo "Running autoreconf..."
 autoreconf --install --verbose --force
 
 echo "Running configure..."
-./configure
+CJSON_OPTION=""
+if [ "$ENABLE_CJSON" = "yes" ]; then
+    CJSON_OPTION="--enable-cjson"
+fi
+./configure --with-format=$FORMAT $CJSON_OPTION
 
 echo "Running make..."
 make

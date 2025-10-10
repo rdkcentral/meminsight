@@ -37,8 +37,7 @@
 #include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
-
-#define TESTME
+#include <ctype.h>
 
 // -----------------------------
 // Debug Macros
@@ -47,9 +46,9 @@
 // #define PRINT_DBG printf
 //#define PRINT_DBG_INITIAL printf
 //#define PRINT_DBG_SCANNED printf
-#define PRINT_DBG(...)
-#define PRINT_DBG_INITIAL(...)
-#define PRINT_DBG_SCANNED(...)
+//#define PRINT_DBG(...)
+//#define PRINT_DBG_INITIAL(...)
+//#define PRINT_DBG_SCANNED(...)
 
 // -----------------------------
 // Macro Definitions
@@ -74,10 +73,12 @@ This is used to ensure compatibility with older versions of the report parser. *
 #define PROC_DIR "/proc"
 #define VERSION_FILE "/version.txt"
 #define DEVICE_PROP_FILE "/etc/device.properties"
+#define PROC_MEMINFO PROC_DIR "/meminfo"
 
 /* Default Macros */
 #define DEFAULT_FW_NAME "ACTIVEFW123"
 #define FW_LEN 64
+#define MAC_LEN 32
 #define DEFAULT_ITERATIONS 1
 #define DEFAULT_INTERVAL 0
 #define DEFAULT_OUT_DIR "/tmp/meminsight"
@@ -89,7 +90,9 @@ This is used to ensure compatibility with older versions of the report parser. *
 /* Config Macros */
 #define CONFIG_EXTN ".conf"
 #define CSV_FILE_NAME "meminsight.csv"
+#define JSON_FILE_NAME "meminsight.json"
 #define LONG_RUN_INTERVAL 900 // 900 is Default interval for long runs in seconds
+#define DEFAULT_PROCESS_NUM 15
 
 // -----------------------------
 // Data Structures
@@ -113,6 +116,15 @@ typedef struct process_info
     struct process_info *next;         // Next node in linked list
 } Process_Info;
 
+typedef struct process_pss_delta {
+    unsigned pid;
+    char name[PATH_MAX + 8];
+    unsigned long rssTotal, pssTotal, shared_clean_total, private_dirty_total, swap_pss_total;
+    unsigned long majFaults, cputime;
+    long pssDelta; // signed difference
+    struct process_pss_delta *next;
+} ProcessPssDelta;
+
 /**
  * Struct to hold configuration data parsed from config file.
  */
@@ -126,26 +138,44 @@ typedef struct config
     char logLevel[8];            // Log level (e.g., "DEBUG", "INFO", "ERROR")
 } Config_Data;
 
+typedef struct {
+    char mac[MAC_LEN];
+    char fwName[FW_LEN];
+    const char *outputDir;
+    const char *fileExt;
+    bool dirCreated;
+} SetupInfo;
+
+#ifdef ENABLE_CJSON
+struct cJSON;
+typedef struct cJSON cJSON;
+#endif
+
+/**
+ * Enum to represent the output file format.
+ */
+typedef enum {
+    FORMAT_CSV,
+    FORMAT_JSON
+} OutputFormat;
+
 // -----------------------------
 // Global Variables
 // -----------------------------
 
-extern int includeKthreads;           // Whether to include kernel threads
+extern bool g_includeKthreads;           // Whether to include kernel threads
 extern Process_Info getProcessInfo;   // Temporary struct for collecting process info
 extern Process_Info *headProcessInfo; // Head of linked list
-
-#ifdef TESTME
-extern int testpid; // Used for test mode with custom smap file
-extern char testSmap[128];
-extern Process_Info processInfoTest;
-void checkAndFree();
-void testList();
-#endif
+extern OutputFormat g_outputFormat;   // Global output format setting
+extern bool g_jsonPrettyPrint;     // Whether to pretty-print JSON output
+extern int g_processLimit;            // Limit on number of processes to report
+extern unsigned long int g_memTotal;  // System's total memory
 
 // -----------------------------
 // Function Prototypes
 // -----------------------------
 
+SetupInfo initializeSetup(const char *outDir, bool useJsonFormat);
 void writeProcessInfo(unsigned noOfpids, FILE *output);
 void addProcessInfo(Process_Info *addPInfo);
 int getProcessInfos(unsigned pid);
@@ -155,12 +185,25 @@ void saveMeminfo(FILE *out);
 int getPropertyFromFile(const char *filename, const char *property, char *propertyValue, size_t propertyValueLen);
 size_t getMacAddress(const char *iface, char *macAddress, size_t szBufSize);
 int getFirmwareImageName(char *fwName, size_t fwNameLen);
-
 int isPID(const char *str);
 int getPIDByProcessName(const char *procName, unsigned int *pidOut);
 int parseConfig(const char *configFile, Config_Data *config);
-int collectSystemMemoryStats(bool includeKthreads, const char *outDir, int iterations, int interval, bool long_run);
-int handleConfigMode(const char *confFile, const char *cli_out_dir, int cli_iterations, int cli_interval, bool enableKThreads, bool long_run);
+int collectSystemMemoryStats(bool includeKthreads, const char *outDir, int iterations, int interval, bool long_run, bool useJsonFormat);
+int handleConfigMode(const char *confFile, const char *cli_out_dir, int cli_iterations, int cli_interval, bool enableKThreads, bool long_run, bool useJsonFormat);
 int fillProcessStatFields(unsigned pid, Process_Info *info, unsigned *flagsOut);
+void add_process_pss_delta(Process_Info *current, Process_Info *previous, ProcessPssDelta **resultHead);
+void insert_sorted_by_pss_delta(ProcessPssDelta **head, ProcessPssDelta *newNode);
+Process_Info* find_process_info(Process_Info *head, unsigned pid, const char *name);
+void build_pss_delta_result(void);
+void free_process_info_list(Process_Info *head);
+void free_process_pss_delta_list(ProcessPssDelta *head);
+void writePssDeltaCSV(ProcessPssDelta *head, FILE *output, int limit);
+
+#ifdef ENABLE_CJSON
+void writePssDeltaJSON(ProcessPssDelta *head, FILE *output, int limit);
+void addMemInfoJSON(cJSON *root);
+void addProcessInfoJSON(cJSON *root, unsigned noOfPids, FILE *output);
+void addProcessTotalsJSON(cJSON *root, unsigned long rssTotal, unsigned long pssTotal, unsigned long shared_clean_total, unsigned long private_dirty_total, unsigned long swap_pss_total);
+#endif
 
 #endif // MEMSTATUS_H
