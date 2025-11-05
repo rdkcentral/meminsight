@@ -19,7 +19,35 @@
 
 set -e
 
-if [ "$1" = "--clean" ]; then
+ENABLE_TESTME=0
+CLEAN_ONLY=0
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --clean)
+            CLEAN_ONLY=1
+            ;;
+        --enable-testme)
+            ENABLE_TESTME=1
+            ;;
+        --help|-h)
+            echo "Usage: $0 [OPTIONS]"
+            echo "Options:"
+            echo "  --clean          Clean build artifacts and exit"
+            echo "  --enable-testme  Enable TESTME compilation flag for test mode"
+            echo "  --help, -h       Show this help message"
+            exit 0
+            ;;
+        *)
+            echo "Unknown option: $1"
+            echo "Use --help for usage information"
+            exit 1
+            ;;
+    esac
+    shift
+done
+
+if [ "$CLEAN_ONLY" = "1" ]; then
     echo "Cleaning build artifacts..."
     make clean 2>/dev/null || true
     make distclean 2>/dev/null || true
@@ -67,7 +95,8 @@ if [ -n "$MISSING_TOOLS" ]; then
     fi
 fi
 
-# Use autoreconf for better compatibility
+[ "$ENABLE_TESTME" = "1" ] && echo "Compiling with -DTESTME flag"
+
 echo "Running autoreconf..."
 autoreconf --install --verbose --force
 
@@ -75,6 +104,11 @@ echo "Running configure..."
 ./configure
 
 echo "Running make..."
-make
+if [ "$ENABLE_TESTME" = "1" ]; then
+    echo "TESTME mode enabled. Passing compilation flag..."
+    make CPPFLAGS="-DTESTME"
+else
+    make
+fi
 
 echo "Build complete."

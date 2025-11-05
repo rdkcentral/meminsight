@@ -45,9 +45,9 @@
 // #define PRINT_DBG printf
 //#define PRINT_DBG_INITIAL printf
 //#define PRINT_DBG_SCANNED printf
-//#define PRINT_DBG(...)
-//#define PRINT_DBG_INITIAL(...)
-//#define PRINT_DBG_SCANNED(...)
+#define PRINT_DBG(...)
+#define PRINT_DBG_INITIAL(...)
+#define PRINT_DBG_SCANNED(...)
 
 // -----------------------------
 // Macro Definitions
@@ -131,6 +131,14 @@ typedef struct config
 extern int includeKthreads;           // Whether to include kernel threads
 extern Process_Info getProcessInfo;   // Temporary struct for collecting process info
 extern Process_Info *headProcessInfo; // Head of linked list
+
+#ifdef TESTME
+extern int testpid; // Used for test mode with custom smap file
+extern char testSmap[128];
+extern Process_Info processInfoTest;
+void checkAndFree();
+void testList();
+#endif
 
 // -----------------------------
 // Function Prototypes
