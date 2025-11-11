@@ -48,7 +48,7 @@ while [ $# -gt 0 ]; do
 done
 
 if [ "$CLEAN_ONLY" = "1" ]; then
-    echo "Cleaning build artifacts..."
+    echo "[cov_build] Cleaning build artifacts..."
     make clean 2>/dev/null || true
     make distclean 2>/dev/null || true
     rm -f config.h config.h.in config.log config.status
@@ -61,14 +61,14 @@ if [ "$CLEAN_ONLY" = "1" ]; then
     rm -f configure~
     rm -rf config.h.in~
     rm -rf src/.deps/
-    echo "Clean complete."
+    echo "[cov_build] Clean complete."
     exit 0
 fi
 
-echo "Running build steps..."
+echo "[cov_build] Running build steps..."
 
 # Check if required tools are installed and install them if needed
-echo "Checking for required build tools..."
+echo "[cov_build] Checking for required build tools..."
 MISSING_TOOLS=""
 
 if ! command -v autoconf >/dev/null 2>&1; then
@@ -84,31 +84,31 @@ if ! command -v autoreconf >/dev/null 2>&1; then
 fi
 
 if [ -n "$MISSING_TOOLS" ]; then
-    echo "Missing tools:$MISSING_TOOLS. Attempting to install..."
+    echo "[cov_build] Missing tools:$MISSING_TOOLS. Attempting to install..."
     if command -v apt-get >/dev/null 2>&1; then
         apt-get update && apt-get install -y $MISSING_TOOLS
     elif command -v yum >/dev/null 2>&1; then
         yum install -y $MISSING_TOOLS
     else
-        echo "Please install the following tools manually:$MISSING_TOOLS"
+        echo "[cov_build] Please install the following tools manually:$MISSING_TOOLS"
         exit 1
     fi
 fi
 
-[ "$ENABLE_TESTME" = "1" ] && echo "Compiling with -DTESTME flag"
+[ "$ENABLE_TESTME" = "1" ] && echo "[cov_build] Compiling with -DTESTME flag"
 
-echo "Running autoreconf..."
+echo "[cov_build] Running autoreconf..."
 autoreconf --install --verbose --force
 
-echo "Running configure..."
+echo "[cov_build] Running configure..."
 ./configure
 
-echo "Running make..."
+echo "[cov_build] Running make..."
 if [ "$ENABLE_TESTME" = "1" ]; then
-    echo "TESTME mode enabled. Passing compilation flag..."
+    echo "[cov_build] TESTME mode enabled. Passing compilation flag..."
     make CPPFLAGS="-DTESTME"
 else
     make
 fi
 
-echo "Build complete."
+echo "[cov_build] Build complete."

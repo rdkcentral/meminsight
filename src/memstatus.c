@@ -210,7 +210,7 @@ int isPID(const char *str)
  */
 int getPIDByProcessName(const char *procName, unsigned int *pidOut)
 {
-    DIR *proc = opendir("/proc");
+    DIR *proc = opendir(PROC_DIR);
     if (!proc)
         return 0;
     struct dirent *entry;
@@ -1254,55 +1254,185 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, int cli_iter
 }
 
 /**
- * Reads /proc/meminfo and writes the first 50 fields and their values to the
- * output file.
+ * Collects and saves memory information from /proc/meminfo to the provided output file.
+ * Caches field positions for efficiency on subsequent calls.
+ *
+ * @param out The output file to write memory information to.
  */
 void saveMeminfo(FILE *out)
 {
-    unsigned long val[50];
-    unsigned count = 0;
-    char tmp[128];
-    char name[64];
+    static const char *field_names[] = {
+        "MemTotal", "MemFree", "MemAvailable", "Buffers", "Cached",
+        "Active(anon)", "Inactive(anon)", "Active(file)", "Inactive(file)",
+        "SwapTotal", "SwapFree", "AnonPages", "Shmem", "Slab",
+        "KernelStack", "CmaTotal", "CmaFree", "VmallocUsed"
+    };
+    static const int num_fields = sizeof(field_names) / sizeof(field_names[0]);
+    
+    // Field Cache
+    static bool initialized = false;
+    static int field_positions[18];  // Line numbers where each field appears (-1 is not found)
+    static char header_line[512];    // Header string
+    static unsigned long mem_total = 0;  // MemTotal (cached)
 
-    FILE *meminfo = fopen("/proc/meminfo", "r");
-    if (meminfo)
+    // optional computed field positions
+    static int cma_total_pos = -1, cma_free_pos = -1;
+    static int swap_total_pos = -1, swap_free_pos = -1;
+    
+    unsigned long values[18] = {0};  // Current iteration values
+    char line[128];
+
+    FILE *meminfo = fopen(MEMINFO_FILE, "r");
+    if (!meminfo)
     {
-        int first = 1;
-        // print header
-        while (fgets(tmp, 127, meminfo) && count < 50)
+        printf("Error: Could not open %s\n\n", MEMINFO_FILE);
+        return;
+    }
+    
+    if (!initialized)
+    {
+        // First-time initialization: read and cache field positions
+        int line_num = 0;
+        int header_pos = 0;
+        bool first_field = true;
+        
+        // Initialize all positions to -1 (not found)
+        for (int i = 0; i < num_fields; i++)
         {
-            if (sscanf(tmp, "%s %lu kB", name, &val[count]) == 2)
+            field_positions[i] = -1;
+        }
+        
+        while (fgets(line, sizeof(line), meminfo))
+        {
+            char name[64];
+            unsigned long value;
+            
+            if (sscanf(line, "%s %lu kB", name, &value) == 2)
             {
-                name[strlen(name) - 1] = '\0'; // Remove trailing ':'
-                if (!first)
+                // Remove trailing ':'
+                size_t len = strlen(name);
+                if (len > 0 && name[len - 1] == ':')
+                    name[len - 1] = '\0';
+                
+                // Check if this field is needed
+                for (int i = 0; i < num_fields; i++)
                 {
-                    fprintf(out, ",");
+                    if (strcmp(name, field_names[i]) == 0)
+                    {
+                        field_positions[i] = line_num;
+
+                        if (i == 0)  // MemTotal caching
+                            mem_total = value;
+                        
+                        // Track CMA and Swap positions for computed fields
+                        if (i == 15) cma_total_pos = i;
+                        if (i == 16) cma_free_pos = i;
+                        if (i == 9) swap_total_pos = i;
+                        if (i == 10) swap_free_pos = i;
+                        
+                        break;
+                    }
                 }
-                fprintf(out, "%s", name);
-                first = 0;
-                count++;
+            }
+            line_num++;
+        }
+        
+        // Build header string
+        for (int i = 0; i < num_fields; i++)
+        {
+            if (field_positions[i] == -1)
+                continue;  // Skip missing optional fields
+            
+            // Skip CmaTotal and CmaFree (we'll use CmaUsed instead)
+            if (i == 15 || i == 16)
+            {
+                if (i == 15 && cma_total_pos != -1 && cma_free_pos != -1)
+                {
+                    header_pos += snprintf(header_line + header_pos, sizeof(header_line) - header_pos, "%sCmaUsed", first_field ? "" : ",");
+                    first_field = false;
+                }
+                continue;
+            }
+            
+            // Skip SwapFree (we'll use SwapUsed instead)
+            if (i == 10)
+            {
+                if (swap_total_pos != -1 && swap_free_pos != -1)
+                {
+                    header_pos += snprintf(header_line + header_pos, sizeof(header_line) - header_pos, "%sSwapUsed", first_field ? "" : ",");
+                    first_field = false;
+                }
+                continue;
+            }
+            
+            header_pos += snprintf(header_line + header_pos, sizeof(header_line) - header_pos, "%s%s", first_field ? "" : ",", field_names[i]);
+            first_field = false;
+        }
+        initialized = true;
+        fseek(meminfo, 0, SEEK_SET);
+    }
+    
+    // Read values using cached positions
+    int line_num = 0;
+    while (fgets(line, sizeof(line), meminfo))
+    {
+        // Check if this line matches any of our tracked positions
+        for (int i = 0; i < num_fields; i++)
+        {
+            if (field_positions[i] == line_num)
+            {
+                char name[64];
+                unsigned long value;
+                if (sscanf(line, "%s %lu kB", name, &value) == 2)
+                {
+                    values[i] = value;
+                }
+                break;
             }
         }
-        fprintf(out, "\n");
-        fseek(meminfo, 0, SEEK_SET); // Reset file pointer to start
-        count = 0;
-        first = 1;
-        // Print values
-        while (fgets(tmp, 127, meminfo) && count < 50)
+        line_num++;
+    }
+    fclose(meminfo);
+    values[0] = mem_total;
+    
+    // Write header
+    fprintf(out, "%s\n", header_line);
+    
+    // Write values
+    bool first_value = true;
+    for (int i = 0; i < num_fields; i++)
+    {
+        if (field_positions[i] == -1)
+            continue;
+
+        if (i == 15)
         {
-            if (sscanf(tmp, "%s %lu kB", name, &val[count]) == 2)
+            if (cma_total_pos != -1 && cma_free_pos != -1)
             {
-                if (!first)
-                {
-                    fprintf(out, ",");
-                }
-                fprintf(out, "%lu", val[count]);
-                first = 0;
-                count++;
+                unsigned long cma_used = values[cma_total_pos] - values[cma_free_pos];
+                fprintf(out, "%s%lu", first_value ? "" : ",", cma_used);
+                first_value = false;
             }
+            continue;
         }
-        fprintf(out, "\n\n"); // Blank line after meminfo block
-        fclose(meminfo);
+        
+        // Skip CmaFree (already handled in CmaUsed)
+        if (i == 16)
+            continue;
+        
+        // Handle SwapUsed (SwapTotal - SwapFree)
+        if (i == 10)
+        {
+            if (swap_total_pos != -1 && swap_free_pos != -1)
+            {
+                unsigned long swap_used = values[swap_total_pos] - values[swap_free_pos];
+                fprintf(out, "%s%lu", first_value ? "" : ",", swap_used);
+                first_value = false;
+            }
+            continue;
+        }
+        fprintf(out, "%s%lu", first_value ? "" : ",", values[i]);
+        first_value = false;
     }
 }
 
