@@ -560,7 +560,6 @@ int getProcessInfos(unsigned pid)
         unsigned expect_shared_clean = 0;
         unsigned expect_private_dirty = 0;
         unsigned expect_swap_pss = 0;
-        unsigned prev_pss = 0;
 
 #ifdef TESTME
         memset(&processInfoTest, 0, sizeof(processInfoTest));
@@ -592,7 +591,9 @@ int getProcessInfos(unsigned pid)
                 PRINT_DBG("%s\n", tmp);
                 if (sscanf(tmp, "Shared_Clean: %u kB", &test_shared_clean))
                 {
-                    processInfoTest.shared_clean_total += test_shared_clean? test_pss:0;
+					if (test_shared_clean) {
+                    	processInfoTest.shared_clean_total += test_pss;
+					}
                 }
             }
             else if (strstr(tmp, "Private_Dirty:"))
@@ -682,7 +683,6 @@ int getProcessInfos(unsigned pid)
                             PRINT_DBG_SCANNED("Read Pss (%u) after %u/%u lines  --> %s\r", pss, skipped, lines_To_skip,
                                               tmp);
                             getProcessInfo.pssTotal += pss;
-                            prev_pss = pss;
                             lines_To_skip = linesToSkipForSharedClean;
                             skipped = 1;
                             expect_shared_clean = 1;
@@ -697,9 +697,11 @@ int getProcessInfos(unsigned pid)
                         {
                             PRINT_DBG_SCANNED("Read shared_clean (%u)  %u/%u lines --> %s\r", shared_clean, skipped,
                                               lines_To_skip, tmp);
-                            getProcessInfo.shared_clean_total += shared_clean? pss:0;
+							if (shared_clean) {
+                            	getProcessInfo.shared_clean_total += pss;
+							}
 
-                            if (!prev_pss)
+                            if (pss)
                             {
                                 // No need to look at private dirty and swap pss
                                 expect_rss = 1;
@@ -797,7 +799,9 @@ int getProcessInfos(unsigned pid)
                 {
                     if (sscanf(tmp, "Shared_Clean: %u kB", &shared_clean))
                     {
-                        getProcessInfo.shared_clean_total += shared_clean? pss:0;
+						if (shared_clean) {
+                        	getProcessInfo.shared_clean_total += pss;
+						}
                         linesToSkipForSharedClean = linesSkippedForSharedClean + 1;
                         PRINT_DBG_INITIAL("After %u lines Read Shared_Clean (%u) in --> %s\r",
                                           linesToSkipForSharedClean, shared_clean, tmp);
