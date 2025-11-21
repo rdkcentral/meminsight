@@ -1339,7 +1339,7 @@ void saveMeminfo(FILE *out)
 #endif
 			if (learnt) {
 				if (! --skipCount) {
-					if (!sscanf(tmp, "%*s %lu kB", &value)) {
+					if (1 != sscanf(tmp, "%*s %lu kB", &value)) {
 						PRINT_DBG("%s: Error parsing [%s]\n", __FUNCTION__, tmp);
 						continue; 
 					}
@@ -1351,7 +1351,7 @@ void saveMeminfo(FILE *out)
 			{
 				char name[64];
 				// Below lines repeat, but okay..for clarity and not needed to check whether learnt again
-				if (!sscanf(tmp, "%s %lu kB", name, &value)) {
+				if (2 != sscanf(tmp, "%s %lu kB", name, &value)) {
 					PRINT_DBG("%s: Error parsing [%s]\n", __FUNCTION__, tmp);
 					continue; 
 				}
