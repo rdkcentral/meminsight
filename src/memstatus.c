@@ -1115,7 +1115,6 @@ int collectSystemMemoryStats(bool includeKthreads, const char *outDir, int itera
                             }
 			    if (isTestMode) {
                                 if (1 == isTestMode) {
-					// TBD write tests for meminfo as well
 					break;
 			        }
 			        isTestMode--;
@@ -1143,6 +1142,11 @@ int collectSystemMemoryStats(bool includeKthreads, const char *outDir, int itera
         fprintf(output, "0,Total,%lu,%lu,%lu,%lu,%lu,%lu,0,0,0\n", rssTotal, pssTotal, shared_clean_total,
                 private_clean_total, private_dirty_total, swap_pss_total);
         fclose(output);
+#ifdef TESTME
+        if (1 == isTestMode) {
+            break;
+        }
+#endif
         if (interval >= 0 && (long_run || iter + 1 < iterations))
         {
             PRINT_INFO("* %d%s Iteration completed. Sleeping for %d seconds before next iteration... \n", iter + 1, long_run ? "/∞" : "", interval);
@@ -1356,7 +1360,6 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, int cli_iter
  */
 void saveMeminfo(FILE *out)
 {
-	printf("%s:\n", __FUNCTION__);
 	/***
 	 * MemTotal,MemFree,MemAvailable,Buffers,Cached,SwapCached
 	 * Active(anon),Inactive(anon),Active(file),Inactive(file)
@@ -1365,12 +1368,6 @@ void saveMeminfo(FILE *out)
 	 ***/
 #define MEMINFO_NEEDED_FIELDS_COUNT 20
 #define MEMINFO_HEADER_TOTAL 256
-#ifdef TESTME
-	char tstmeminfoHeader[MEMINFO_HEADER_TOTAL] = {0};
-	char tstmeminfoValue[MEMINFO_HEADER_TOTAL] = {0};
-	int tstprocessHeaderIndex = 0;
-	int tstprocessValueIndex = 0;
-#endif
 	static char *meminfoNeeded[MEMINFO_NEEDED_FIELDS_COUNT] = {
 		/* Important, MemTotal needs to be at first...other fields doesn't matter */
 		"MemTotal","MemFree","MemAvailable","Buffers","Cached","SwapCached",
@@ -1383,7 +1380,28 @@ void saveMeminfo(FILE *out)
 	static int skipArray[MEMINFO_NEEDED_FIELDS_COUNT] = {0};
 	static int learnt = 0;
 
+#ifdef TESTME
+	char tstmeminfoHeader[MEMINFO_HEADER_TOTAL] = {0};
+	char tstmeminfoValue[MEMINFO_HEADER_TOTAL] = {0};
+	int tstprocessHeaderIndex = 0;
+	int tstprocessValueIndex = 0;
+	char tstFile[128];
+	if (isTestMode) {
+		strcpy(tstFile, testSmap);
+		if (strstr(tstFile, "Smap.txt")) {
+			strcpy(strstr(tstFile, "Smap.txt"), "Meminfo.txt");
+		}
+		else {
+			strcpy(tstFile, "/proc/meminfo");
+		}
+	}
+	else {
+		strcpy(tstFile, "/proc/meminfo");
+	}
+	FILE *meminfo = fopen(tstFile, "r");
+#else
 	FILE *meminfo = fopen("/proc/meminfo", "r");
+#endif
 	if (meminfo) {
 		unsigned long value;
 		char tmp[128];
