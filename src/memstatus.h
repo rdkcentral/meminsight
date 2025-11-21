@@ -38,18 +38,27 @@
 #include <time.h>
 #include <unistd.h>
 
-#define TESTME
 
 // -----------------------------
 // Debug Macros
 // -----------------------------
 
-// #define PRINT_DBG printf
-//#define PRINT_DBG_INITIAL printf
-//#define PRINT_DBG_SCANNED printf
+#define PRINT_MUST printf
+
+#if 0
+#define PRINT_ERROR printf
+#define PRINT_INFO printf
+#define PRINT_DBG printf
+#define PRINT_DBG_INITIAL printf
+#define PRINT_DBG_SCANNED printf
+#define TESTME
+#else
+#define PRINT_ERROR(...)
+#define PRINT_INFO(...)
 #define PRINT_DBG(...)
 #define PRINT_DBG_INITIAL(...)
 #define PRINT_DBG_SCANNED(...)
+#endif
 
 // -----------------------------
 // Macro Definitions

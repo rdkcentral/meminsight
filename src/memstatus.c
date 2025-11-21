@@ -50,7 +50,7 @@ static void ensure_output_dir(const char *dir)
     {
         if (mkdir(dir, 0755) == -1)
         {
-            printf("Failed to create output directory '%s': %s\n", dir, strerror(errno));
+            PRINT_MUST("Failed to create output directory '%s': %s\n", dir, strerror(errno));
         }
     }
 }
@@ -125,7 +125,7 @@ int getPropertyFromFile(const char *filename, const char *property, char *proper
  {
     if (!fwName || fwNameLen == 0)
     {
-        printf("Invalid parameter for firmware name\n");
+        PRINT_ERROR("Invalid parameter for firmware name\n");
         return 0;
     }
     FILE *fp = fopen(VERSION_FILE, "r");
@@ -168,14 +168,14 @@ size_t getMacAddress(const char *iface, char *macAddress, size_t szBufSize)
 {
     if (!iface || !macAddress || szBufSize < 18)
     { // 17 chars + null
-        printf("Invalid parameter\n");
+        PRINT_ERROR("Invalid parameter\n");
         return 0;
     }
     struct ifreq ifr;
     int fd = socket(AF_INET, SOCK_DGRAM, 0);
     if (fd == -1)
     {
-        printf("socket create failed: %s\n", strerror(errno));
+        PRINT_ERROR("socket create failed: %s\n", strerror(errno));
         return 0;
     }
     memset(&ifr, 0, sizeof(ifr));
@@ -183,7 +183,7 @@ size_t getMacAddress(const char *iface, char *macAddress, size_t szBufSize)
     ifr.ifr_addr.sa_family = AF_INET;
     if (ioctl(fd, SIOCGIFHWADDR, &ifr) == -1)
     {
-        printf("ioctl SIOCGIFHWADDR failed: %s\n", strerror(errno));
+        PRINT_ERROR("ioctl SIOCGIFHWADDR failed: %s\n", strerror(errno));
         close(fd);
         return 0;
     }
@@ -258,7 +258,7 @@ int fillProcessStatFields(unsigned pid, Process_Info *info, unsigned *flagsOut)
     FILE *statFile = fopen(statPath, "r");
     if (!statFile)
     {
-        printf("Failed to open stat file for PID %u: %s\n", pid, strerror(errno));
+        PRINT_ERROR("Failed to open stat file for PID %u: %s\n", pid, strerror(errno));
         return 0;
     }
     char line[1024];
@@ -310,7 +310,7 @@ int parseConfig(const char *configPath, Config_Data *config)
     const char *dot = strrchr(configPath, '.');
     if (!dot || (strncmp(dot, ".conf", 6) != 0))
     {
-        printf("Invalid config file format: %s\n", configPath);
+        PRINT_ERROR("Invalid config file format: %s\n", configPath);
         return -1;
     }
 
@@ -325,7 +325,7 @@ int parseConfig(const char *configPath, Config_Data *config)
     FILE *fp = fopen(configPath, "r");
     if (!fp)
     {
-        printf("Failed to open config file: %s\n", configPath);
+        PRINT_ERROR("Failed to open config file: %s\n", configPath);
         return -1;
     }
     char line[512];
@@ -409,7 +409,7 @@ void writeProcessInfo(unsigned noOfPids, FILE *output)
     headProcessInfo = NULL;
     if (i != noOfPids)
     {
-        printf("* Some process details might have been missed [%d vs actual %u]\n", i, noOfPids);
+        PRINT_DBG("* Some process details might have been missed [%d vs actual %u]\n", i, noOfPids);
     }
 }
 
@@ -465,7 +465,7 @@ void checkAndFree()
     int i = 1;
     while (tmp)
     {
-        printf("%d,%u,%lu\n", i++, tmp->pid, tmp->pssTotal);
+        PRINT_MUST("%d,%u,%lu\n", i++, tmp->pid, tmp->pssTotal);
         tofree = tmp;
         tmp = tmp->next;
         free(tofree);
@@ -545,7 +545,7 @@ int getProcessInfos(unsigned pid)
     {
         testpid = 0;
         memcpy(tmp, testSmap, 128);
-        printf("Testing with %s\n", tmp);
+        PRINT_MUST("Testing with %s\n", tmp);
     }
     else
 #endif
@@ -592,7 +592,7 @@ int getProcessInfos(unsigned pid)
                 PRINT_DBG("%s\n", tmp);
                 if (sscanf(tmp, "Shared_Clean: %u kB", &test_shared_clean))
                 {
-                    processInfoTest.shared_clean_total += test_shared_clean;
+                    processInfoTest.shared_clean_total += test_shared_clean? test_pss:0;
                 }
             }
             else if (strstr(tmp, "Private_Dirty:"))
@@ -797,7 +797,7 @@ int getProcessInfos(unsigned pid)
                 {
                     if (sscanf(tmp, "Shared_Clean: %u kB", &shared_clean))
                     {
-                        getProcessInfo.shared_clean_total += shared_clean;
+                        getProcessInfo.shared_clean_total += shared_clean? pss:0;
                         linesToSkipForSharedClean = linesSkippedForSharedClean + 1;
                         PRINT_DBG_INITIAL("After %u lines Read Shared_Clean (%u) in --> %s\r",
                                           linesToSkipForSharedClean, shared_clean, tmp);
@@ -877,7 +877,7 @@ int getProcessInfos(unsigned pid)
                 }
                 else
                 {
-                    printf("%s:%d: Shouldn't get here..\n", __FUNCTION__, __LINE__);
+                    PRINT_ERROR("%s:%d: Shouldn't get here..\n", __FUNCTION__, __LINE__);
                 }
             }
         }
@@ -886,7 +886,7 @@ int getProcessInfos(unsigned pid)
     }
     else
     {
-        printf("%s: Open failed, errno %d [%s]\n", tmp, errno, strerror(errno));
+        PRINT_ERROR("%s: Open failed, errno %d [%s]\n", tmp, errno, strerror(errno));
     }
     return 1;
 }
@@ -953,9 +953,15 @@ void printHelpAndUsage(char *argv[], bool moreInfo)
  */
 int collectSystemMemoryStats(bool includeKthreads, const char *outDir, int iterations, int interval, bool long_run)
 {
+    // outDir or default /tmp/meminsight
+    const char *dir = (outDir && outDir[0]) ? outDir : DEFAULT_OUT_DIR;
+    ensure_output_dir(dir);
+    PRINT_MUST("Capturing System wide stats into %s\n", dir);
+    char outputfile[512];
+
     for (int iter = 0; long_run || iter < iterations; iter++)
     {
-        printf("\n==== Iteration %d%s ====\n", iter + 1, long_run ? "/∞" : "");
+        PRINT_INFO("\n==== Iteration %d%s ====\n", iter + 1, long_run ? "/∞" : "");
         unsigned int noOfPids = 0;
 
         // MAC Address
@@ -979,17 +985,12 @@ int collectSystemMemoryStats(bool includeKthreads, const char *outDir, int itera
         char fwName[FW_LEN] = {0};
         getFirmwareImageName(fwName, sizeof(fwName));
 
-        // outDir or default /tmp/meminsight
-        const char *dir = (outDir && outDir[0]) ? outDir : DEFAULT_OUT_DIR;
-        ensure_output_dir(dir);
-        char outputfile[512] = {0};
         snprintf(outputfile, sizeof(outputfile), "%s/%s_%s_iter%d_%s", dir, mac, timestamp, iter + 1, CSV_FILE_NAME);
 
-        printf("Capturing System wide stats into %s\n", outputfile);
         FILE *output = fopen(outputfile, "w");
         if (NULL == output)
         {
-            printf("%s: Open failed, %d [%s]\n", outputfile, errno, strerror(errno));
+            PRINT_MUST("%s: Open failed, %d [%s]\n", outputfile, errno, strerror(errno));
             return -1;
         }
 
@@ -1012,13 +1013,16 @@ int collectSystemMemoryStats(bool includeKthreads, const char *outDir, int itera
                         memset(&getProcessInfo, 0, sizeof(getProcessInfo));
                         if (!fillProcessStatFields(pid, &getProcessInfo, &flags))
                         {
-                            printf("Failed to fill process stat fields for PID %d\n", pid);
+                            PRINT_ERROR("Failed to fill process stat fields for PID %d\n", pid);
                             continue;
                         }
                         if (flags & PF_KTHREAD && !includeKthreads)
                         {             /*PF_KTHREAD*/
                             continue; // Skip kernel threads if not included
                         }
+#ifdef TESTME
+			memset(&processInfoTest, 0, sizeof(processInfoTest));
+#endif			
                         if (!getProcessInfos(pid))
                         {
                             getProcessInfo.pid = pid;
@@ -1031,6 +1035,19 @@ int collectSystemMemoryStats(bool includeKthreads, const char *outDir, int itera
                             swap_pss_total += getProcessInfo.swap_pss_total;
                             addProcessInfo(&getProcessInfo);
                             noOfPids++;
+#ifdef TESTME
+                            if ((getProcessInfo.rssTotal != processInfoTest.rssTotal) || (getProcessInfo.pssTotal != processInfoTest.pssTotal) ||
+                                (getProcessInfo.shared_clean_total != processInfoTest.shared_clean_total) || 
+				(getProcessInfo.private_dirty_total != processInfoTest.private_dirty_total) ||
+                                (getProcessInfo.swap_pss_total != processInfoTest.swap_pss_total))
+                            {
+                                printf("something went wrong while processing smap for pid %d\n", pid);
+                                printf("%lu:%lu, %lu:%lu, %lu:%lu, %lu:%lu, %lu:%lu\n", 
+                                       getProcessInfo.rssTotal, processInfoTest.rssTotal,getProcessInfo.pssTotal,processInfoTest.pssTotal,
+				       getProcessInfo.shared_clean_total, processInfoTest.shared_clean_total, 
+                                       getProcessInfo.private_dirty_total, processInfoTest.private_dirty_total, getProcessInfo.swap_pss_total, processInfoTest.swap_pss_total);
+                            }
+#endif			    
                         }
                     }
                 }
@@ -1039,12 +1056,12 @@ int collectSystemMemoryStats(bool includeKthreads, const char *outDir, int itera
         }
         else
         {
-            printf("Failed to open %s directory: %s\n", PROC_DIR, strerror(errno));
+            PRINT_ERROR("Failed to open %s directory: %s\n", PROC_DIR, strerror(errno));
             fclose(output);
             return -1;
         }
         saveMeminfo(output);
-        printf("\nProcessed %u processes\n>> RSS_Total %lu\n>> PSS_Total "
+        PRINT_INFO("\nProcessed %u processes\n>> RSS_Total %lu\n>> PSS_Total "
                "%lu\n>> Shared_Clean_Total %lu\n>> Private_Dirty_Total %lu\n",
                noOfPids, rssTotal, pssTotal, shared_clean_total, private_dirty_total);
         fprintf(output, "\n\nProcesses:\nPID,EXE,RSS,PSS,SHARED_CLEAN,PRIVATE_"
@@ -1055,7 +1072,7 @@ int collectSystemMemoryStats(bool includeKthreads, const char *outDir, int itera
         fclose(output);
         if (interval >= 0 && (long_run || iter + 1 < iterations))
         {
-            printf("* %d%s Iteration completed. Sleeping for %d seconds before next iteration... \n", iter + 1, long_run ? "/∞" : "", interval);
+            PRINT_INFO("* %d%s Iteration completed. Sleeping for %d seconds before next iteration... \n", iter + 1, long_run ? "/∞" : "", interval);
             sleep(interval);
         }
     }
@@ -1068,7 +1085,7 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, int cli_iter
     Config_Data config;
     if (parseConfig(confFile, &config) != 0)
     {
-        printf("Error: Failed to parse config file '%s'\n", confFile);
+        PRINT_ERROR("Error: Failed to parse config file '%s'\n", confFile);
         return -1; // TODO: Need to handle this better
     }
 
@@ -1114,7 +1131,7 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, int cli_iter
     config.iterations = final_iterations;
     config.interval = final_interval;
 
-    printf("* Config loaded successfully [%s]", confFile);
+    PRINT_INFO("* Config loaded successfully [%s]", confFile);
     //printf("\n whitelist=%p\n count=%u\n outDir=%s\n iterations=%u\n interval=%u\n logLevel=%s\n", config.whitelist, config.whiteListCount, config.outputDir, final_iterations, final_interval, config.logLevel);
 
     if (config.interval > 0 && config.iterations > 0)
@@ -1124,7 +1141,7 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, int cli_iter
 
     for (int iter = 0; long_run || iter < final_iterations; iter++)
     {
-        printf("\n==== Iteration %d%s ====\n", iter + 1, long_run ? "/∞" : "");
+        PRINT_INFO("\n==== Iteration %d%s ====\n", iter + 1, long_run ? "/∞" : "");
         // Get MAC address
         char mac[32] = {0};
         getMacAddress(deviceIdentifierName, mac, sizeof(mac));
@@ -1150,12 +1167,12 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, int cli_iter
         ensure_output_dir(final_out_dir);
         snprintf(outputFilePath, sizeof(outputFilePath), "%s/%s_%s_iter%d_%s", final_out_dir, mac, timestamp, iter+1, CSV_FILE_NAME);
 
-        printf("Capturing Process stats into %s\n", outputFilePath);
+        PRINT_INFO("Capturing Process stats into %s\n", outputFilePath);
         // Open output file
         FILE *output = fopen(outputFilePath, "w");
         if (!output)
         {
-            printf("Error: Failed to open output file '%s' for writing\n", outputFilePath);
+            PRINT_ERROR("Error: Failed to open output file '%s' for writing\n", outputFilePath);
             for (unsigned j = 0; j < config.whiteListCount; j++)
             {
                 if (config.whitelist[j] != NULL)
@@ -1184,7 +1201,7 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, int cli_iter
             for (unsigned i = 0; i < config.whiteListCount; i++)
             {
                 unsigned int pid = 0;
-                printf("Processing whitelist item %s\n", config.whitelist[i]);
+                PRINT_INFO("Processing whitelist item %s\n", config.whitelist[i]);
                 if (isPID(config.whitelist[i]))
                 {
                     pid = (unsigned int)atoi(config.whitelist[i]);
@@ -1193,7 +1210,7 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, int cli_iter
                 {
                     if (!getPIDByProcessName(config.whitelist[i], &pid))
                     {
-                        printf("Process name'%s' not found\n", config.whitelist[i]);
+                        PRINT_ERROR("Process name'%s' not found\n", config.whitelist[i]);
                         continue; // Skip to next item
                     }
                 }
@@ -1201,7 +1218,7 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, int cli_iter
                 unsigned flags = 0;
                 if (!fillProcessStatFields(pid, &getProcessInfo, &flags))
                 {
-                    printf("Failed to fill process stat fields for PID %u\n", pid);
+                    PRINT_ERROR("Failed to fill process stat fields for PID %u\n", pid);
                     continue; // Skip to next item
                 }
                 if (flags & PF_KTHREAD && !enableKThreads)
@@ -1223,7 +1240,7 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, int cli_iter
                 }
                 else
                 {
-                    printf("Failed to get process info for PID %u\n", pid);
+                    PRINT_ERROR("Failed to get process info for PID %u\n", pid);
                 }
             }
             writeProcessInfo(actualCount, output);
@@ -1231,14 +1248,14 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, int cli_iter
         }
         else
         {
-            printf("No whitelist specified in config.\n");
+            PRINT_ERROR("No whitelist specified in config.\n");
         }
         fprintf(output, "0,Total,%lu,%lu,%lu,%lu\n", rssTotal, pssTotal, shared_clean_total, private_dirty_total);
         fclose(output);
 
         if (final_interval > 0 && iter + 1 < final_iterations)
         {
-            printf("* %d/%d Completed. Sleeping for %d seconds before next iteration... \n", iter+1, final_iterations, final_interval);
+            PRINT_INFO("* %d/%d Completed. Sleeping for %d seconds before next iteration... \n", iter+1, final_iterations, final_interval);
             sleep(final_interval);
         }
     }
@@ -1255,61 +1272,156 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, int cli_iter
     {
         free(config.whitelist);
     }
-    printf("\n---- Completed Data Capture ----\n");
+    PRINT_INFO("\n---- Completed Data Capture ----\n");
     return 0;
 }
 
 /**
- * Reads /proc/meminfo and writes the first 50 fields and their values to the
+ * Reads /proc/meminfo and writes the needed fields and their values to the
  * output file.
  */
 void saveMeminfo(FILE *out)
 {
-    unsigned long val[50];
-    unsigned count = 0;
-    char tmp[128];
-    char name[64];
 
-    FILE *meminfo = fopen("/proc/meminfo", "r");
-    if (meminfo)
-    {
-        int first = 1;
-        // print header
-        while (fgets(tmp, 127, meminfo) && count < 50)
-        {
-            if (sscanf(tmp, "%s %lu kB", name, &val[count]) == 2)
-            {
-                name[strlen(name) - 1] = '\0'; // Remove trailing ':'
-                if (!first)
-                {
-                    fprintf(out, ",");
-                }
-                fprintf(out, "%s", name);
-                first = 0;
-                count++;
-            }
-        }
-        fprintf(out, "\n");
-        fseek(meminfo, 0, SEEK_SET); // Reset file pointer to start
-        count = 0;
-        first = 1;
-        // Print values
-        while (fgets(tmp, 127, meminfo) && count < 50)
-        {
-            if (sscanf(tmp, "%s %lu kB", name, &val[count]) == 2)
-            {
-                if (!first)
-                {
-                    fprintf(out, ",");
-                }
-                fprintf(out, "%lu", val[count]);
-                first = 0;
-                count++;
-            }
-        }
-        fprintf(out, "\n\n"); // Blank line after meminfo block
-        fclose(meminfo);
-    }
+	/***
+	 * MemTotal,MemFree,MemAvailable,Buffers,Cached,SwapCached
+	 * Active(anon),Inactive(anon),Active(file),Inactive(file)
+	 * SwapTotal,SwapFree,AnonPages,Mapped,Shmem,Slab,KernelStack,
+	 * VmallocUsed,CmaTotal,CmaFree
+	 ***/
+#define MEMINFO_NEEDED_FIELDS_COUNT 20
+#define MEMINFO_HEADER_TOTAL 256
+#ifdef TESTME
+	char tstmeminfoHeader[MEMINFO_HEADER_TOTAL] = {0};
+	char tstmeminfoValue[MEMINFO_HEADER_TOTAL] = {0};
+	int tstprocessHeaderIndex = 0;
+	int tstprocessValueIndex = 0;
+#endif
+	static char *meminfoNeeded[MEMINFO_NEEDED_FIELDS_COUNT] = {
+		/* Important, MemTotal needs to be at first...other fields doesn't matter */
+		"MemTotal","MemFree","MemAvailable","Buffers","Cached","SwapCached",
+		"Active(anon)","Inactive(anon)","Active(file)","Inactive(file)",
+		"SwapTotal","SwapFree","AnonPages","Mapped","Shmem","Slab","KernelStack",
+		"VmallocUsed","CmaFree","CmaTotal"};
+	static char meminfoHeader[MEMINFO_HEADER_TOTAL] = {0};
+	static char meminfoValue[MEMINFO_HEADER_TOTAL] = {0};
+	static int skipMemTotal = 0;
+	static int skipArray[MEMINFO_NEEDED_FIELDS_COUNT] = {0};
+	static int learnt = 0;
+
+	FILE *meminfo = fopen("/proc/meminfo", "r");
+	if (meminfo) {
+		unsigned long value;
+		char tmp[128];
+		int skipCount = skipArray[1];
+		int processIndex = learnt;
+		int processValIndex = skipMemTotal;
+		while (fgets(tmp, 127, meminfo) && (processIndex < MEMINFO_NEEDED_FIELDS_COUNT)) {
+#ifdef TESTME
+			char tstname[64];
+			if (!sscanf(tmp, "%s %lu kB", tstname, &value)) {
+				PRINT_DBG("%s: Error parsing [%s]\n", __FUNCTION__, tmp);
+				continue; 
+			}
+			tstname[strlen(tstname)-1] = '\0';
+			for (int tsti=0; tsti<MEMINFO_NEEDED_FIELDS_COUNT; tsti++) {
+				if (!strcmp(tstname, meminfoNeeded[tsti])) {
+					if (!tstprocessHeaderIndex) {
+						tstprocessHeaderIndex += sprintf(tstmeminfoHeader+tstprocessHeaderIndex, "%s", meminfoNeeded[tsti]);
+						tstprocessValueIndex += sprintf(tstmeminfoValue+tstprocessValueIndex, "%lu", value);
+					}
+					else {
+						tstprocessHeaderIndex += sprintf(tstmeminfoHeader+tstprocessHeaderIndex, ",%s", meminfoNeeded[tsti]);
+						tstprocessValueIndex += sprintf(tstmeminfoValue+tstprocessValueIndex, ",%lu", value);
+					}
+				}
+			}
+#endif
+			if (learnt) {
+				if (! --skipCount) {
+					if (!sscanf(tmp, "%*s %lu kB", &value)) {
+						PRINT_DBG("%s: Error parsing [%s]\n", __FUNCTION__, tmp);
+						continue; 
+					}
+					skipCount = skipArray[++processIndex];
+					processValIndex += sprintf(meminfoValue+processValIndex, ",%lu", value);
+				}
+			}
+			else 
+			{
+				char name[64];
+				// Below lines repeat, but okay..for clarity and not needed to check whether learnt again
+				if (!sscanf(tmp, "%s %lu kB", name, &value)) {
+					PRINT_DBG("%s: Error parsing [%s]\n", __FUNCTION__, tmp);
+					continue; 
+				}
+				skipCount++;
+				name[strlen(name)-1] = '\0';
+				if (!strcmp(name, meminfoNeeded[processIndex])) {
+					PRINT_DBG_INITIAL("Found %s storing at index %d\n", name, processIndex);
+					if (processIndex) { // For MemTotal, skip always since we've the constant value
+						skipArray[processIndex++] = skipCount;
+						skipCount = 0;
+						processValIndex += sprintf(meminfoValue+processValIndex, ",%lu", value);
+					}
+					else {
+						processIndex++;
+						processValIndex += sprintf(meminfoValue+processValIndex, "%lu", value);
+						skipMemTotal = processValIndex;
+					}
+	    			}
+				else {
+					// If the list is in order, then we can skip and go on. 
+					// But if for some reason, the order is not maintained, then 
+					// do the loop of meminfoNeeded and figure out..
+					for (int i=processIndex+1; i<MEMINFO_NEEDED_FIELDS_COUNT; i++)
+					{
+						if (!strcmp(name, meminfoNeeded[i])) {
+							PRINT_DBG_INITIAL("Found by looping %s storing at index %d\n", name, processIndex);
+							// Let's swap the entries in meminfoNeeded 
+							char *tmpp = meminfoNeeded[processIndex];
+							meminfoNeeded[processIndex] = meminfoNeeded[i];
+							meminfoNeeded[i] = tmpp;
+							skipArray[processIndex++] = skipCount;
+							skipCount = 0;
+							processValIndex += sprintf(meminfoValue+processValIndex, ",%lu", value);
+							break;
+						}
+					}
+				}
+			}
+		} // while (fgets(tmp, 127,...
+		fclose(meminfo);	    
+		if (!learnt) {
+			PRINT_DBG_INITIAL("Total %d found %d\n", MEMINFO_NEEDED_FIELDS_COUNT, processIndex);
+			learnt = 1;
+			int index = 0;
+			for (int i=0; i < processIndex; i++) {
+				if ((MEMINFO_HEADER_TOTAL - 16) < index) {
+					PRINT_DBG("Buffer insufficient....\n");
+					exit(0);
+				}
+				PRINT_DBG_INITIAL("index %d at %d..meminfo [%s] skip [%d]\n", index,i,meminfoNeeded[i],skipArray[i]);
+				if (index) {
+					index += sprintf(meminfoHeader+index, ",%s", meminfoNeeded[i]);
+				}
+				else {
+					index += sprintf(meminfoHeader+index, "%s", meminfoNeeded[i]);
+				}
+			}
+		}
+		fprintf(out, "/proc/meminfo:\n%s", meminfoHeader);
+		fprintf(out, "\n%s\n", meminfoValue);
+#ifdef TESTME
+		if (strcmp(meminfoHeader, tstmeminfoHeader) || strcmp(meminfoValue, tstmeminfoValue)) {
+			PRINT_DBG("Test Failed..meminfoHeader vs tstmeminfoHeader [%s] vs [%s]\n", meminfoHeader, tstmeminfoHeader);
+			PRINT_DBG("meminfoValue vs tstmeminfoValue [%s] vs [%s]\n", meminfoValue, tstmeminfoValue);
+		}
+#endif
+	}
+	else {
+		PRINT_DBG("Error opening /proc/meminfo, [%s]\n", strerror(errno));
+	}
 }
 
 // -----------------------------
@@ -1349,7 +1461,7 @@ int main(int argc, char *argv[])
                 FILE *fp = fopen(confFile, "r");
                 if (!fp)
                 {
-                    printf("Error: Config file '%s' does not exist or cannot "
+                    PRINT_ERROR("Error: Config file '%s' does not exist or cannot "
                            "be opened.\n",
                            confFile);
                     printHelpAndUsage(argv, true);
@@ -1361,7 +1473,7 @@ int main(int argc, char *argv[])
             }
             else
             {
-                printf("Error: Missing config file path after %s\n", argv[i]);
+                PRINT_ERROR("Error: Missing config file path after %s\n", argv[i]);
                 printHelpAndUsage(argv, false);
             }
         }
@@ -1386,7 +1498,7 @@ int main(int argc, char *argv[])
             }
             else
             {
-                printf("Error: Missing output directory path after %s\n", argv[i]);
+                PRINT_ERROR("Error: Missing output directory path after %s\n", argv[i]);
                 printHelpAndUsage(argv, false);
             }
         }
@@ -1400,7 +1512,7 @@ int main(int argc, char *argv[])
             }
             else
             {
-                printf("Error: Missing interval value after %s\n", argv[i]);
+                PRINT_ERROR("Error: Missing interval value after %s\n", argv[i]);
                 printHelpAndUsage(argv, false);
             }
         }
@@ -1414,13 +1526,13 @@ int main(int argc, char *argv[])
             }
             else
             {
-                printf("Error: Missing iterations value after %s\n", argv[i]);
+                PRINT_ERROR("Error: Missing iterations value after %s\n", argv[i]);
                 printHelpAndUsage(argv, false);
             }
         }
         else
         {
-            printf("Error: Unrecognized argument '%s'\n", argv[i]);
+            PRINT_ERROR("Error: Unrecognized argument '%s'\n", argv[i]);
             printHelpAndUsage(argv, false);
         }
     }
@@ -1448,199 +1560,12 @@ int main(int argc, char *argv[])
             final_interval = (cli_interval <= 0) ? DEFAULT_INTERVAL : cli_interval;
             final_iterations = (cli_iterations <= 1) ? ((final_interval > 0) ? 2 : DEFAULT_ITERATIONS) : cli_iterations;
         }
-        printf("* Running %d iterations with %ds interval (indefinitely?: %s)\n", final_iterations, final_interval, long_run ? "yes" : "no");
+        PRINT_MUST("* Running %d iterations with %ds interval (indefinitely?: %s)\n", final_iterations, final_interval, long_run ? "yes" : "no");
         collectSystemMemoryStats(enableKThreads, out_dir, final_iterations, final_interval, long_run);
     }
     else if (isTestMode)
     {
-        printf("Running in test mode with minimal config...\n");
+        PRINT_MUST("Running in test mode with minimal config...\n");
         printf("TO BE IMPLEMENTED\n"); // TODO: Implement test mode logic
     }
 }
-
-/**
- * Main entry point: parses arguments, scans processes, collects stats, writes
- * output.
- */
-#if 0
-int main(int argc, char *argv[])
-{
-	unsigned noOfPids = 0;
-	char *outPath = NULL;
-	//printf("%s with %d args\n", argv[0], argc);
-	for (int i=1; i < argc; i++) {
-		if (!strcmp(argv[i], "-o")) {
-			if (i < argc + 1) {
-				i++;
-				DIR *outputDir = opendir(argv[i]);
-				if (outputDir) {
-					closedir(outputDir);
-					outPath = argv[i];
-					continue;
-				}
-				printf("Dir %s access error %d [%s]\n", argv[i], errno, strerror(errno));
-			}
-			printHelp(argv);
-		}
-		if (!strcmp(argv[i], "-t")) {
-			if (i < argc + 1) {
-				i++;
-				FILE *testMapFd = fopen(argv[i], "r");
-				if (testMapFd) {
-					fclose(testMapFd);
-					testpid = 1;
-					strncpy(testSmap, argv[i], 128);
-					continue;
-				}
-				printf("Test map file %s open error %d [%s]\n", argv[i], errno, strerror(errno));
-			}
-			printHelp(argv);
-		}
-		if (!strcmp(argv[i], "-a")) {
-			includeKthreads = 1;
-			continue;
-		}
-		//if (!strcmp(argv[i], "--help") || !strcmp(argv[i], "-h"))
-		{
-			printHelp(argv);
-		}
-	}
-#ifdef TESTME
-	if (testpid) {
-		if (getProcessInfos(0)) {
-			if ((getProcessInfo.rssTotal != processInfoTest.rssTotal) || (getProcessInfo.pssTotal != processInfoTest.pssTotal) ||
-			        (getProcessInfo.shared_clean_total != processInfoTest.shared_clean_total) || (getProcessInfo.private_dirty_total != processInfoTest.private_dirty_total) ||
-			        (getProcessInfo.swap_pss_total != processInfoTest.swap_pss_total))
-			{
-				printf("something went wrong while processing %s\n", testSmap);
-				printf("%lu:%lu, %lu:%lu, %lu:%lu, %lu:%lu, %lu:%lu\n", getProcessInfo.rssTotal, processInfoTest.rssTotal, getProcessInfo.pssTotal,
-				       processInfoTest.pssTotal,getProcessInfo.shared_clean_total, processInfoTest.shared_clean_total, getProcessInfo.private_dirty_total,
-				       processInfoTest.private_dirty_total, getProcessInfo.swap_pss_total, processInfoTest.swap_pss_total);
-				pause();
-			}
-		}
-		testList();
-	}
-#endif
-	time_t timenow = time(NULL);
-	struct tm *tmNow = localtime(&timenow);
-	char filename[128] = {'\0'};
-	char outputfile[256] = {'\0'};
-
-	if (0 == strftime(filename, sizeof(filename), "%Y_%m_%d_%H_%M_%S_memstatus.txt", tmNow)) {
-		// Shouldn't fail unless outputFilename is not big enough to hold
-		sprintf(filename, "%lu_memstatus.txt", timenow); // see if this is warned in 32 bit systems..
-	}
-	sprintf(outputfile, "%s/%s", outPath?outPath:"/tmp/", filename);
-	printf("time: %s\n", outputfile);
-	FILE *output = fopen(outputfile, "w");
-
-	if (NULL == output) {
-		printf("%s: Open failed, %d [%s]\n", outputfile, errno, strerror(errno));
-		exit(2);
-	}
-	unsigned long rssTotal = 0, pssTotal = 0, shared_clean_total = 0, private_dirty_total = 0, swap_pss_total = 0;
-	DIR *proc = opendir("/proc");
-	if (proc) {
-		struct dirent *entry;
-		while ((entry = readdir(proc)) != NULL) {
-			if (entry->d_name[0] != '.') {
-				unsigned pid = atoi(entry->d_name);
-				char nameTmp[PATH_MAX]; // = {'\0'};
-				if (pid) {
-					/* readlink of /proc/pid/exe doesn't read all user space processes if user is not super user??
-					 *
-					int nbytes;
-					char linkTmp[PATH_MAX] = {'\0'};
-					sprintf(linkTmp, "/proc/%d/exe", pid);
-					nbytes = readlink(linkTmp, pathTmp, PATH_MAX);
-					if (-1 < nbytes)
-						printf("%d: %s points to %s\n", nbytes, linkTmp, pathTmp);
-					*
-					*/
-
-					/* Use /proc/pid/stat to read name, flags, stime, utime */
-					char pathTmp[PATH_MAX];
-					unsigned long utime, stime;
-					unsigned long minFaults, majFaults;
-
-					sprintf(pathTmp, "/proc/%d/stat", pid);
-					FILE *fp = fopen(pathTmp, "r");
-					if (fp) {
-						unsigned flags;
-
-						// pid comm state ppid pgrp session tty_nr tpgid flags minflt cminflt majflt cmajflt utime stime ...
-						// 2 (kthreadd) S 0 0 0 0 -1 2129984 0 0 0 0 0 2
-						if (6 == fscanf(fp, "%*d %*c%s %*c %*d %*d %*d %*d %*d %u %lu %*u %lu %*u %lu %lu",
-						                nameTmp, &flags, &minFaults, &majFaults, &utime, &stime )) {
-							nameTmp[strlen(nameTmp)-1] = '\0';
-							memset(&getProcessInfo, 0, sizeof(getProcessInfo));
-							if (flags & 0x00200000) { /*PF_KTHREAD*/
-								// Not needed to get smaps data..continue
-								if (includeKthreads) {
-									printf("%d,[%s],0,0,0,0,0,%lu,%lu\n", pid, nameTmp, majFaults, utime + stime);
-									getProcessInfo.pid = pid;
-									sprintf(getProcessInfo.name, "[%s]", nameTmp);
-									getProcessInfo.majFaults = majFaults;
-									getProcessInfo.cputime = utime + stime;
-									addProcessInfo(&getProcessInfo);
-								}
-								fclose(fp);
-								continue;
-							}
-							noOfPids++;
-						}
-						fclose(fp);
-					}
-					else {
-						printf("%s: Open failed, errno %d [%s]\n", pathTmp, errno, strerror(errno));
-						continue;
-					}
-					getProcessInfo.pid = pid;
-					strcpy(getProcessInfo.name, nameTmp);
-					getProcessInfo.majFaults = majFaults;
-					getProcessInfo.cputime = utime + stime;
-#ifdef TESTME
-					memset(&processInfoTest, 0, sizeof(processInfoTest));
-#endif
-					if (!getProcessInfos(pid)) {
-						rssTotal += getProcessInfo.rssTotal;
-						pssTotal += getProcessInfo.pssTotal;
-						shared_clean_total += getProcessInfo.shared_clean_total;
-						private_dirty_total += getProcessInfo.private_dirty_total;
-						swap_pss_total += getProcessInfo.swap_pss_total;
-						addProcessInfo(&getProcessInfo);
-					}
-					else {
-						printf("getProcessInfos failed..\n");
-					}
-#ifdef TESTME
-					if ((getProcessInfo.rssTotal != processInfoTest.rssTotal) || (getProcessInfo.pssTotal != processInfoTest.pssTotal) ||
-					        (getProcessInfo.shared_clean_total != processInfoTest.shared_clean_total) || (getProcessInfo.private_dirty_total != processInfoTest.private_dirty_total) ||
-					        (getProcessInfo.swap_pss_total != processInfoTest.swap_pss_total))
-					{
-						printf("something went wrong while processing smap for pid %d\n", pid);
-						printf("%lu:%lu, %lu:%lu, %lu:%lu, %lu:%lu, %lu:%lu\n",
-						       getProcessInfo.rssTotal, processInfoTest.rssTotal,getProcessInfo.pssTotal,processInfoTest.pssTotal,getProcessInfo.shared_clean_total, processInfoTest.shared_clean_total,
-						       getProcessInfo.private_dirty_total, processInfoTest.private_dirty_total, getProcessInfo.swap_pss_total, processInfoTest.swap_pss_total);
-						pause();
-					}
-#endif
-				}
-			}
-		}
-		closedir(proc);
-	}
-	else {
-		printf("/proc: Open failed, errno %d [%s]\n", errno, strerror(errno));
-	}
-
-	saveMeminfo(output);
-	printf("Processed %u processes\nRSS_Total %lu\nPSS_Total %lu\nShared_Clean_Total %lu\nPrivate_Dirty_Total %lu\n", noOfPids, rssTotal, pssTotal, shared_clean_total, private_dirty_total);
-	fprintf(output, "\n\nProcesses:\nPID,EXE,RSS,PSS,SHARED_CLEAN,PRIVATE_DIRTY,SWAP_PSS,MAJ_FAULTS,CPU_TIME\n");
-	writeProcessInfo(noOfPids, output);
-	fprintf(output, "0,Total,%lu,%lu,%lu,%lu\n", rssTotal, pssTotal, shared_clean_total, private_dirty_total);
-	fclose(output);
-	return 0;
-}
-#endif
