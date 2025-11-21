@@ -28,6 +28,7 @@ Process_Info *headProcessInfo = NULL; // Head of linked list
 #ifdef TESTME
 unsigned isTestMode = 0;
 char testSmap[128];
+char testMeminfo[128];
 Process_Info processInfoTest;
 #endif
 
@@ -979,7 +980,7 @@ void printHelpAndUsage(char *argv[], bool moreInfo)
     printf("      --interval <seconds>  Interval in seconds between iterations (overrides config)\n");
     printf("      --iterations <count>  Number of iterations to run (overrides config)\n");
     printf("  -h, --help                Show this help message and exit\n");
-    printf("  -t, --test <smapsFile>    Run in test mode with a generated minimal config\n\n");
+    printf("  -t, --test <smapsFile> <meminfoFile>   Run in test mode using supplied sample files\n\n");
 
     if (moreInfo)
     {
@@ -996,7 +997,7 @@ void printHelpAndUsage(char *argv[], bool moreInfo)
         printf("  %s --config /etc/xmeminsight_configuration%s\n", argv[0], CONFIG_EXTN);
         printf("  %s -c myconfig%s -a --interval 10 --iterations 5\n", argv[0], CONFIG_EXTN);
         printf("  %s --output /var/log/ --iterations 3\n", argv[0]);
-        printf("  %s --test\n\n", argv[0]);
+        printf("  %s --test ../tst/smaps.txt ../tst/meminfo.txt\n\n", argv[0]);
 
         printf("Sample config file:\n");
         printf("  process_whitelist=myapp,systemd,1234\n  output_dir=/var/log/\n  iterations=10\n  interval=60\n  log_level=INFO\n\n");
@@ -1385,20 +1386,7 @@ void saveMeminfo(FILE *out)
 	char tstmeminfoValue[MEMINFO_HEADER_TOTAL] = {0};
 	int tstprocessHeaderIndex = 0;
 	int tstprocessValueIndex = 0;
-	char tstFile[128];
-	if (isTestMode) {
-		strcpy(tstFile, testSmap);
-		if (strstr(tstFile, "Smap.txt")) {
-			strcpy(strstr(tstFile, "Smap.txt"), "Meminfo.txt");
-		}
-		else {
-			strcpy(tstFile, "/proc/meminfo");
-		}
-	}
-	else {
-		strcpy(tstFile, "/proc/meminfo");
-	}
-	FILE *meminfo = fopen(tstFile, "r");
+	FILE *meminfo = fopen((isTestMode)?testMeminfo:"/proc/meminfo", "r");
 #else
 	FILE *meminfo = fopen("/proc/meminfo", "r");
 #endif
@@ -1580,17 +1568,26 @@ int main(int argc, char *argv[])
         else if (!strncmp(argv[i], "-t", 3) || !strncmp(argv[i], "--test", 7))
         { // test mode
             isTestMode = 2;
-            if (i < argc + 1) {
+            if ((i+2) < argc) {
                 i++;
                 FILE *testMapFd = fopen(argv[i], "r");
                 if (testMapFd) {
                         fclose(testMapFd);
                         strncpy(testSmap, argv[i], 128);
-                        continue;
-                }
-                printf("Test map file %s open error %d [%s]\n", argv[i], errno, strerror(errno));
-                printHelpAndUsage(argv, false);
+			i++;
+			testMapFd = fopen(argv[i], "r");
+			if (testMapFd) {
+				fclose(testMapFd);
+				strncpy(testMeminfo, argv[i], 128);
+                        	continue;
+			}
+			else {
+                		PRINT_ERROR("Test meminfo file %s open error %d [%s]\n", argv[i], errno, strerror(errno));
+			}
+                } else
+                	PRINT_ERROR("Test map file %s open error %d [%s]\n", argv[i], errno, strerror(errno));
             }
+            printHelpAndUsage(argv, false);
         }
 #endif
         else if (!strncmp(argv[i], "-o", 3) || !strncmp(argv[i], "--output", 9))
