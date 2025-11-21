@@ -1436,7 +1436,7 @@ void saveMeminfo(FILE *out)
 						continue; 
 					}
 					skipCount = skipArray[++processIndex];
-					processValIndex = sprintf(meminfoValue+processValIndex, ",%lu", value);
+					processValIndex += sprintf(meminfoValue+processValIndex, ",%lu", value);
 				}
 			}
 			else 
