@@ -88,6 +88,7 @@ This is used to ensure compatibility with older versions of the report parser. *
 #define PROC_DIR "/proc"
 #define VERSION_FILE "/version.txt"
 #define DEVICE_PROP_FILE "/etc/device.properties"
+#define MEMINFO_FILE PROC_DIR "/meminfo"
 
 /* Default Macros */
 #define DEFAULT_FW_NAME "ACTIVEFW123"

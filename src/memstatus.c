@@ -60,6 +60,7 @@ static void ensure_output_dir(const char *dir)
  * Reads a property value from a file in "key=value" format.
  * Returns 1 if found, 0 otherwise.
  */
+#if 0
 int getPropertyFromFile(const char *filename, const char *property, char *propertyValue, size_t propertyValueLen)
 {
     FILE *fp = fopen(filename, "r");
@@ -116,6 +117,30 @@ int getPropertyFromFile(const char *filename, const char *property, char *proper
         propertyValue[0] = '\0';
     return found;
 }
+/**
+ * Retrieves the system uptime from /proc/uptime.
+ * Returns a string in "HH:MM:SS" format.
+ */
+char *getSystemUptime() { # TODO
+    static char uptimeStr[32] = {0};
+    FILE *fp = fopen("/proc/uptime", "r");
+    if (!fp) {
+        strncpy(uptimeStr, "unknown", sizeof(uptimeStr) - 1);
+        return uptimeStr;
+    }
+    float uptimeSeconds = 0.0f;
+    if (fscanf(fp, "%f", &uptimeSeconds) == 1) {
+        unsigned int hours = (unsigned int)(uptimeSeconds / 3600);
+        unsigned int minutes = (unsigned int)((uptimeSeconds - (hours * 3600)) / 60);
+        unsigned int seconds = (unsigned int)(uptimeSeconds) % 60;
+        snprintf(uptimeStr, sizeof(uptimeStr), "%02u:%02u:%02u", hours, minutes, seconds);
+    } else {
+        strncpy(uptimeStr, "unknown", sizeof(uptimeStr) - 1);
+    }
+    fclose(fp);
+    return uptimeStr;
+}
+#endif
 
 /**
  * Reads the firmware image name from /version.txt.
@@ -211,7 +236,7 @@ int isPID(const char *str)
  */
 int getPIDByProcessName(const char *procName, unsigned int *pidOut)
 {
-    DIR *proc = opendir("/proc");
+    DIR *proc = opendir(PROC_DIR);
     if (!proc)
         return 0;
     struct dirent *entry;
@@ -984,7 +1009,7 @@ void printHelpAndUsage(char *argv[], bool moreInfo)
 
     if (moreInfo)
     {
-        printf("Precedence:\n");
+        printf("\nPrecedence:\n");
         printf("  Command-line arguments override config file values, which override built-in defaults.\n\n");
 
         printf("Default behavior (no flags):\n");
@@ -1017,6 +1042,18 @@ void printHelpAndUsage(char *argv[], bool moreInfo)
  */
 int collectSystemMemoryStats(bool includeKthreads, const char *outDir, int iterations, int interval, bool long_run)
 {
+    // Get MAC Address
+    char mac[32] = {0};
+    getMacAddress(deviceIdentifierName, mac, sizeof(mac));
+    if (mac[0] == '\0')
+    {
+        strncpy(mac, DEFAULT_MAC, sizeof(mac) - 1);
+        mac[sizeof(mac) - 1] = '\0';
+    }
+    // Get Firmware image name
+    char fwName[FW_LEN] = {0};
+    getFirmwareImageName(fwName, sizeof(fwName));
+    
     // outDir or default /tmp/meminsight
     const char *dir = (outDir && outDir[0]) ? outDir : DEFAULT_OUT_DIR;
     ensure_output_dir(dir);
@@ -1028,15 +1065,6 @@ int collectSystemMemoryStats(bool includeKthreads, const char *outDir, int itera
         PRINT_INFO("\n==== Iteration %d%s ====\n", iter + 1, long_run ? "/∞" : "");
         unsigned int noOfPids = 0;
 
-        // MAC Address
-        char mac[32] = {0};
-        getMacAddress(deviceIdentifierName, mac, sizeof(mac));
-        if (mac[0] == '\0')
-        {
-            strncpy(mac, DEFAULT_MAC, sizeof(mac) - 1);
-            mac[sizeof(mac) - 1] = '\0';
-        }
-
         // Current timestamp
         time_t timenow = time(NULL);
         struct tm *tm_info = localtime(&timenow);
@@ -1044,10 +1072,6 @@ int collectSystemMemoryStats(bool includeKthreads, const char *outDir, int itera
         char ts[32] = {0};
         strftime(ts, sizeof(ts), "%Y-%m-%d %H:%M:%S", tm_info);
         strftime(timestamp, sizeof(timestamp), "%Y%m%d%H%M%S", tm_info);
-
-        // Firmware image name
-        char fwName[FW_LEN] = {0};
-        getFirmwareImageName(fwName, sizeof(fwName));
 
         snprintf(outputfile, sizeof(outputfile), "%s/%s_%s_iter%d_%s", dir, mac, timestamp, iter + 1, CSV_FILE_NAME);
 
@@ -1057,6 +1081,7 @@ int collectSystemMemoryStats(bool includeKthreads, const char *outDir, int itera
             PRINT_MUST("%s: Open failed, %d [%s]\n", outputfile, errno, strerror(errno));
             return -1;
         }
+        PRINT_INFO("Capturing Process stats into: %s\n", outputfile);
 
         fprintf(output, "FIRMWARE_NAME,MAC_ADDRESS,TIMESTAMP,REPORT_VERSION\n");
         fprintf(output, "%s,%s,%s,%s\n\n", fwName, mac, ts, reportVersion);
@@ -1164,7 +1189,7 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, int cli_iter
     if (parseConfig(confFile, &config) != 0)
     {
         PRINT_ERROR("Error: Failed to parse config file '%s'\n", confFile);
-        return -1; // TODO: Need to handle this better
+        return -1;
     }
 
     // Output directory: CLI > config > default
@@ -1217,16 +1242,21 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, int cli_iter
         long_run = false; // If both interval and iterations are specified, it's not a long run
     }
 
+    // Get MAC Address
+    char mac[32] = {0};
+    getMacAddress(deviceIdentifierName, mac, sizeof(mac));
+    if (mac[0] == '\0') {
+        strncpy(mac, DEFAULT_MAC, sizeof(mac) - 1);
+        mac[sizeof(mac) - 1] = '\0'; // Ensure null-termination
+    }
+
+    // Firmware image name
+    char fwName[FW_LEN] = {0};
+    getFirmwareImageName(fwName, sizeof(fwName));
+
     for (int iter = 0; long_run || iter < final_iterations; iter++)
     {
         PRINT_INFO("\n==== Iteration %d%s ====\n", iter + 1, long_run ? "/∞" : "");
-        // Get MAC address
-        char mac[32] = {0};
-        getMacAddress(deviceIdentifierName, mac, sizeof(mac));
-        if (mac[0] == '\0') {
-            strncpy(mac, DEFAULT_MAC, sizeof(mac) - 1);
-            mac[sizeof(mac) - 1] = '\0'; // Ensure null-termination
-        }
 
         // Get timestamp
         time_t timenow = time(NULL);
@@ -1235,10 +1265,6 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, int cli_iter
         char ts[32] = {0};
         strftime(ts, sizeof(ts), "%Y-%m-%d %H:%M:%S", tm_info);
         strftime(timestamp, sizeof(timestamp), "%Y%m%d%H%M%S", tm_info);
-
-        // Firmware image name
-        char fwName[FW_LEN] = {0};
-        getFirmwareImageName(fwName, sizeof(fwName));
 
         // Generate output file name
         char outputFilePath[PATH_MAX * 2] = {0};
@@ -1268,9 +1294,9 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, int cli_iter
         fprintf(output, "FIRMWARE_NAME,MAC_ADDRESS,TIMESTAMP,REPORT_VERSION\n");
         fprintf(output, "%s,%s,%s,%s\n\n", fwName, mac, ts, reportVersion);
 
-        saveMeminfo(output); // TODO: based on whitelist count write content
+        saveMeminfo(output);
         fprintf(output, "\nPID,EXE,RSS,PSS,SHARED_CLEAN,PRIVATE_DIRTY,SWAP_PSS,"
-                        "MAJ_FAULTS,CPU_TIME\n"); // TODO: bring inside loop
+                        "MAJ_FAULTS,CPU_TIME\n");
 
         unsigned long rssTotal = 0, pssTotal = 0, shared_clean_total = 0, private_clean_total = 0, private_dirty_total = 0, swap_pss_total = 0;
         unsigned actualCount = 0;
@@ -1386,9 +1412,9 @@ void saveMeminfo(FILE *out)
 	char tstmeminfoValue[MEMINFO_HEADER_TOTAL] = {0};
 	int tstprocessHeaderIndex = 0;
 	int tstprocessValueIndex = 0;
-	FILE *meminfo = fopen((isTestMode)?testMeminfo:"/proc/meminfo", "r");
+	FILE *meminfo = fopen((isTestMode)?testMeminfo:MEMINFO_FILE, "r");
 #else
-	FILE *meminfo = fopen("/proc/meminfo", "r");
+	FILE *meminfo = fopen(MEMINFO_FILE, "r");
 #endif
 	if (meminfo) {
 		unsigned long value;
@@ -1490,7 +1516,7 @@ void saveMeminfo(FILE *out)
 				}
 			}
 		}
-		fprintf(out, "/proc/meminfo:\n%s", meminfoHeader);
+		fprintf(out, "%s:\n%s", MEMINFO_FILE, meminfoHeader);
 		fprintf(out, "\n%s\n", meminfoValue);
 #ifdef TESTME
 		if (strcmp(meminfoHeader, tstmeminfoHeader) || strcmp(meminfoValue, tstmeminfoValue)) {
@@ -1500,7 +1526,7 @@ void saveMeminfo(FILE *out)
 #endif
 	}
 	else {
-		PRINT_MUST("Error opening /proc/meminfo, [%s]\n", strerror(errno));
+		PRINT_MUST("Error opening %s, [%s]\n", MEMINFO_FILE, strerror(errno));
 	}
 }
 
