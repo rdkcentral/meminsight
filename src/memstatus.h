@@ -38,18 +38,32 @@
 #include <time.h>
 #include <unistd.h>
 
-#define TESTME
 
 // -----------------------------
 // Debug Macros
 // -----------------------------
 
-// #define PRINT_DBG printf
-//#define PRINT_DBG_INITIAL printf
-//#define PRINT_DBG_SCANNED printf
-#define PRINT_DBG(...)
+#define PRINT_MUST printf
+
+//#define TESTME
+
+#ifdef TESTME
+#define PRINT_ERROR printf
+#else
+#define PRINT_ERROR(...)
+#endif
+
+#if 0
+#define PRINT_INFO printf
+#define PRINT_DBG_INITIAL printf
+#define PRINT_DBG_SCANNED printf
+#define PRINT_DBG printf
+#else
+#define PRINT_INFO(...)
 #define PRINT_DBG_INITIAL(...)
 #define PRINT_DBG_SCANNED(...)
+#define PRINT_DBG(...)
+#endif
 
 // -----------------------------
 // Macro Definitions
@@ -79,7 +93,7 @@ This is used to ensure compatibility with older versions of the report parser. *
 #define DEFAULT_FW_NAME "ACTIVEFW123"
 #define FW_LEN 64
 #define DEFAULT_ITERATIONS 1
-#define DEFAULT_INTERVAL 0
+#define DEFAULT_INTERVAL 5
 #define DEFAULT_OUT_DIR "/tmp/meminsight"
 #define DEFAULT_LOG_LEVEL "INFO"
 #define DEFAULT_MAC "00:00:00:00:00:00"
@@ -90,6 +104,7 @@ This is used to ensure compatibility with older versions of the report parser. *
 #define CONFIG_EXTN ".conf"
 #define CSV_FILE_NAME "meminsight.csv"
 #define LONG_RUN_INTERVAL 900 // 900 is Default interval for long runs in seconds
+#define LONG_RUN_ITERATIONS 48 // 12 Hour capture, considering 15 mins interval
 
 // -----------------------------
 // Data Structures
@@ -106,6 +121,7 @@ typedef struct process_info
     unsigned long rssTotal;            // Resident Set Size total (kB)
     unsigned long pssTotal;            // Proportional Set Size total (kB)
     unsigned long shared_clean_total;  // Shared clean memory (kB)
+    unsigned long private_clean_total;  // Private clean memory (kB)
     unsigned long private_dirty_total; // Private dirty memory (kB)
     unsigned long swap_pss_total;      // Swap PSS (kB)
     unsigned long majFaults;           // Major page faults
