@@ -35,8 +35,34 @@ jobs:
           file xmeminsight || echo "Cannot check file type"
           echo "Build verification complete"
 
-      # - name: Run tests (optional)
-      #   run: |
-      #     # If you have tests to run after building, you can add them here
-      #     # For example:
-      #     make test
+      - name: Locate built binary and expose at repo root
+        run: |
+          # look for an executable named xmeminsight anywhere under the repo
+          BINARY=$(find . -type f -name xmeminsight -perm /111 -print -quit || true)
+          if [ -z "$BINARY" ]; then
+            echo "ERROR: xmeminsight binary not found after build. Listing likely locations for debugging:"
+            find . -maxdepth 6 -type f -name 'xmeminsight*' -print || true
+            exit 1
+          fi
+          echo "Found xmeminsight at: $BINARY"
+          if [ "$BINARY" = "./xmeminsight" ]; then
+            echo "Binary already at repo root; skipping copy"
+          else
+            cp "$BINARY" ./xmeminsight
+            chmod +x ./xmeminsight
+          fi
+          ls -la ./xmeminsight
+
+      - name: Install Dependencies (valgrind, yes)
+        run: |
+          apt-get update
+          apt-get install -y valgrind coreutils
+
+      - name: Ensure runner script is executable
+        run: |
+          chmod +x ./safe_run_xmem.sh || true
+          ls -la ./safe_run_xmem.sh || echo "safe_run_xmem.sh not found"
+
+      - name: Run Valgrind cases using safe_run_xmem.sh
+        run: |
+          ./safe_run_xmem.sh
