@@ -1424,6 +1424,19 @@ void collectAMLBandwidthData(FILE *out)
     {
         fclose(fp);
         PRINT_MUST("AML DDR bandwidth monitoring is disabled\n");
+        // Enable DDR bandwidth monitoring
+        fp = fopen(AML_DDR_MODE_FILE, "w");
+        if (!fp)
+        {
+            PRINT_MUST("Failed to open %s for writing: %s\n", AML_DDR_MODE_FILE, strerror(errno));
+            return;
+        }
+        if (fputs("1\n", fp) == EOF)
+        {
+            PRINT_MUST("Failed to enable AML DDR bandwidth monitoring: %s\n", strerror(errno));
+        }
+        fclose(fp);
+        PRINT_MUST("AML DDR bandwidth monitoring enabled\n");
         return;
     }
     fclose(fp);
