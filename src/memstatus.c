@@ -1415,7 +1415,7 @@ void collectAMLBandwidthData(FILE *out)
     fp = fopen(AML_DDR_MODE_FILE, "r");
     if (!fp)
     {
-        PRINT_INFO("Failed to open %s: %s\n", AML_DDR_MODE_FILE, strerror(errno));
+        PRINT_MUST("Failed to open %s: %s\n", AML_DDR_MODE_FILE, strerror(errno));
         return;
     }
 
@@ -1423,7 +1423,7 @@ void collectAMLBandwidthData(FILE *out)
     if (!fgets(buffer, sizeof(buffer), fp) || buffer[0] != '1')
     {
         fclose(fp);
-        PRINT_INFO("AML DDR bandwidth monitoring is disabled\n");
+        PRINT_MUST("AML DDR bandwidth monitoring is disabled\n");
         return;
     }
     fclose(fp);
@@ -1432,7 +1432,7 @@ void collectAMLBandwidthData(FILE *out)
     fp = fopen(AML_DDR_BW_FILE, "r");
     if (!fp)
     {
-        PRINT_INFO("Failed to open %s: %s\n", AML_DDR_BW_FILE, strerror(errno));
+        PRINT_MUST("Failed to open %s: %s\n", AML_DDR_BW_FILE, strerror(errno));
         return;
     }
 
@@ -1442,11 +1442,11 @@ void collectAMLBandwidthData(FILE *out)
     {
         fprintf(out, "\n\nBandwidth:\nTotalBandwidth,UsagePercentage\n%lu,%.2f\n", 
                 totalBandwidth, usagePercentage);
-        PRINT_INFO("AML Bandwidth captured: %lu KB/s, %.2f%%\n", totalBandwidth, usagePercentage);
+        PRINT_MUST("AML Bandwidth captured: %lu KB/s, %.2f%%\n", totalBandwidth, usagePercentage);
     }
     else
     {
-        PRINT_INFO("Failed to parse bandwidth data from: %s\n", buffer);
+        PRINT_MUST("Failed to parse bandwidth data from: %s\n", buffer);
     }
     fclose(fp);
 }
