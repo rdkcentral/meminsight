@@ -101,6 +101,9 @@ This is used to ensure compatibility with older versions of the report parser. *
 
 #define PF_KTHREAD 0x00200000               // Kernel thread flag
 
+#define AML_DDR_MODE_FILE "/sys/class/aml_ddr/mode"
+#define AML_DDR_BW_FILE "/sys/class/aml_ddr/bandwidth"
+
 /* Config Macros */
 #define CONFIG_EXTN ".conf"
 #define CSV_FILE_NAME "meminsight.csv"
@@ -148,6 +151,7 @@ typedef struct config
 // -----------------------------
 
 extern int includeKthreads;           // Whether to include kernel threads
+extern bool g_isAmlogic;              // Whether the device is Amlogic SOC
 extern Process_Info getProcessInfo;   // Temporary struct for collecting process info
 extern Process_Info *headProcessInfo; // Head of linked list
 
@@ -169,6 +173,7 @@ int getProcessInfos(unsigned pid);
 void printHelp(char *argv[]);
 void printHelpAndUsage(char *argv[], bool moreInfo);
 void saveMeminfo(FILE *out);
+void collectAMLBandwidthData(FILE *out);
 int getPropertyFromFile(const char *filename, const char *property, char *propertyValue, size_t propertyValueLen);
 size_t getMacAddress(const char *iface, char *macAddress, size_t szBufSize);
 int getFirmwareImageName(char *fwName, size_t fwNameLen);
