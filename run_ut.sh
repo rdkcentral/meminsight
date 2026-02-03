@@ -17,14 +17,17 @@
 # SPDX-License-Identifier: Apache-2.0
 ##########################################################################
 
-set -e
-
 echo "=========================================="
 echo "Running xMemInsight Unit Tests"
 echo "=========================================="
 
 # Find xmeminsight binary location
-XMEM_BIN=$(which xmeminsight 2>/dev/null || echo "./xmeminsight")
+XMEM_BIN=""
+if command -v xmeminsight >/dev/null 2>&1; then
+    XMEM_BIN=$(which xmeminsight)
+elif [ -f "./xmeminsight" ]; then
+    XMEM_BIN="./xmeminsight"
+fi
 
 if [ ! -f "$XMEM_BIN" ]; then
     echo "ERROR: xmeminsight binary not found!"

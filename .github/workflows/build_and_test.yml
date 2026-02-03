@@ -38,4 +38,5 @@ jobs:
       - name: Run tests
         run: |
           chmod +x run_ut.sh
-          sh run_ut.sh
+          ./run_ut.sh
+        shell: bash
