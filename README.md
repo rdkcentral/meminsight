@@ -8,6 +8,7 @@
 
 - [Features](#-features)
 - [Quick Start](#-quick-start)
+- [Development Setup](#development-setup)
 - [Installation](#-installation)
 - [Usage](#-usage)
 - [Configuration](#-configuration)
@@ -52,11 +53,27 @@
 # Run basic system-wide memory analysis
 ./xmeminsight
 
-# Monitor specific processes with custom intervals
-./xmeminsight --config myconfig.conf --iterations 10 --interval 30
+# Run a finite capture (overrides defaults)
+./xmeminsight --iterations 10 --interval 30
 
 # Include kernel threads in analysis
-./xmeminsight --include-kthreads --output-dir /tmp/memreports
+./xmeminsight --all
+
+# Write reports to a custom directory
+./xmeminsight --output /tmp/memreports --iterations 3
+```
+
+## Development Setup
+
+```bash
+# Setup development environment
+autoreconf -fiv
+./configure --enable-debug
+make
+
+# Run test fixtures (requires TESTME build)
+make clean && make CFLAGS="-DTESTME"
+./run_ut.sh
 ```
 
 ## 🔨 Installation
@@ -94,31 +111,32 @@ sudo make install
 xmeminsight [OPTIONS]
 
 OPTIONS:
-  --config FILE              Use configuration file
-  --iterations N             Number of sampling iterations (default: 1)
-  --interval SECONDS         Seconds between samples (default: 0)
-  --output-dir DIR           Output directory (default: /tmp/meminsight)
-  --include-kthreads         Include kernel threads in analysis
-  --long-run                 Enable long-running mode (900s intervals)
-  --log-level LEVEL          Set logging level (DEBUG, INFO, ERROR)
-  --help                     Show help message
-  --test                     Run internal test suite
+   -a, --all                   Include kernel threads for process monitoring
+   -c, --config FILE           Path to configuration file (must end with .conf)
+   -o, --output DIR            Output directory for generated CSV files (default: /tmp/meminsight)
+         --iterations N          Number of iterations to run (overrides config)
+         --interval SECONDS      Seconds between iterations (overrides config)
+   -t, --test SMAPS MEMINFO     Run in test mode using supplied sample files (requires TESTME build)
+   -h, --help                  Show help message and exit
 ```
+
+### Default Behavior
+
+If you run `./xmeminsight` with no flags, it runs in a long-running mode (indefinite iterations) with a 15-minute interval and writes CSV reports under `/tmp/meminsight/`.
+
+To run a finite capture, specify `--iterations` and/or `--interval`.
 
 ### Basic Usage Examples
 
 ```bash
 # Single snapshot of system memory
-./xmeminsight
+./xmeminsight --iterations 1 --interval 0
 
 # Monitor for 1 hour with 5-minute intervals
 ./xmeminsight --iterations 12 --interval 300
 
-# Continuous monitoring with configuration file
-./xmeminsight --config production.conf --long-run
-
-# Debug mode with kernel thread inclusion
-./xmeminsight --include-kthreads --log-level DEBUG
+# Continuous monitoring with kernel threads
+./xmeminsight --all
 ```
 
 ## ⚙️ Configuration
@@ -143,8 +161,8 @@ log_level=INFO
 | `process_whitelist` | Comma-separated list of process names/PIDs | All processes | `apache2,mysql,1234` |
 | `output_dir` | Directory for output files | `/tmp/meminsight` | `/var/log/monitoring` |
 | `iterations` | Number of sampling cycles | `1` | `10` |
-| `interval` | Seconds between samples | `0` | `60` |
-| `log_level` | Logging verbosity | `INFO` | `DEBUG`, `ERROR` |
+| `interval` | Seconds between samples | `5` | `60` |
+| `log_level` | Logging verbosity (parsed from config; current builds may not print logs unless debug is enabled) | `INFO` | `DEBUG`, `ERROR` |
 
 ### Network Interface Configuration
 
@@ -175,22 +193,25 @@ echo "process_whitelist=systemd,NetworkManager,sshd" > services.conf
 ./xmeminsight --config services.conf --iterations 60 --interval 60
 ```
 
-### Long-Running System Monitoring
-
-```bash
-# 24/7 monitoring with 15-minute intervals
-./xmeminsight --long-run --output-dir /var/log/meminsight/
-```
-
 ### Test Mode for Validation
 
 ```bash
-# Run internal test suite
-./xmeminsight --test
+# Build with test-mode enabled (required for -t/--test)
+make clean && make CFLAGS="-DTESTME"
 
-# Validate configuration file
-./xmeminsight --config test.conf --test
+# Run using sample fixtures
+./xmeminsight --test tst/1-non-zero-swap-entry/meminsight_testSmap.txt tst/1-non-zero-swap-entry/meminsight_testMeminfo.txt
+
+# Run the repository unit-test runner (executes all fixtures and a negative test)
+./run_ut.sh
 ```
+
+The `tst/` directory contains per-test subdirectories (e.g. `tst/1-non-zero-swap-entry/`) holding:
+- `meminsight_testSmap.txt`
+- `meminsight_testMeminfo.txt`
+
+There is also a negative fixture in `tst/4-negative-duplicate-meminfo-field/` that is expected to fail in test mode and emit:
+`Test Failed..meminfoHeader vs tstmeminfoHeader ...`
 
 ## 🏗️ Build System
 
@@ -266,7 +287,7 @@ EOF
 ```bash
 # Monitor database memory usage every minute for 2 hours
 ./xmeminsight --iterations 120 --interval 60 \
-              --output-dir /tmp/db-analysis \
+              --output /tmp/db-analysis \
               --config database.conf
 ```
 
@@ -275,7 +296,7 @@ EOF
 ```bash
 # Lightweight monitoring for embedded systems
 CPPFLAGS="-DDEVICE_IDENTIFIER=\"eth0\"" make clean && make
-./xmeminsight --iterations 24 --interval 3600 --output-dir /mnt/logs/
+./xmeminsight --iterations 24 --interval 3600 --output /mnt/logs/
 ```
 
 ## 🔧 Troubleshooting
@@ -310,16 +331,6 @@ We welcome contributions! Please follow these guidelines:
    - Validate on different systems
 5. **Submit pull request**
 
-### Development Setup
 
-```bash
-# Setup development environment
-autoreconf -fiv
-./configure --enable-debug
-make
-
-# Run test suite
-./xmeminsight --test
-```
 
 ---
