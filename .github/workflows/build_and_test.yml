@@ -1,5 +1,8 @@
 name: Build and Test Component in Native Environment
 
+permissions:
+  contents: read
+
 on:
   pull_request:
     branches: [ develop ]
