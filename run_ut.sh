@@ -24,7 +24,7 @@ echo "=========================================="
 # Find xmeminsight binary location
 XMEM_BIN=""
 if command -v xmeminsight >/dev/null 2>&1; then
-    XMEM_BIN=$(which xmeminsight)
+    XMEM_BIN=$(command -v xmeminsight)
 elif [ -f "./xmeminsight" ]; then
     XMEM_BIN="./xmeminsight"
 fi
