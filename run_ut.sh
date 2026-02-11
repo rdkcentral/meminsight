@@ -44,7 +44,7 @@ mkdir -p /tmp/meminsight
 TEST_FAILED=0
 
 # “Array-like” lists (POSIX sh-friendly): index with cut -d'|' -fN
-TEST_DESCRIPTIONS="Non-zero Swap and SwapPSS|Swap and SwapPSS with 0 value|Empty Swap and SwapPSS values"
+TEST_DESCRIPTIONS="Non-zero Swap and SwapPSS|Swap and SwapPSS with 0 value|No Swap and SwapPSS values"
 TEST_DIRS="1-non-zero-swap-entry|2-zero-value-swap-entry|3-empty-swap-entry"
 
 NUM_TESTS=$(printf '%s' "$TEST_DIRS" | awk -F'|' '{print NF}')
