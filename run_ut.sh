@@ -87,7 +87,7 @@ while [ "$i" -le "$NUM_TESTS" ]; do
 done
 
 # Negative test 1: intentionally malformed meminfo fixture (duplicate needed field)
-NEG_DESC="Negative: duplicate meminfo field triggers failure"
+NEG_DESC="Test 4 (Negative): meminfo data failure"
 NEG_SMAP_FILE="tst/1-non-zero-swap-entry/meminsight_testSmap.txt"
 NEG_MEMINFO_FILE="tst/4-negative-duplicate-meminfo-field/meminsight_testMeminfo.txt"
 NEG_LOG_FILE="/tmp/meminsight/negative_test.log"
@@ -121,7 +121,7 @@ fi
 echo ""
 
 # Negative test 2: duplicate smap field triggers failure
-NEG_DESC2="Negative: duplicate smap field triggers failure"
+NEG_DESC2="Test 5 (Negative): smap data failure"
 NEG_SMAP_FILE2="tst/5-negative-duplicate-smaps-field/meminsight_testSmap.txt"
 NEG_MEMINFO_FILE2="tst/1-non-zero-swap-entry/meminsight_testMeminfo.txt"
 NEG_LOG_FILE2="/tmp/meminsight/negative_test2.log"
