@@ -94,7 +94,7 @@ echo "Running configure..."
 echo "Running make..."
 if [ "$TEST_MODE" -eq 1 ]; then
     echo "Building with TESTME flag for test mode..."
-    make CFLAGS="-DTESTME"
+    make CFLAGS="${CFLAGS:+$CFLAGS }-DTESTME"
 else
     make
 fi
