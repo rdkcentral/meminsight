@@ -1139,6 +1139,7 @@ int collectSystemMemoryStats(bool includeKthreads, const char *outDir, int itera
 				       getProcessInfo.shared_clean_total, processInfoTest.shared_clean_total, 
 				       getProcessInfo.private_clean_total, processInfoTest.private_clean_total, 
                                        getProcessInfo.private_dirty_total, processInfoTest.private_dirty_total, getProcessInfo.swap_pss_total, processInfoTest.swap_pss_total);
+                                unitTestFailed = 1;
                             }
 			    if (isTestMode) {
                                 if (1 == isTestMode) {

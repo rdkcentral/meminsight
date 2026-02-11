@@ -86,7 +86,7 @@ while [ "$i" -le "$NUM_TESTS" ]; do
     i=$((i + 1))
 done
 
-# Negative test: intentionally malformed meminfo fixture (duplicate needed field)
+# Negative test 1: intentionally malformed meminfo fixture (duplicate needed field)
 NEG_DESC="Negative: duplicate meminfo field triggers failure"
 NEG_SMAP_FILE="tst/1-non-zero-swap-entry/meminsight_testSmap.txt"
 NEG_MEMINFO_FILE="tst/4-negative-duplicate-meminfo-field/meminsight_testMeminfo.txt"
@@ -115,6 +115,40 @@ else
         echo "✗ Negative test FAILED (missing expected log line)"
         echo "Log output:"
         cat "$NEG_LOG_FILE"
+        TEST_FAILED=$((TEST_FAILED + 1))
+    fi
+fi
+echo ""
+
+# Negative test 2: duplicate smap field triggers failure
+NEG_DESC2="Negative: duplicate smap field triggers failure"
+NEG_SMAP_FILE2="tst/5-negative-duplicate-smaps-field/meminsight_testSmap.txt"
+NEG_MEMINFO_FILE2="tst/1-non-zero-swap-entry/meminsight_testMeminfo.txt"
+NEG_LOG_FILE2="/tmp/meminsight/negative_test2.log"
+
+echo "------------------------------------------"
+echo "$NEG_DESC2"
+echo "------------------------------------------"
+echo "Command: $XMEM_BIN -t $NEG_SMAP_FILE2 $NEG_MEMINFO_FILE2"
+
+rm -rf /tmp/meminsight/*.csv
+
+$XMEM_BIN -t "$NEG_SMAP_FILE2" "$NEG_MEMINFO_FILE2" >"$NEG_LOG_FILE2" 2>&1
+RC=$?
+
+if [ "$RC" -eq 0 ]; then
+    echo "✗ Negative test 2 FAILED (unexpected success)"
+    TEST_FAILED=$((TEST_FAILED + 1))
+else
+    if grep -F "something went wrong while processing smap for pid" "$NEG_LOG_FILE2" >/dev/null 2>&1; then
+        echo "✓ Negative test 2 PASSED (expected failure observed)"
+        # cat the log file for visibility
+        echo "Log output:"
+        cat "$NEG_LOG_FILE2"
+    else
+        echo "✗ Negative test 2 FAILED (missing expected log line)"
+        echo "Log output:"
+        cat "$NEG_LOG_FILE2"
         TEST_FAILED=$((TEST_FAILED + 1))
     fi
 fi
