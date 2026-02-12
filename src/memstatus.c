@@ -30,6 +30,7 @@ unsigned isTestMode = 0;
 char testSmap[128];
 char testMeminfo[128];
 Process_Info processInfoTest;
+static int unitTestFailed = 0;
 #endif
 
 static const char deviceIdentifierName[] = DEVICE_IDENTIFIER;
@@ -1132,12 +1133,13 @@ int collectSystemMemoryStats(bool includeKthreads, const char *outDir, int itera
 				(getProcessInfo.private_dirty_total != processInfoTest.private_dirty_total) ||
                                 (getProcessInfo.swap_pss_total != processInfoTest.swap_pss_total))
                             {
-                                printf("something went wrong while processing smap for pid %d\n", pid);
-                                printf("%lu:%lu, %lu:%lu, %lu:%lu, %lu:%lu, %lu:%lu, %lu:%lu\n", 
+                                PRINT_ERROR("something went wrong while processing smap for pid %d\n", pid);
+                                PRINT_ERROR("%lu:%lu, %lu:%lu, %lu:%lu, %lu:%lu, %lu:%lu, %lu:%lu\n", 
                                        getProcessInfo.rssTotal, processInfoTest.rssTotal,getProcessInfo.pssTotal,processInfoTest.pssTotal,
 				       getProcessInfo.shared_clean_total, processInfoTest.shared_clean_total, 
 				       getProcessInfo.private_clean_total, processInfoTest.private_clean_total, 
                                        getProcessInfo.private_dirty_total, processInfoTest.private_dirty_total, getProcessInfo.swap_pss_total, processInfoTest.swap_pss_total);
+                                unitTestFailed = 1;
                             }
 			    if (isTestMode) {
                                 if (1 == isTestMode) {
@@ -1159,6 +1161,13 @@ int collectSystemMemoryStats(bool includeKthreads, const char *outDir, int itera
             return -1;
         }
         saveMeminfo(output);
+    #ifdef TESTME
+        if (isTestMode && unitTestFailed)
+        {
+            fclose(output);
+            return -1;
+        }
+    #endif
         PRINT_INFO("\nProcessed %u processes\n>> RSS_Total %lu\n>> PSS_Total "
                "%lu\n>> Shared_Clean_Total %lu\n>> Private_Clean_Total %lu\n>> Private_Dirty_Total %lu\n",
                noOfPids, rssTotal, pssTotal, shared_clean_total, private_clean_total, private_dirty_total);
@@ -1522,6 +1531,7 @@ void saveMeminfo(FILE *out)
 		if (strcmp(meminfoHeader, tstmeminfoHeader) || strcmp(meminfoValue, tstmeminfoValue)) {
 			PRINT_ERROR("Test Failed..meminfoHeader vs tstmeminfoHeader [%s] vs [%s]\n", meminfoHeader, tstmeminfoHeader);
 			PRINT_ERROR("meminfoValue vs tstmeminfoValue [%s] vs [%s]\n", meminfoValue, tstmeminfoValue);
+            unitTestFailed = 1;
 		}
 #endif
 	}
@@ -1674,7 +1684,11 @@ int main(int argc, char *argv[])
     includeKthreads = enableKThreads; // Cascade to global for all code paths
     if (isConfigPresent)
     {
+#ifdef TESTME
+        return (handleConfigMode(confFile, out_dir, cli_iterations, cli_interval, enableKThreads, long_run) == 0) ? 0 : 1;
+#else
         handleConfigMode(confFile, out_dir, cli_iterations, cli_interval, enableKThreads, long_run);
+#endif
     }
     else if (isSystemWide)
     {
@@ -1689,10 +1703,11 @@ int main(int argc, char *argv[])
             final_iterations = (0 < cli_iterations) ? cli_iterations : DEFAULT_ITERATIONS;
         }
         PRINT_MUST("* Running %d iterations with %ds interval (indefinitely?: %s)\n", final_iterations, final_interval, long_run ? "yes" : "no");
+#ifdef TESTME
+        return (collectSystemMemoryStats(enableKThreads, out_dir, final_iterations, final_interval, long_run) == 0) ? 0 : 1;
+#else
         collectSystemMemoryStats(enableKThreads, out_dir, final_iterations, final_interval, long_run);
+#endif
     }
-    //else if (isTestMode)
-    //{
-    //    PRINT_MUST("Performing selftest using %s sample smaps file...\n", testSmap);
-    //}
+
 }

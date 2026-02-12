@@ -1,4 +1,7 @@
-name: Build Component in Native Environment
+name: Build and Test Component in Native Environment
+
+permissions:
+  contents: read
 
 on:
   pull_request:
@@ -6,8 +9,8 @@ on:
     paths: ['**/*.c', '**/*.cpp', '**/*.cc', '**/*.cxx', '**/*.h', '**/*.hpp', '**/*.sh']
 
 jobs:
-  build-meminsight-on-pr:
-    name: Build xMemInsight component in GitHub RDKCentral
+  build-and-test-meminsight-on-pr:
+    name: Build and Test xMemInsight component in GitHub RDKCentral
     runs-on: ubuntu-latest
     container:
       image: ghcr.io/rdkcentral/docker-device-mgt-service-test/native-platform:1.6.9
@@ -27,7 +30,7 @@ jobs:
 
       - name: Build the component
         run: |
-          sh cov_build.sh
+          sh cov_build.sh --test
 
       - name: Verify build output
         run: |
@@ -35,8 +38,8 @@ jobs:
           file xmeminsight || echo "Cannot check file type"
           echo "Build verification complete"
 
-      # - name: Run tests (optional)
-      #   run: |
-      #     # If you have tests to run after building, you can add them here
-      #     # For example:
-      #     make test
+      - name: Run tests
+        run: |
+          chmod +x run_ut.sh
+          ./run_ut.sh
+        shell: bash

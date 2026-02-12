@@ -19,23 +19,40 @@
 
 set -e
 
-if [ "$1" = "--clean" ]; then
-    echo "Cleaning build artifacts..."
-    make clean 2>/dev/null || true
-    make distclean 2>/dev/null || true
-    rm -f config.h config.h.in config.log config.status
-    rm -rf autom4te.cache
-    rm -f Makefile Makefile.in aclocal.m4 configure ltmain.sh libtool
-    rm -f install-sh missing depcomp compile config.guess config.sub
-    rm -f *.o *.lo *.la *.al *.so *.a xmeminsight
-    rm -f stamp-h1
-    rm -rf .deps/
-    rm -f configure~
-    rm -rf config.h.in~
-    rm -rf src/.deps/
-    echo "Clean complete."
-    exit 0
-fi
+TEST_MODE=0
+
+# Parse command line arguments
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --clean)
+            echo "Cleaning build artifacts..."
+            make clean 2>/dev/null || true
+            make distclean 2>/dev/null || true
+            rm -f config.h config.h.in config.log config.status
+            rm -rf autom4te.cache
+            rm -f Makefile Makefile.in aclocal.m4 configure ltmain.sh libtool
+            rm -f install-sh missing depcomp compile config.guess config.sub
+            rm -f *.o *.lo *.la *.al *.so *.a xmeminsight
+            rm -f stamp-h1
+            rm -rf .deps/
+            rm -f configure~
+            rm -rf config.h.in~
+            rm -rf src/.deps/
+            echo "Clean complete."
+            exit 0
+            ;;
+        --test)
+            TEST_MODE=1
+            echo "Building in TEST mode with TESTME flag..."
+            shift
+            ;;
+        *)
+            echo "Unknown option: $1"
+            echo "Usage: $0 [--clean] [--test]"
+            exit 1
+            ;;
+    esac
+done
 
 echo "Running build steps..."
 
@@ -75,6 +92,11 @@ echo "Running configure..."
 ./configure
 
 echo "Running make..."
-make
+if [ "$TEST_MODE" -eq 1 ]; then
+    echo "Building with TESTME flag for test mode..."
+    make CFLAGS="${CFLAGS:+$CFLAGS }-DTESTME"
+else
+    make
+fi
 
 echo "Build complete."
