@@ -150,7 +150,7 @@ typedef struct {
     char mac[MAC_LEN];
     char fwName[FW_LEN];
     const char *outputDir;
-    const char *fileExt;
+    const char *reportFileName;
     bool dirCreated;
 } SetupInfo;
 
@@ -200,7 +200,7 @@ void saveMeminfo(FILE *out);
 #ifdef ENABLE_CJSON
 void saveMeminfo_JSON(cJSON *root);
 void writeProcessInfo_JSON(cJSON *processesArray);
-void writeJSONToFile(const char *filepath, const SetupInfo *setup);
+int writeJSONToFile(const char *filepath, const SetupInfo *setup);
 #endif
 
 int getPropertyFromFile(const char *filename, const char *property, char *propertyValue, size_t propertyValueLen);

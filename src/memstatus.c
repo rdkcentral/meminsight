@@ -16,9 +16,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#ifdef HAVE_CONFIG_H
 #include "config.h"
-#endif
 
 #include "memstatus.h"
 
@@ -290,7 +288,7 @@ SetupInfo initializeSetupInfo(const char *outDir, Report_Format format)
     getFirmwareImageName(info.fwName, sizeof(info.fwName));
     
     // File extension based on format
-    info.fileExt = (format == REPORT_JSON) ? JSON_FILE_NAME : CSV_FILE_NAME;
+    info.reportFileName = (format == REPORT_JSON) ? JSON_FILE_NAME : CSV_FILE_NAME;
 
     return info;
 }
@@ -1132,6 +1130,11 @@ int collectSystemMemoryStats(bool enableKThreads, const char *outDir, int iterat
     PRINT_MUST("Capturing System wide stats into directory %s\n", setup.outputDir);
     char outputfile[512];
 
+    if (!setup.dirCreated) {
+        PRINT_ERROR("Failed to create output directory: %s\n", setup.outputDir);
+        return -1;
+    }
+
     for (int iter = 0; long_run || iter < iterations; iter++)
     {
         PRINT_INFO("\n==== Iteration %d%s ====\n", iter + 1, long_run ? "/∞" : "");
@@ -1145,7 +1148,7 @@ int collectSystemMemoryStats(bool enableKThreads, const char *outDir, int iterat
         strftime(ts, sizeof(ts), "%Y-%m-%d %H:%M:%S", tm_info);
         strftime(timestamp, sizeof(timestamp), "%Y%m%d%H%M%S", tm_info);
 
-        snprintf(outputfile, sizeof(outputfile), "%s/%s_%s_iter%d_%s", setup.outputDir, setup.mac, timestamp, iter + 1, setup.fileExt);
+        snprintf(outputfile, sizeof(outputfile), "%s/%s_%s_iter%d_%s", setup.outputDir, setup.mac, timestamp, iter + 1, setup.reportFileName);
         PRINT_INFO("Capturing Process stats into: %s\n", outputfile);
 
 #ifdef ENABLE_CJSON
@@ -1281,16 +1284,17 @@ int collectSystemMemoryStats(bool enableKThreads, const char *outDir, int iterat
         else if (g_reportFormat == REPORT_JSON) {
             // Add meminfo to JSON
             saveMeminfo_JSON(g_rootObject);
-            
             // Create processes array and add all processes
             cJSON *processesArray = cJSON_CreateArray();
             if (processesArray) {
                 writeProcessInfo_JSON(processesArray);
                 cJSON_AddItemToObject(g_rootObject, "processes", processesArray);
             }
-            
             // Write JSON to file
-            writeJSONToFile(outputfile, &setup);
+            if (writeJSONToFile(outputfile, &setup) != 0) {
+                PRINT_ERROR("Failed to write JSON output file: %s\n", outputfile);
+                return -1;
+            }
         }
 #endif
 #ifdef TESTME
@@ -1324,6 +1328,18 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, int cli_iter
     
     // Initialize setup info (gets MAC, firmware, output dir, etc.)
     SetupInfo setup = initializeSetupInfo(final_out_dir, g_reportFormat);
+    if (!setup.dirCreated) {
+        PRINT_ERROR("Failed to create output directory: %s\n", setup.outputDir);
+        for (unsigned j = 0; j < config.whiteListCount; j++) {
+            if (config.whitelist[j] != NULL) {
+                free(config.whitelist[j]);
+            }
+        }
+        if (config.whitelist != NULL) {
+            free(config.whitelist);
+        }
+        return -1;
+    }
 
     // Interval/Iterations logic (CLI > config > default)
     int final_iterations = config.iterations;
@@ -1384,7 +1400,7 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, int cli_iter
 
         // Generate output file name
         char outputFilePath[PATH_MAX * 2] = {0};
-        snprintf(outputFilePath, sizeof(outputFilePath), "%s/%s_%s_iter%d_%s", setup.outputDir, setup.mac, timestamp, iter+1, setup.fileExt);
+        snprintf(outputFilePath, sizeof(outputFilePath), "%s/%s_%s_iter%d_%s", setup.outputDir, setup.mac, timestamp, iter+1, setup.reportFileName);
         PRINT_INFO("Capturing Process stats into %s\n", outputFilePath);
 
 #ifdef ENABLE_CJSON
@@ -1436,8 +1452,7 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, int cli_iter
             fprintf(output, "FIRMWARE_NAME,MAC_ADDRESS,TIMESTAMP,REPORT_VERSION\n");
             fprintf(output, "%s,%s,%s,%s\n\n", setup.fwName, setup.mac, ts, reportVersion);
             saveMeminfo(output);
-            fprintf(output, "\nPID,EXE,RSS,PSS,SHARED_CLEAN,PRIVATE_DIRTY,SWAP_PSS,"
-                            "MAJ_FAULTS,CPU_TIME\n");
+            fprintf(output, "\nPID,EXE,RSS,PSS,SHARED_CLEAN,PRIVATE_CLEAN,PRIVATE_DIRTY,SWAP_PSS,MAJ_FAULTS,CPU_TIME\n");
         }
 
         unsigned long rssTotal = 0, pssTotal = 0, shared_clean_total = 0, private_clean_total = 0, private_dirty_total = 0, swap_pss_total = 0;
@@ -1494,23 +1509,32 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, int cli_iter
             // Output based on format
             if (g_reportFormat == REPORT_CSV) {
                 writeProcessInfo(actualCount, output);
-                fprintf(output, "0,Total,%lu,%lu,%lu,%lu\n", rssTotal, pssTotal, shared_clean_total, private_dirty_total);
+                fprintf(output, "0,Total,%lu,%lu,%lu,%lu,%lu,%lu,0,0,0\n", rssTotal, pssTotal, shared_clean_total, private_clean_total, private_dirty_total, swap_pss_total);
                 fclose(output);
             }
 #ifdef ENABLE_CJSON
             else if (g_reportFormat == REPORT_JSON) {
                 // Add meminfo to JSON
                 saveMeminfo_JSON(g_rootObject);
-                
                 // Create processes array and add all processes
                 cJSON *processesArray = cJSON_CreateArray();
                 if (processesArray) {
                     writeProcessInfo_JSON(processesArray);
                     cJSON_AddItemToObject(g_rootObject, "processes", processesArray);
                 }
-                
                 // Write JSON to file
-                writeJSONToFile(outputFilePath, &setup);
+                if (writeJSONToFile(outputFilePath, &setup) != 0) {
+                    PRINT_ERROR("Failed to write JSON output file: %s\n", outputFilePath);
+                    for (unsigned j = 0; j < config.whiteListCount; j++) {
+                        if (config.whitelist[j] != NULL) {
+                            free(config.whitelist[j]);
+                        }
+                    }
+                    if (config.whitelist != NULL) {
+                        free(config.whitelist);
+                    }
+                    return -1;
+                }
             }
 #endif
             headProcessInfo = NULL; // Reset for next iteration
@@ -1828,30 +1852,22 @@ void writeProcessInfo_JSON(cJSON *processesArray)
  * @param filepath Output file path
  * @param setup Setup information with metadata (MAC, firmware, etc.)
  */
-void writeJSONToFile(const char *filepath, const SetupInfo *setup)
+int writeJSONToFile(const char *filepath, const SetupInfo *setup)
 {
-	if (!g_rootObject) {
-		PRINT_ERROR("No JSON data to write\n");
-		return;
-	}
+    if (!g_rootObject) {
+        PRINT_ERROR("No JSON data to write\n");
+        return -1;
+    }
 	
-	// Add metadata from setup to JSON root
-	if (setup) {
-		if (setup->mac[0] != '\0') {
-			cJSON_AddStringToObject(g_rootObject, "device_mac", setup->mac);
-		}
-		if (setup->fwName[0] != '\0') {
-			cJSON_AddStringToObject(g_rootObject, "firmware", setup->fwName);
-		}
-	}
+    // No-op: metadata keys are set at JSON root creation only, to avoid duplicates
 	
-	FILE *output = fopen(filepath, "w");
-	if (!output) {
-		PRINT_ERROR("Failed to open %s for writing: %s\n", filepath, strerror(errno));
-		cJSON_Delete(g_rootObject);
-		g_rootObject = NULL;
-		return;
-	}
+    FILE *output = fopen(filepath, "w");
+    if (!output) {
+        PRINT_ERROR("Failed to open %s for writing: %s\n", filepath, strerror(errno));
+        cJSON_Delete(g_rootObject);
+        g_rootObject = NULL;
+        return -1;
+    }
 	
 	char *jsonString = NULL;
 	if (g_jsonPrettyPrint) {
@@ -1860,14 +1876,22 @@ void writeJSONToFile(const char *filepath, const SetupInfo *setup)
 		jsonString = cJSON_PrintUnformatted(g_rootObject);
 	}
 	
-	if (jsonString) {
-		fprintf(output, "%s\n", jsonString);
-		free(jsonString);
-	}
+    if (jsonString) {
+        if (fprintf(output, "%s\n", jsonString) < 0) {
+            PRINT_ERROR("Failed to write JSON to %s: %s\n", filepath, strerror(errno));
+            free(jsonString);
+            fclose(output);
+            cJSON_Delete(g_rootObject);
+            g_rootObject = NULL;
+            return -1;
+        }
+        free(jsonString);
+    }
 	
-	fclose(output);
-	cJSON_Delete(g_rootObject);
-	g_rootObject = NULL;
+    fclose(output);
+    cJSON_Delete(g_rootObject);
+    g_rootObject = NULL;
+    return 0;
 }
 #endif
 
