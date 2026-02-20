@@ -57,23 +57,38 @@ static const char reportVersion[] =  "" REPORT_MAJOR_VERSION "." REPORT_MINOR_VE
 /**
  * Ensures that the specified output directory exists.
  * If it doesn't exist, it attempts to create it.
+ * Returns true if directory exists (and is a directory) or was successfully created.
+ * Returns false only on failure.
  */
 static bool ensure_output_dir(const char *dir)
 {
-    bool status = false;
     struct stat st = {0};
-    if (stat(dir, &st) == -1)
+    if (stat(dir, &st) == 0)
     {
-        if (mkdir(dir, 0755) == -1)
+        // Path exists - verify it's a directory
+        if (S_ISDIR(st.st_mode))
         {
-            PRINT_MUST("Failed to create output directory '%s': %s\n", dir, strerror(errno));
+            return true;
         }
         else
         {
-            status = true;
+            PRINT_MUST("Path '%s' exists but is not a directory\n", dir);
+            return false;
         }
     }
-    return status;
+    else
+    {
+        // Directory doesn't exist, try to create it
+        if (mkdir(dir, 0755) == -1)
+        {
+            PRINT_MUST("Failed to create output directory '%s': %s\n", dir, strerror(errno));
+            return false;
+        }
+        else
+        {
+            return true;
+        }
+    }
 }
 
 /**
@@ -1061,7 +1076,7 @@ void printHelpAndUsage(char *argv[], bool moreInfo)
     printf("Options:\n");
     printf("  -a, --all                             Include kernel threads for process monitoring\n");
     printf("  -c, --config <file>                   Path to configuration file with %s extension\n", CONFIG_EXTN);
-    printf("  -o, --output <directory>              Output directory for generated CSV files (default: %s)\n", DEFAULT_OUT_DIR);
+    printf("  -o, --output <directory>              Output directory for generated report files (CSV/JSON) (default: %s)\n", DEFAULT_OUT_DIR);
     printf("      --interval <seconds>              Interval in seconds between iterations (overrides config)\n");
     printf("      --iterations <count>              Number of iterations to run (overrides config)\n");
     printf("  -h, --help                            Show this help message and exit\n");
@@ -1696,11 +1711,12 @@ void saveMeminfo(FILE *out)
  */
 void saveMeminfo_JSON(cJSON *root)
 {
+	// Use same field list as CSV output for consistency
 	static char *meminfoNeeded[20] = {
-		"MemTotal", "MemFree", "MemAvailable", "Buffers", "Cached",
-		"SwapCached", "Active", "Inactive", "SwapTotal", "SwapFree",
-		"Dirty", "Writeback", "Slab", "SReclaimable", "SUnreclaim",
-		"KernelStack", "PageTables", "VmallocUsed", "CmaFree", "CmaTotal"
+		"MemTotal", "MemFree", "MemAvailable", "Buffers", "Cached", "SwapCached",
+		"Active(anon)", "Inactive(anon)", "Active(file)", "Inactive(file)",
+		"SwapTotal", "SwapFree", "AnonPages", "Mapped", "Shmem", "Slab", "KernelStack",
+		"VmallocUsed", "CmaFree", "CmaTotal"
 	};
 	
 	cJSON *meminfoObj = cJSON_CreateObject();
@@ -1709,7 +1725,11 @@ void saveMeminfo_JSON(cJSON *root)
 		return;
 	}
 	
+#ifdef TESTME
+	FILE *meminfo = fopen((isTestMode)?testMeminfo:MEMINFO_FILE, "r");
+#else
 	FILE *meminfo = fopen(MEMINFO_FILE, "r");
+#endif
 	if (!meminfo) {
 		PRINT_ERROR("Error opening %s, [%s]\n", MEMINFO_FILE, strerror(errno));
 		cJSON_Delete(meminfoObj);
@@ -1806,13 +1826,23 @@ void writeProcessInfo_JSON(cJSON *processesArray)
 /**
  * @brief Write JSON data to file
  * @param filepath Output file path
- * @param setup Setup information with metadata
+ * @param setup Setup information with metadata (MAC, firmware, etc.)
  */
 void writeJSONToFile(const char *filepath, const SetupInfo *setup)
 {
 	if (!g_rootObject) {
 		PRINT_ERROR("No JSON data to write\n");
 		return;
+	}
+	
+	// Add metadata from setup to JSON root
+	if (setup) {
+		if (setup->mac[0] != '\0') {
+			cJSON_AddStringToObject(g_rootObject, "device_mac", setup->mac);
+		}
+		if (setup->fwName[0] != '\0') {
+			cJSON_AddStringToObject(g_rootObject, "firmware", setup->fwName);
+		}
 	}
 	
 	FILE *output = fopen(filepath, "w");

@@ -86,6 +86,69 @@ while [ "$i" -le "$NUM_TESTS" ]; do
     i=$((i + 1))
 done
 
+# JSON Format Tests (if cJSON support is enabled)
+echo "------------------------------------------"
+echo "Test: JSON Output Format"
+echo "------------------------------------------"
+
+# Check if xmeminsight supports JSON format
+if $XMEM_BIN --help 2>&1 | grep -q -- '--fmt'; then
+    echo "JSON support detected, running JSON tests..."
+    
+    # Test with first fixture (non-zero swap entry)
+    DIR="1-non-zero-swap-entry"
+    SMAP_FILE="tst/$DIR/meminsight_testSmap.txt"
+    MEMINFO_FILE="tst/$DIR/meminsight_testMeminfo.txt"
+    
+    echo "Command: $XMEM_BIN -t $SMAP_FILE $MEMINFO_FILE --fmt json"
+    
+    if $XMEM_BIN -t "$SMAP_FILE" "$MEMINFO_FILE" --fmt json; then
+        echo "✓ JSON test PASSED (command succeeded)"
+        
+        # Check if JSON file was created
+        JSON_FILE=$(ls /tmp/meminsight/*.json 2>/dev/null | head -n 1)
+        if [ -n "$JSON_FILE" ] && [ -f "$JSON_FILE" ]; then
+            echo "✓ JSON output file created: $JSON_FILE"
+            
+            # Validate JSON structure (basic check)
+            if command -v jq >/dev/null 2>&1; then
+                # Use jq to validate JSON and check for required fields
+                if jq -e '.processes' "$JSON_FILE" >/dev/null 2>&1 && \
+                   jq -e '.meminfo' "$JSON_FILE" >/dev/null 2>&1 && \
+                   jq -e '.timestamp' "$JSON_FILE" >/dev/null 2>&1; then
+                    echo "✓ JSON structure validation PASSED"
+                    
+                    # Display sample output
+                    echo "Sample JSON content:"
+                    echo "---"
+                    jq -r '.processes[0] // "No processes"' "$JSON_FILE" 2>/dev/null || cat "$JSON_FILE"
+                    echo "---"
+                else
+                    echo "✗ JSON structure validation FAILED (missing required fields)"
+                    TEST_FAILED=$((TEST_FAILED + 1))
+                fi
+            else
+                echo "⚠ jq not installed, skipping JSON validation"
+                echo "File contents:"
+                cat "$JSON_FILE"
+            fi
+        else
+            echo "✗ JSON output file not found"
+            TEST_FAILED=$((TEST_FAILED + 1))
+        fi
+    else
+        echo "✗ JSON test FAILED (command failed)"
+        TEST_FAILED=$((TEST_FAILED + 1))
+    fi
+    echo ""
+    
+    # Clean up JSON test files
+    rm -rf /tmp/meminsight/*.json
+else
+    echo "⚠ JSON support not available (build without --enable-cjson), skipping JSON tests"
+    echo ""
+fi
+
 # Negative test 1: intentionally malformed meminfo fixture (duplicate needed field)
 NEG_DESC="Test 4 (Negative): meminfo data failure"
 NEG_SMAP_FILE="tst/1-non-zero-swap-entry/meminsight_testSmap.txt"

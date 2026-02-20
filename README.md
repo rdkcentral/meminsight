@@ -438,7 +438,7 @@ make
               --output /var/log/meminsight/
 
 # Process JSON with jq or send to monitoring systems
-cat /tmp/meminsight/*.json | jq '.processes[] | select(.pssTotal > 100000)'
+cat /tmp/meminsight/*.json | jq '.processes[] | select(.pss > 100000)'
 ```
 
 ## 🔧 Troubleshooting
