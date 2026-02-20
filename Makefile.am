@@ -25,6 +25,10 @@ xmeminsight_SOURCES = src/memstatus.c
 xmeminsightdir = $(includedir)
 xmeminsight_HEADERS = src/memstatus.h
 
+if ENABLE_CJSON
+xmeminsight_LDADD = -lcjson
+endif
+
 AM_CPPFLAGS = @CPPFLAGS@
 
 # Add clean targets for better cleanup

@@ -22,15 +22,37 @@ jobs:
       - name: Install Dependencies
         run: |
           apt-get update
-          apt-get install -y autotools-dev autoconf automake pkg-config
+          apt-get install -y autotools-dev autoconf automake pkg-config libcjson-dev
 
       - name: Clean build artifacts
         run: |
           sh cov_build.sh --clean
 
-      - name: Build the component
+      - name: Build the component (vanilla - no optional features)
         run: |
-          sh cov_build.sh --test
+          sh cov_build.sh
+
+      - name: Verify vanilla build output
+        run: |
+          ls -la xmeminsight || echo "Vanilla build artifact not found"
+          file xmeminsight || echo "Cannot check file type"
+          ./xmeminsight --help || echo "Binary not executable"
+          echo "Vanilla build verification complete"
+
+      - name: Build the component with test mode
+        run: |
+          sh cov_build.sh --clean
+          sh cov_build.sh --enable-test
+
+      - name: Build the component with cJSON support
+        run: |
+          sh cov_build.sh --clean
+          sh cov_build.sh --enable-cjson
+
+      - name: Build the component with both test and cJSON
+        run: |
+          sh cov_build.sh --clean
+          sh cov_build.sh --enable-cjson --enable-test
 
       - name: Verify build output
         run: |
