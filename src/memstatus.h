@@ -69,11 +69,11 @@
 // Macro Definitions
 // -----------------------------
 
-#define XMEMINSIGHT_BIN "xmeminsight"
-/* XMEMINSIGHT_MAJOR_VERSION and XMEMINSIGHT_MINOR_VERSION are to track the binary version, any changes in the binary version should increment this version.
+#define MEMINSIGHT_BIN "meminsight"
+/* MEMINSIGHT_MAJOR_VERSION and MEMINSIGHT_MINOR_VERSION are to track the binary version, any changes in the binary version should increment this version.
 This is used to ensure compatibility with older versions of the binary. */
-#define XMEMINSIGHT_MAJOR_VERSION "1"
-#define XMEMINSIGHT_MINOR_VERSION "0"
+#define MEMINSIGHT_MAJOR_VERSION "1"
+#define MEMINSIGHT_MINOR_VERSION "0"
 
 /* REPORT_MAJOR_VERSION and REPORT_MINOR_VERSION are to track the report format, any changes in the report format should increment this version.
 This is used to ensure compatibility with older versions of the report parser. */

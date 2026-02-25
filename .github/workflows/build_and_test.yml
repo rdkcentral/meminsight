@@ -10,7 +10,7 @@ on:
 
 jobs:
   build-and-test-meminsight-on-pr:
-    name: Build and Test xMemInsight component in GitHub RDKCentral
+    name: Build and Test meminsight component in GitHub RDKCentral
     runs-on: ubuntu-latest
     container:
       image: ghcr.io/rdkcentral/docker-device-mgt-service-test/native-platform:1.6.9
@@ -34,8 +34,8 @@ jobs:
 
       - name: Verify build output
         run: |
-          ls -la xmeminsight || echo "Build artifact not found"
-          file xmeminsight || echo "Cannot check file type"
+          ls -la meminsight || echo "Build artifact not found"
+          file meminsight || echo "Cannot check file type"
           echo "Build verification complete"
 
       - name: Run tests

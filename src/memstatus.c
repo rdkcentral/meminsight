@@ -34,7 +34,7 @@ static int unitTestFailed = 0;
 #endif
 
 static const char deviceIdentifierName[] = DEVICE_IDENTIFIER;
-static const char xMemInsightVersion[] = "" XMEMINSIGHT_MAJOR_VERSION "." XMEMINSIGHT_MINOR_VERSION "";
+static const char memInsightVersion[] = "" MEMINSIGHT_MAJOR_VERSION "." MEMINSIGHT_MINOR_VERSION "";
 static const char reportVersion[] =  "" REPORT_MAJOR_VERSION "." REPORT_MINOR_VERSION "";
 
 // -----------------------------
@@ -995,8 +995,8 @@ void printHelp(char *argv[])
  */
 void printHelpAndUsage(char *argv[], bool moreInfo)
 {
-    printf("%s (v%s)\n\n", XMEMINSIGHT_BIN, xMemInsightVersion);
-    printf("Usage: %s [OPTIONS]\n", XMEMINSIGHT_BIN);
+    printf("%s (v%s)\n\n", MEMINSIGHT_BIN, memInsightVersion);
+    printf("Usage: %s [OPTIONS]\n", MEMINSIGHT_BIN);
     printf("A lightweight, configurable tool for collecting detailed system and per-process memory and CPU statistics.\n\n");
 
     printf("Options:\n");
@@ -1020,7 +1020,7 @@ void printHelpAndUsage(char *argv[], bool moreInfo)
         printf("Example:\n");
         printf("  %s\n", argv[0]);
         printf("  %s --all\n", argv[0]);
-        printf("  %s --config /etc/xmeminsight_configuration%s\n", argv[0], CONFIG_EXTN);
+        printf("  %s --config /etc/meminsight_configuration%s\n", argv[0], CONFIG_EXTN);
         printf("  %s -c myconfig%s -a --interval 10 --iterations 5\n", argv[0], CONFIG_EXTN);
         printf("  %s --output /var/log/ --iterations 3\n", argv[0]);
         printf("  %s --test ../tst/smaps.txt ../tst/meminfo.txt\n\n", argv[0]);

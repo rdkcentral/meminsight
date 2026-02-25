@@ -1,6 +1,6 @@
-# 🔍 xmeminsight
+# 🔍 meminsight
 
-**xmeminsight** is a powerful, lightweight Linux memory profiling and monitoring tool designed for system administrators, developers, and embedded system engineers. It provides comprehensive real-time memory usage analysis with detailed per-process statistics and system-wide memory insights.
+**meminsight** is a powerful, lightweight Linux memory profiling and monitoring tool designed for system administrators, developers, and embedded system engineers. It provides comprehensive real-time memory usage analysis with detailed per-process statistics and system-wide memory insights.
 
 ---
 
@@ -51,16 +51,16 @@
 ./configure && make
 
 # Run basic system-wide memory analysis
-./xmeminsight
+./meminsight
 
 # Run a finite capture (overrides defaults)
-./xmeminsight --iterations 10 --interval 30
+./meminsight --iterations 10 --interval 30
 
 # Include kernel threads in analysis
-./xmeminsight --all
+./meminsight --all
 
 # Write reports to a custom directory
-./xmeminsight --output /tmp/memreports --iterations 3
+./meminsight --output /tmp/memreports --iterations 3
 ```
 
 ## Development Setup
@@ -108,7 +108,7 @@ sudo make install
 ### Command Line Options
 
 ```bash
-xmeminsight [OPTIONS]
+meminsight [OPTIONS]
 
 OPTIONS:
    -a, --all                   Include kernel threads for process monitoring
@@ -122,7 +122,7 @@ OPTIONS:
 
 ### Default Behavior
 
-If you run `./xmeminsight` with no flags, it runs in a long-running mode (indefinite iterations) with a 15-minute interval and writes CSV reports under `/tmp/meminsight/`.
+If you run `./meminsight` with no flags, it runs in a long-running mode (indefinite iterations) with a 15-minute interval and writes CSV reports under `/tmp/meminsight/`.
 
 To run a finite capture, specify `--iterations` and/or `--interval`.
 
@@ -130,13 +130,13 @@ To run a finite capture, specify `--iterations` and/or `--interval`.
 
 ```bash
 # Single snapshot of system memory
-./xmeminsight --iterations 1 --interval 0
+./meminsight --iterations 1 --interval 0
 
 # Monitor for 1 hour with 5-minute intervals
-./xmeminsight --iterations 12 --interval 300
+./meminsight --iterations 12 --interval 300
 
 # Continuous monitoring with kernel threads
-./xmeminsight --all
+./meminsight --all
 ```
 
 ## ⚙️ Configuration
@@ -170,7 +170,7 @@ The tool automatically detects network interfaces for MAC address collection:
 
 ```bash
 # Default: uses "eth0"
-./xmeminsight
+./meminsight
 
 # Custom interface via compile-time flag
 CPPFLAGS="-DDEVICE_IDENTIFIER=\"erouter0\"" make clean && make
@@ -182,7 +182,7 @@ CPPFLAGS="-DDEVICE_IDENTIFIER=\"erouter0\"" make clean && make
 
 ```bash
 # Monitor memory growth over 8 hours
-./xmeminsight --iterations 48 --interval 600 --config leak_detection.conf
+./meminsight --iterations 48 --interval 600 --config leak_detection.conf
 ```
 
 ### Process-Specific Monitoring
@@ -190,7 +190,7 @@ CPPFLAGS="-DDEVICE_IDENTIFIER=\"erouter0\"" make clean && make
 ```bash
 # Monitor only critical services
 echo "process_whitelist=systemd,NetworkManager,sshd" > services.conf
-./xmeminsight --config services.conf --iterations 60 --interval 60
+./meminsight --config services.conf --iterations 60 --interval 60
 ```
 
 ### Test Mode for Validation
@@ -200,7 +200,7 @@ echo "process_whitelist=systemd,NetworkManager,sshd" > services.conf
 make clean && make CFLAGS="-DTESTME"
 
 # Run using sample fixtures
-./xmeminsight --test tst/1-non-zero-swap-entry/meminsight_testSmap.txt tst/1-non-zero-swap-entry/meminsight_testMeminfo.txt
+./meminsight --test tst/1-non-zero-swap-entry/meminsight_testSmap.txt tst/1-non-zero-swap-entry/meminsight_testMeminfo.txt
 
 # Run the repository unit-test runner (executes all fixtures and a negative test)
 ./run_ut.sh
@@ -279,14 +279,14 @@ interval=300
 log_level=INFO
 EOF
 
-./xmeminsight --config webserver.conf
+./meminsight --config webserver.conf
 ```
 
 ### Example 2: Database Performance Analysis
 
 ```bash
 # Monitor database memory usage every minute for 2 hours
-./xmeminsight --iterations 120 --interval 60 \
+./meminsight --iterations 120 --interval 60 \
               --output /tmp/db-analysis \
               --config database.conf
 ```
@@ -296,7 +296,7 @@ EOF
 ```bash
 # Lightweight monitoring for embedded systems
 CPPFLAGS="-DDEVICE_IDENTIFIER=\"eth0\"" make clean && make
-./xmeminsight --iterations 24 --interval 3600 --output /mnt/logs/
+./meminsight --iterations 24 --interval 3600 --output /mnt/logs/
 ```
 
 ## 🔧 Troubleshooting
@@ -306,14 +306,14 @@ CPPFLAGS="-DDEVICE_IDENTIFIER=\"eth0\"" make clean && make
 **Issue**: Permission denied errors
 ```bash
 # Solution: Run with appropriate privileges
-sudo ./xmeminsight
+sudo ./meminsight
 # Or adjust /proc permissions
 ```
 
 **Issue**: High memory usage during monitoring
 ```bash
 # Solution: Reduce monitoring frequency or use whitelisting
-./xmeminsight --interval 300 --config lightweight.conf
+./meminsight --interval 300 --config lightweight.conf
 ```
 
 ## 🤝 Contributing

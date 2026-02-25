@@ -32,7 +32,7 @@ while [ "$#" -gt 0 ]; do
             rm -rf autom4te.cache
             rm -f Makefile Makefile.in aclocal.m4 configure ltmain.sh libtool
             rm -f install-sh missing depcomp compile config.guess config.sub
-            rm -f *.o *.lo *.la *.al *.so *.a xmeminsight
+            rm -f *.o *.lo *.la *.al *.so *.a meminsight
             rm -f stamp-h1
             rm -rf .deps/
             rm -f configure~
