@@ -95,9 +95,12 @@ This is used to ensure compatibility with older versions of the report parser. *
 #define FW_LEN 64
 #define DEFAULT_ITERATIONS 1
 #define DEFAULT_INTERVAL 5
-#define DEFAULT_OUT_DIR "/tmp/meminsight"
 #define DEFAULT_LOG_LEVEL "INFO"
 #define DEFAULT_MAC "00:00:00:00:00:00"
+
+#ifndef DEFAULT_OUT_DIR
+#define DEFAULT_OUT_DIR "/tmp/meminsight"
+#endif
 
 #define PF_KTHREAD 0x00200000               // Kernel thread flag
 
