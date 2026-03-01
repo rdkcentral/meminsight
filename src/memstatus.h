@@ -69,11 +69,11 @@
 // Macro Definitions
 // -----------------------------
 
-#define XMEMINSIGHT_BIN "xmeminsight"
-/* XMEMINSIGHT_MAJOR_VERSION and XMEMINSIGHT_MINOR_VERSION are to track the binary version, any changes in the binary version should increment this version.
+#define MEMINSIGHT_BIN "meminsight"
+/* MEMINSIGHT_MAJOR_VERSION and MEMINSIGHT_MINOR_VERSION are to track the binary version, any changes in the binary version should increment this version.
 This is used to ensure compatibility with older versions of the binary. */
-#define XMEMINSIGHT_MAJOR_VERSION "1"
-#define XMEMINSIGHT_MINOR_VERSION "0"
+#define MEMINSIGHT_MAJOR_VERSION "1"
+#define MEMINSIGHT_MINOR_VERSION "0"
 
 /* REPORT_MAJOR_VERSION and REPORT_MINOR_VERSION are to track the report format, any changes in the report format should increment this version.
 This is used to ensure compatibility with older versions of the report parser. */
@@ -95,9 +95,12 @@ This is used to ensure compatibility with older versions of the report parser. *
 #define FW_LEN 64
 #define DEFAULT_ITERATIONS 1
 #define DEFAULT_INTERVAL 5
-#define DEFAULT_OUT_DIR "/tmp/meminsight"
 #define DEFAULT_LOG_LEVEL "INFO"
 #define DEFAULT_MAC "00:00:00:00:00:00"
+
+#ifndef DEFAULT_OUT_DIR
+#define DEFAULT_OUT_DIR "/tmp/meminsight"
+#endif
 
 #define PF_KTHREAD 0x00200000               // Kernel thread flag
 
