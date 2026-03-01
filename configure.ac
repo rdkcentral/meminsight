@@ -18,7 +18,7 @@
 #                                               -*- Autoconf -*-
 # Process this file with autoconf to produce a configure script.
 
-AC_INIT([xmeminsight], [1.0])
+AC_INIT([meminsight], [1.0])
 AM_INIT_AUTOMAKE([foreign subdir-objects])
 
 # Config Source files.

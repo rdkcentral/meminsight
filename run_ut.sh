@@ -18,24 +18,24 @@
 ##########################################################################
 
 echo "=========================================="
-echo "Running xMemInsight Unit Tests"
+echo "Running meminsight Unit Tests"
 echo "=========================================="
 
-# Find xmeminsight binary location
-XMEM_BIN=""
-if command -v xmeminsight >/dev/null 2>&1; then
-    XMEM_BIN=$(command -v xmeminsight)
-elif [ -f "./xmeminsight" ]; then
-    XMEM_BIN="./xmeminsight"
+# Find meminsight binary location
+MEM_BIN=""
+if command -v meminsight >/dev/null 2>&1; then
+    MEM_BIN=$(command -v meminsight)
+elif [ -f "./meminsight" ]; then
+    MEM_BIN="./meminsight"
 fi
 
-if [ ! -f "$XMEM_BIN" ]; then
-    echo "ERROR: xmeminsight binary not found!"
+if [ ! -f "$MEM_BIN" ]; then
+    echo "ERROR: meminsight binary not found!"
     echo "Searched in PATH and current directory"
     exit 1
 fi
 
-echo "Using xmeminsight binary: $XMEM_BIN"
+echo "Using meminsight binary: $MEM_BIN"
 
 # Clean up any previous test outputs
 rm -rf /tmp/meminsight
@@ -59,9 +59,9 @@ while [ "$i" -le "$NUM_TESTS" ]; do
     echo "------------------------------------------"
     echo "Test $i: $DESC"
     echo "------------------------------------------"
-    echo "Command: $XMEM_BIN -t $SMAP_FILE $MEMINFO_FILE"
+    echo "Command: $MEM_BIN -t $SMAP_FILE $MEMINFO_FILE"
 
-    if $XMEM_BIN -t "$SMAP_FILE" "$MEMINFO_FILE"; then
+    if $MEM_BIN -t "$SMAP_FILE" "$MEMINFO_FILE"; then
         echo "✓ Test $i PASSED"
         echo ""
         echo "Output file contents:"
@@ -158,11 +158,11 @@ NEG_LOG_FILE="/tmp/meminsight/negative_test.log"
 echo "------------------------------------------"
 echo "$NEG_DESC"
 echo "------------------------------------------"
-echo "Command: $XMEM_BIN -t $NEG_SMAP_FILE $NEG_MEMINFO_FILE"
+echo "Command: $MEM_BIN -t $NEG_SMAP_FILE $NEG_MEMINFO_FILE"
 
 rm -rf /tmp/meminsight/*.csv
 
-$XMEM_BIN -t "$NEG_SMAP_FILE" "$NEG_MEMINFO_FILE" >"$NEG_LOG_FILE" 2>&1
+$MEM_BIN -t "$NEG_SMAP_FILE" "$NEG_MEMINFO_FILE" >"$NEG_LOG_FILE" 2>&1
 RC=$?
 
 if [ "$RC" -eq 0 ]; then
@@ -192,11 +192,11 @@ NEG_LOG_FILE2="/tmp/meminsight/negative_test2.log"
 echo "------------------------------------------"
 echo "$NEG_DESC2"
 echo "------------------------------------------"
-echo "Command: $XMEM_BIN -t $NEG_SMAP_FILE2 $NEG_MEMINFO_FILE2"
+echo "Command: $MEM_BIN -t $NEG_SMAP_FILE2 $NEG_MEMINFO_FILE2"
 
 rm -rf /tmp/meminsight/*.csv
 
-$XMEM_BIN -t "$NEG_SMAP_FILE2" "$NEG_MEMINFO_FILE2" >"$NEG_LOG_FILE2" 2>&1
+$MEM_BIN -t "$NEG_SMAP_FILE2" "$NEG_MEMINFO_FILE2" >"$NEG_LOG_FILE2" 2>&1
 RC=$?
 
 if [ "$RC" -eq 0 ]; then

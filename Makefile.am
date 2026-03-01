@@ -19,11 +19,11 @@
 # Set automake options
 AUTOMAKE_OPTIONS = subdir-objects
 
-bin_PROGRAMS = xmeminsight
+bin_PROGRAMS = meminsight
 
-xmeminsight_SOURCES = src/memstatus.c
-xmeminsightdir = $(includedir)
-xmeminsight_HEADERS = src/memstatus.h
+meminsight_SOURCES = src/memstatus.c
+meminsightdir = $(includedir)
+meminsight_HEADERS = src/memstatus.h
 
 if ENABLE_CJSON
 xmeminsight_LDADD = -lcjson
