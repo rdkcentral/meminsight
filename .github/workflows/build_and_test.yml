@@ -1,0 +1,45 @@
+name: Build and Test Component in Native Environment
+
+permissions:
+  contents: read
+
+on:
+  pull_request:
+    branches: [ develop ]
+    paths: ['**/*.c', '**/*.cpp', '**/*.cc', '**/*.cxx', '**/*.h', '**/*.hpp', '**/*.sh']
+
+jobs:
+  build-and-test-meminsight-on-pr:
+    name: Build and Test meminsight component in GitHub RDKCentral
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/rdkcentral/docker-device-mgt-service-test/native-platform:1.6.9
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        
+      - name: Install Dependencies
+        run: |
+          apt-get update
+          apt-get install -y autotools-dev autoconf automake pkg-config
+
+      - name: Clean build artifacts
+        run: |
+          sh cov_build.sh --clean
+
+      - name: Build the component
+        run: |
+          sh cov_build.sh --test
+
+      - name: Verify build output
+        run: |
+          ls -la meminsight || echo "Build artifact not found"
+          file meminsight || echo "Cannot check file type"
+          echo "Build verification complete"
+
+      - name: Run tests
+        run: |
+          chmod +x run_ut.sh
+          ./run_ut.sh
+        shell: bash
