@@ -84,9 +84,9 @@ jobs:
         if: ${{ github.event.inputs.hotfix == 'false' }}
         run: |
           set -euo pipefail
-          git fetch origin main:main
-          git fetch origin develop:develop
+          git fetch --prune origin
           git checkout develop
+          git reset --hard origin/develop
           git flow init -d
           git flow release start "${RELEASE_VERSION}"
 
@@ -157,9 +157,9 @@ jobs:
         if: ${{ github.event.inputs.hotfix == 'true' }}
         run: |
           set -euo pipefail
-          git fetch origin main:main
-          git fetch origin develop:develop
+          git fetch --prune origin
           git checkout main
+          git reset --hard origin/main
           git flow init -d
           git flow hotfix start "${RELEASE_VERSION}"
 
