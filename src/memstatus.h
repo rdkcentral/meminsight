@@ -45,8 +45,6 @@
 
 #define PRINT_MUST printf
 
-//#define TESTME
-
 #ifdef TESTME
 #define PRINT_ERROR printf
 #else
@@ -93,6 +91,7 @@ This is used to ensure compatibility with older versions of the report parser. *
 /* Default Macros */
 #define DEFAULT_FW_NAME "ACTIVEFW123"
 #define FW_LEN 64
+#define MAC_LEN 32
 #define DEFAULT_ITERATIONS 1
 #define DEFAULT_INTERVAL 5
 #define DEFAULT_LOG_LEVEL "INFO"
@@ -107,6 +106,7 @@ This is used to ensure compatibility with older versions of the report parser. *
 /* Config Macros */
 #define CONFIG_EXTN ".conf"
 #define CSV_FILE_NAME "meminsight.csv"
+#define JSON_FILE_NAME "meminsight.json"
 #define LONG_RUN_INTERVAL 900 // 900 is Default interval for long runs in seconds
 #define LONG_RUN_ITERATIONS 48 // 12 Hour capture, considering 15 mins interval
 
@@ -146,17 +146,43 @@ typedef struct config
     char logLevel[8];            // Log level (e.g., "DEBUG", "INFO", "ERROR")
 } Config_Data;
 
+/*
+* Struct to hold setup information for report generation
+*/
+typedef struct {
+    char mac[MAC_LEN];
+    char fwName[FW_LEN];
+    const char *outputDir;
+    const char *reportFileName;
+    bool dirCreated;
+} SetupInfo;
+
+/*
+* Report output format
+*/
+typedef enum
+{
+    REPORT_CSV,
+    REPORT_JSON
+} Report_Format;
+
 // -----------------------------
 // Global Variables
 // -----------------------------
-
-extern int includeKthreads;           // Whether to include kernel threads
 extern Process_Info getProcessInfo;   // Temporary struct for collecting process info
 extern Process_Info *headProcessInfo; // Head of linked list
+extern Report_Format g_reportFormat; // Global variable to hold the report format
+extern bool g_jsonPrettyPrint; // Flag for pretty-printing JSON output
+
+#ifdef ENABLE_CJSON
+#include <cjson/cJSON.h>
+extern cJSON *g_rootObject; // Global JSON root object
+#endif
 
 #ifdef TESTME
-extern int testpid; // Used for test mode with custom smap file
+extern unsigned isTestMode;
 extern char testSmap[128];
+extern char testMeminfo[128];
 extern Process_Info processInfoTest;
 void checkAndFree();
 void testList();
@@ -165,6 +191,7 @@ void testList();
 // -----------------------------
 // Function Prototypes
 // -----------------------------
+SetupInfo initializeSetupInfo(const char *out_dir, Report_Format format);
 
 void writeProcessInfo(unsigned noOfpids, FILE *output);
 void addProcessInfo(Process_Info *addPInfo);
@@ -172,6 +199,13 @@ int getProcessInfos(unsigned pid);
 void printHelp(char *argv[]);
 void printHelpAndUsage(char *argv[], bool moreInfo);
 void saveMeminfo(FILE *out);
+
+#ifdef ENABLE_CJSON
+void saveMeminfo_JSON(cJSON *root);
+void writeProcessInfo_JSON(cJSON *processesArray);
+int writeJSONToFile(const char *filepath, const SetupInfo *setup);
+#endif
+
 int getPropertyFromFile(const char *filename, const char *property, char *propertyValue, size_t propertyValueLen);
 size_t getMacAddress(const char *iface, char *macAddress, size_t szBufSize);
 int getFirmwareImageName(char *fwName, size_t fwNameLen);
@@ -179,7 +213,7 @@ int getFirmwareImageName(char *fwName, size_t fwNameLen);
 int isPID(const char *str);
 int getPIDByProcessName(const char *procName, unsigned int *pidOut);
 int parseConfig(const char *configFile, Config_Data *config);
-int collectSystemMemoryStats(bool includeKthreads, const char *outDir, int iterations, int interval, bool long_run);
+int collectSystemMemoryStats(bool enableKThreads, const char *outDir, int iterations, int interval, bool long_run);
 int handleConfigMode(const char *confFile, const char *cli_out_dir, int cli_iterations, int cli_interval, bool enableKThreads, bool long_run);
 int fillProcessStatFields(unsigned pid, Process_Info *info, unsigned *flagsOut);
 

@@ -33,7 +33,8 @@
 ### 🛠️ **Flexible Configuration**
 - **Process Whitelisting** - Monitor specific processes by name or PID
 - **Configurable Sampling** - Set iterations and intervals for data collection
-- **Multiple Output Formats** - CSV export with timestamps and metadata
+- **Multiple Output Formats** - CSV (default) and JSON export with timestamps and metadata
+- **JSON Output Support** - Optional cJSON-based structured data export with pretty-print capability
 - **Kernel Thread Support** - Optional inclusion of kernel threads
 - **Long-running Mode** - Extended monitoring with automatic intervals
 
@@ -47,8 +48,20 @@
 ## 🚀 Quick Start
 
 ```bash
-# Build the tool
-./configure && make
+# Build the tool (CSV-only, minimal build)
+./cov_build.sh
+
+# Build with JSON support
+./cov_build.sh --enable-cjson
+
+# Run basic system-wide memory analysis (CSV output)
+./meminsight
+
+# Run with JSON output
+./meminsight --fmt json --iterations 10 --interval 30
+
+# Run with pretty-printed JSON
+./meminsight --fmt json --json-pretty --iterations 3
 
 # Run basic system-wide memory analysis
 ./meminsight
@@ -66,14 +79,19 @@
 ## Development Setup
 
 ```bash
-# Setup development environment
+# Build with all features for development
+./cov_build.sh --enable-cjson --enable-test
+
+# Or manually with autotools
 autoreconf -fiv
-./configure --enable-debug
+./configure --enable-cjson --enable-test
 make
 
-# Run test fixtures (requires TESTME build)
-make clean && make CFLAGS="-DTESTME"
+# Run test fixtures (requires --enable-test build)
 ./run_ut.sh
+
+# Clean all build artifacts
+./cov_build.sh --clean
 ```
 
 ## 🔨 Installation
@@ -83,18 +101,46 @@ make clean && make CFLAGS="-DTESTME"
 - GCC compiler
 - GNU Autotools (autoconf, automake)
 - Standard C library with POSIX support
+- **Optional:** libcjson-dev (for JSON output support)
 
 ### Building from Source
+
+#### Using the Build Script (Recommended)
 
 ```bash
 # Clone or extract the source code
 cd meminsight/
 
+# Basic build (CSV output only)
+./cov_build.sh
+
+# Build with JSON support (requires libcjson-dev)
+./cov_build.sh --enable-cjson
+
+# Build with test mode enabled
+./cov_build.sh --enable-test
+
+# Build with all features
+./cov_build.sh --enable-cjson --enable-test
+
+# Clean all build artifacts
+./cov_build.sh --clean
+```
+
+#### Manual Build with Autotools
+
+```bash
+# Install cJSON library (for JSON support)
+# Ubuntu/Debian:
+sudo apt-get install libcjson-dev
+# RHEL/CentOS:
+sudo yum install cjson-devel
+
 # Generate configure script
 autoreconf -fiv
 
 # Configure build environment
-./configure
+./configure --enable-cjson  # Add --enable-test for test mode
 
 # Compile the binary
 make
@@ -111,13 +157,20 @@ sudo make install
 meminsight [OPTIONS]
 
 OPTIONS:
-   -a, --all                   Include kernel threads for process monitoring
-   -c, --config FILE           Path to configuration file (must end with .conf)
-   -o, --output DIR            Output directory for generated CSV files (default: /tmp/meminsight)
-         --iterations N          Number of iterations to run (overrides config)
-         --interval SECONDS      Seconds between iterations (overrides config)
-   -t, --test SMAPS MEMINFO     Run in test mode using supplied sample files (requires TESTME build)
-   -h, --help                  Show help message and exit
+   -a, --all                         Include kernel threads for process monitoring
+   -c, --config FILE                 Path to configuration file (must end with .conf)
+   -o, --output DIR                  Output directory for generated files (default: /tmp/meminsight)
+       --iterations N                Number of iterations to run (overrides config)
+       --interval SECONDS            Seconds between iterations (overrides config)
+       --fmt <format>                Specify report format: csv (default) or json
+                                     (requires build with --enable-cjson)
+       --json-pretty                 Pretty-print JSON output (only with --fmt json)
+   -t, --test SMAPS MEMINFO          Run in test mode using supplied sample files
+                                     (requires build with --enable-test)
+   -h, --help                        Show help message and exit
+
+NOTE: --fmt and --json-pretty options are only available when built with --enable-cjson
+      --test option is only available when built with --enable-test
 ```
 
 ### Default Behavior
@@ -129,14 +182,23 @@ To run a finite capture, specify `--iterations` and/or `--interval`.
 ### Basic Usage Examples
 
 ```bash
-# Single snapshot of system memory
+# Single snapshot of system memory (CSV format)
 ./meminsight --iterations 1 --interval 0
+
+# Single snapshot with JSON output (requires --enable-cjson build)
+./meminsight --fmt json --iterations 1 --interval 0
+
+# Pretty-printed JSON output
+./meminsight --fmt json --json-pretty --iterations 5 --interval 60
 
 # Monitor for 1 hour with 5-minute intervals
 ./meminsight --iterations 12 --interval 300
 
 # Continuous monitoring with kernel threads
 ./meminsight --all
+
+# JSON output to custom directory
+./meminsight --fmt json --output /var/log/memory --iterations 10
 ```
 
 ## ⚙️ Configuration
@@ -197,7 +259,10 @@ echo "process_whitelist=systemd,NetworkManager,sshd" > services.conf
 
 ```bash
 # Build with test-mode enabled (required for -t/--test)
-make clean && make CFLAGS="-DTESTME"
+./cov_build.sh --enable-test
+
+# Or with all features
+./cov_build.sh --enable-cjson --enable-test
 
 # Run using sample fixtures
 ./meminsight --test tst/1-non-zero-swap-entry/meminsight_testSmap.txt tst/1-non-zero-swap-entry/meminsight_testMeminfo.txt
@@ -215,13 +280,51 @@ There is also a negative fixture in `tst/4-negative-duplicate-meminfo-field/` th
 
 ## 🏗️ Build System
 
+### Build Script (cov_build.sh)
+
+The project provides a convenient build script that wraps autotools:
+
+```bash
+# Show help
+./cov_build.sh --help
+
+# Minimal build (CSV only)
+./cov_build.sh
+
+# Enable JSON output support
+./cov_build.sh --enable-cjson
+
+# Enable test mode
+./cov_build.sh --enable-test
+
+# Enable both features
+./cov_build.sh --enable-cjson --enable-test
+
+# Clean all artifacts
+./cov_build.sh --clean
+```
+
 ### Autotools Configuration
 
 The project uses GNU Autotools for cross-platform compatibility:
 
-- **`configure.ac`** - Autoconf configuration
-- **`Makefile.am`** - Automake build rules
-- **Generated files** - `configure`, `Makefile.in`, `config.h`
+- **`configure.ac`** - Autoconf configuration with optional features
+- **`Makefile.am`** - Automake build rules with conditional linking
+- **`config.h`** - Generated header with feature flags (ENABLE_CJSON, TESTME)
+- **Generated files** - `configure`, `Makefile.in`
+
+### Configure Options
+
+```bash
+# Enable cJSON support for JSON output
+./configure --enable-cjson
+
+# Enable test mode with TESTME flag
+./configure --enable-test
+
+# Combine multiple options
+./configure --enable-cjson --enable-test
+```
 
 ### Build Targets
 
@@ -241,6 +344,20 @@ make dist
 # Install to system directories
 make install
 ```
+
+### Conditional Compilation
+
+The build system uses conditional compilation for optional features:
+
+- **ENABLE_CJSON** - Defined when `--enable-cjson` is used
+  - Enables `--fmt json` and `--json-pretty` CLI options
+  - Links against `-lcjson` library
+  - Compiles JSON output functions
+
+- **TESTME** - Defined when `--enable-test` is used
+  - Enables `--test` CLI option for fixture-based testing
+  - Includes test validation code
+  - Used by `run_ut.sh` test runner
 
 ## 🏛️ Architecture
 
@@ -270,7 +387,7 @@ make install
 ### Example 1: Web Server Monitoring
 
 ```bash
-# Monitor web server processes
+# Monitor web server processes (CSV output)
 cat > webserver.conf << EOF
 process_whitelist=nginx,apache2,httpd,php-fpm
 output_dir=/var/log/webserver-memory
@@ -279,7 +396,6 @@ interval=300
 log_level=INFO
 EOF
 
-./meminsight --config webserver.conf
 ```
 
 ### Example 2: Database Performance Analysis
@@ -289,14 +405,45 @@ EOF
 ./meminsight --iterations 120 --interval 60 \
               --output /tmp/db-analysis \
               --config database.conf
+
+# Export as structured JSON for automated analysis
+./meminsight --fmt json --iterations 120 --interval 60 \
+              --output /tmp/db-analysis \
+              --config database.conf
 ```
 
 ### Example 3: Embedded System Monitoring
 
 ```bash
+# Minimal build for resource-constrained devices (CSV only, no test code)
+./cov_build.sh
+
+# If custom network interface is needed
+autoreconf -fiv
+CPPFLAGS="-DDEVICE_IDENTIFIER=\"erouter0\"" ./configure
+make
+
+# Lightweight monitoring
+./meminsight --iterations 24 --interval 3600 --output /mnt/logs/
 # Lightweight monitoring for embedded systems
 CPPFLAGS="-DDEVICE_IDENTIFIER=\"eth0\"" make clean && make
 ./meminsight --iterations 24 --interval 3600 --output /mnt/logs/
+```
+
+### Example 4: JSON Export for Data Pipelines
+
+```bash
+# Build with JSON support
+./cov_build.sh --enable-cjson
+
+# Generate machine-readable JSON reports for log aggregation
+./meminsight --fmt json \
+              --iterations 1440 \
+              --interval 60 \
+              --output /var/log/meminsight/
+
+# Process JSON with jq or send to monitoring systems
+cat /tmp/meminsight/*.json | jq '.processes[] | select(.pss > 100000)'
 ```
 
 ## 🔧 Troubleshooting
