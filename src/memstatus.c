@@ -22,6 +22,7 @@
 // Global Variables
 // -----------------------------
 int includeKthreads = 0;              // Whether to include kernel threads
+bool g_isAmlogic = false;             // Whether the device is Amlogic SOC
 Process_Info getProcessInfo = {0};    // Temporary struct for collecting process info
 Process_Info *headProcessInfo = NULL; // Head of linked list
 
@@ -61,7 +62,7 @@ static void ensure_output_dir(const char *dir)
  * Reads a property value from a file in "key=value" format.
  * Returns 1 if found, 0 otherwise.
  */
-#if 0
+
 int getPropertyFromFile(const char *filename, const char *property, char *propertyValue, size_t propertyValueLen)
 {
     FILE *fp = fopen(filename, "r");
@@ -118,6 +119,7 @@ int getPropertyFromFile(const char *filename, const char *property, char *proper
         propertyValue[0] = '\0';
     return found;
 }
+#if 0
 /**
  * Retrieves the system uptime from /proc/uptime.
  * Returns a string in "HH:MM:SS" format.
@@ -1176,6 +1178,13 @@ int collectSystemMemoryStats(bool includeKthreads, const char *outDir, int itera
         writeProcessInfo(noOfPids, output);
         fprintf(output, "0,Total,%lu,%lu,%lu,%lu,%lu,%lu,0,0,0\n", rssTotal, pssTotal, shared_clean_total,
                 private_clean_total, private_dirty_total, swap_pss_total);
+
+        // Collect AMLOGIC bandwidth data if applicable
+        if (g_isAmlogic)
+        {
+            collectAMLBandwidthData(output);
+        }
+
         fclose(output);
 #ifdef TESTME
         if (1 == isTestMode) {
@@ -1365,6 +1374,13 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, int cli_iter
             PRINT_ERROR("No whitelist specified in config.\n");
         }
         fprintf(output, "0,Total,%lu,%lu,%lu,%lu\n", rssTotal, pssTotal, shared_clean_total, private_dirty_total);
+
+        // Collect AMLOGIC bandwidth data if applicable
+        if (g_isAmlogic)
+        {
+            collectAMLBandwidthData(output);
+        }
+
         fclose(output);
 
         if (final_interval > 0 && iter + 1 < final_iterations)
@@ -1388,6 +1404,73 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, int cli_iter
     }
     PRINT_INFO("\n---- Completed Data Capture ----\n");
     return 0;
+}
+
+/**
+ * Collects Amlogic DDR bandwidth data and writes to output file.
+ * Only collects data if DDR bandwidth monitoring is enabled.
+ */
+void collectAMLBandwidthData(FILE *out)
+{
+    if (!out)
+        return;
+
+    FILE *fp;
+    char buffer[128];
+    unsigned long totalBandwidth;
+    float usagePercentage;
+
+    // Check if DDR Bandwidth monitoring is enabled
+    fp = fopen(AML_DDR_MODE_FILE, "r");
+    if (!fp)
+    {
+        PRINT_INFO("Failed to open %s: %s\n", AML_DDR_MODE_FILE, strerror(errno));
+        return;
+    }
+
+    // check first char for '1'
+    if (!fgets(buffer, sizeof(buffer), fp) || buffer[0] != '1')
+    {
+        fclose(fp);
+        PRINT_INFO("AML DDR bandwidth monitoring is disabled\n");
+        // Enable DDR bandwidth monitoring
+        fp = fopen(AML_DDR_MODE_FILE, "w");
+        if (!fp)
+        {
+            PRINT_INFO("Failed to open %s for writing: %s\n", AML_DDR_MODE_FILE, strerror(errno));
+            return;
+        }
+        if (fputs("1\n", fp) == EOF)
+        {
+            PRINT_INFO("Failed to enable AML DDR bandwidth monitoring: %s\n", strerror(errno));
+        }
+        fclose(fp);
+        PRINT_INFO("AML DDR bandwidth monitoring enabled\n");
+        return;
+    }
+    fclose(fp);
+
+    // Read bandwidth data
+    fp = fopen(AML_DDR_BW_FILE, "r");
+    if (!fp)
+    {
+        PRINT_INFO("Failed to open %s: %s\n", AML_DDR_BW_FILE, strerror(errno));
+        return;
+    }
+
+    // Read and parse in one operation
+    if (fgets(buffer, sizeof(buffer), fp) &&
+        sscanf(buffer, "Total bandwidth: %lu KB/s, usage: %f%%", &totalBandwidth, &usagePercentage) == 2)
+    {
+        fprintf(out, "\n\nBandwidth:\nTotalBandwidth,UsagePercentage\n%lu,%.2f\n", 
+                totalBandwidth, usagePercentage);
+        PRINT_INFO("AML Bandwidth captured: %lu KB/s, %.2f%%\n", totalBandwidth, usagePercentage);
+    }
+    else
+    {
+        PRINT_INFO("Failed to parse bandwidth data from: %s\n", buffer);
+    }
+    fclose(fp);
 }
 
 /**
@@ -1680,6 +1763,16 @@ int main(int argc, char *argv[])
         printf("%s ", argv[i]);
     }
     printf("\n");
+
+    // Check if device is Amlogic
+    char socValue[64] = {0};
+    if (getPropertyFromFile(DEVICE_PROP_FILE, "SOC", socValue, sizeof(socValue)))
+    {
+        if (strcmp(socValue, "AMLOGIC") == 0)
+        {
+            g_isAmlogic = true;
+        }
+    }
 
     includeKthreads = enableKThreads; // Cascade to global for all code paths
     if (isConfigPresent)
