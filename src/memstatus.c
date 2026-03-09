@@ -24,6 +24,8 @@
 int includeKthreads = 0;              // Whether to include kernel threads
 Process_Info getProcessInfo = {0};    // Temporary struct for collecting process info
 Process_Info *headProcessInfo = NULL; // Head of linked list
+unsigned smaps_rollup;
+char gSMAPS_OR_ROLLUP[] = "smaps_rollup";
 
 #ifdef TESTME
 unsigned isTestMode = 0;
@@ -36,6 +38,8 @@ static int unitTestFailed = 0;
 static const char deviceIdentifierName[] = DEVICE_IDENTIFIER;
 static const char memInsightVersion[] = "" MEMINSIGHT_MAJOR_VERSION "." MEMINSIGHT_MINOR_VERSION "";
 static const char reportVersion[] =  "" REPORT_MAJOR_VERSION "." REPORT_MINOR_VERSION "";
+
+int (*getProcessInfos_ptr)(FILE*);
 
 // -----------------------------
 // Utility Functions
@@ -317,6 +321,7 @@ int fillProcessStatFields(unsigned pid, Process_Info *info, unsigned *flagsOut)
     unsigned long utime = 0, stime = 0;
     char *after = close ? close + 2 : line;
     sscanf(after, "%*c %*d %*d %*d %*d %*d %u %u %*u %u %*u %lu %lu", &flags, &minflt, &majflt, &utime, &stime);
+    info->minFaults = minflt;
     info->majFaults = majflt;
     info->cputime = utime + stime;
     if (flagsOut)
@@ -426,10 +431,8 @@ void writeProcessInfo(unsigned noOfPids, FILE *output)
     unsigned int i = 1;
     while (tmp)
     {
-        //printf("%d,%lu,%lu,%lu,%lu,%lu,%lu,%lu,%lu,%u,%s\n", i++, tmp->rssTotal, tmp->pssTotal, tmp->shared_clean_total,
-        //tmp->private_clean_total, tmp->private_dirty_total, tmp->swap_pss_total, tmp->majFaults, tmp->cputime, tmp->pid, tmp->name);
-        fprintf(output, "%u,%s,%lu,%lu,%lu,%lu,%lu,%lu,%lu,%lu\n", tmp->pid, tmp->name, tmp->rssTotal, tmp->pssTotal,
-                tmp->shared_clean_total, tmp->private_clean_total, tmp->private_dirty_total, tmp->swap_pss_total, tmp->majFaults, tmp->cputime);
+        fprintf(output, "%u,%s,%lu,%lu,%lu,%lu,%lu,%lu,%lu,%lu,%lu\n", tmp->pid, tmp->name, tmp->rssTotal, tmp->pssTotal,
+                tmp->shared_clean_total, tmp->private_clean_total, tmp->private_dirty_total, tmp->swap_pss_total, tmp->minFaults, tmp->majFaults, tmp->cputime);
         tofree = tmp;
         tmp = tmp->next;
         free(tofree);
@@ -540,447 +543,878 @@ void testList()
     addProcessInfo(&add);
     checkAndFree();
 }
+unsigned prev_test_pss;
+void testGetProcessInfos_Parse(char *tmp)
+{
+    unsigned test_rss = 0, test_pss = 0;
+    unsigned test_shared_clean = 0, test_private_clean = 0, test_private_dirty = 0;
+    unsigned test_swap_pss = 0;
+    if (!strncmp(tmp, "Rss:", 4))
+    {
+        PRINT_DBG("%s", tmp);
+        if (sscanf(tmp, "Rss: %u kB", &test_rss))
+        {
+            processInfoTest.rssTotal += test_rss;
+        }
+    }
+    else if (!strncmp(tmp, "Pss:", 4))
+    {
+        PRINT_DBG("%s", tmp);
+        if (sscanf(tmp, "Pss: %u kB", &test_pss))
+        {
+            processInfoTest.pssTotal += test_pss;
+        }
+        prev_test_pss = test_pss;
+    }
+    else if (!strncmp(tmp, "Shared_Clean:", 13))
+    {
+        PRINT_DBG("%s", tmp);
+        if (sscanf(tmp, "Shared_Clean: %u kB", &test_shared_clean))
+        {
+         if (test_shared_clean) {
+                processInfoTest.shared_clean_total += ((!smaps_rollup)? prev_test_pss : test_shared_clean);
+         }
+        }
+    }
+    else if (!strncmp(tmp, "Private_Clean:", 14))
+    {
+        PRINT_DBG("%s", tmp);
+        if (sscanf(tmp, "Private_Clean: %u kB", &test_private_clean))
+        {
+            processInfoTest.private_clean_total += test_private_clean;
+        }
+    }
+    else if (!strncmp(tmp, "Private_Dirty:", 14))
+    {
+        PRINT_DBG("%s", tmp);
+        if (sscanf(tmp, "Private_Dirty: %u kB", &test_private_dirty))
+        {
+            processInfoTest.private_dirty_total += test_private_dirty;
+        }
+    }
+    else if (!strncmp(tmp, "SwapPss:", 8))
+    {
+     PRINT_DBG("Test pss: %d %s\n", prev_test_pss, tmp);
+        if (sscanf(tmp, "SwapPss: %u kB", &test_swap_pss))
+        {
+            processInfoTest.swap_pss_total += test_swap_pss;
+        }
+     test_rss = test_pss = 0;
+    }
+}
+
+int testGetProcessInfos(FILE *smap, char *tmp)
+{
+    memset(&processInfoTest, 0, sizeof(processInfoTest));
+    while (fgets(tmp, 255, smap))
+    {
+        testGetProcessInfos_Parse(tmp);
+    }
+    return 0;
+}
 #endif
 
 // -----------------------------
 // Process Info Parsing
 // -----------------------------
 
+// If use smaps_rollup, then job simple.
+unsigned linesToSkipForRss_smaps_rollup = 0;
+unsigned linesToSkipForPss_smaps_rollup = 0;
+unsigned linesToSkipForSharedClean_smaps_rollup = 0;
+unsigned linesToSkipForPrivateClean_smaps_rollup = 0;
+unsigned linesToSkipForDirtyPrivate_smaps_rollup = 0;
+unsigned linesToSkipForSwapPss_smaps_rollup = 0;
+
+unsigned linesToSkipForRss = 0;
+unsigned linesToSkipForPss = 0;
+unsigned linesToSkipForSharedClean = 0;
+unsigned linesToSkipForPrivateClean = 0;
+unsigned linesToSkipForDirtyPrivate = 0;
+unsigned linesToSkipForSwapPss = 0;
+unsigned linesToSkipForRollover = 0;
+unsigned linesToSkipIfRss0 = 0;
+unsigned linesToSkipForSwapPssIfRss0 = 0;
+
+
+/**
+ * Parses /proc/[pid]/smaps_rollup for a given process and accumulates memory
+ * statistics. Returns 0 on success, 1 on failure.
+ */
+int getProcessInfos_rollup_learnt(FILE *smap)
+{
+    char tmp[256];
+
+    unsigned lines_To_skip = linesToSkipForRss_smaps_rollup;
+    unsigned skipped = 1; // Tracks current skips
+    unsigned expect_rss = 1;
+    unsigned expect_pss = 0;
+    unsigned expect_shared_clean = 0;
+    unsigned expect_private_clean = 0;
+    unsigned expect_private_dirty = 0;
+    unsigned expect_swap_pss = 0;
+
+    while (fgets(tmp, 256, smap))
+    {
+        /*
+         * cat /proc/<pid>/smaps_rollup
+         * 55aba70c6000-7ffe839f7000 ---p 00000000 00:00 0                          [rollup]
+         * 
+         * Rss:                4188 kB
+         * Pss:                 853 kB
+         * Pss_Anon:            816 kB
+         * Pss_File:             37 kB
+         * Pss_Shmem:             0 kB
+         * Shared_Clean:       3372 kB
+         * Shared_Dirty:          0 kB
+         * Private_Clean:         0 kB
+         * Private_Dirty:       816 kB
+         * Referenced:         4188 kB
+         * Anonymous:           816 kB
+         * LazyFree:              0 kB
+         * AnonHugePages:         0 kB
+         * ShmemPmdMapped:        0 kB
+         * FilePmdMapped:        0 kB
+         * Shared_Hugetlb:        0 kB
+         * Private_Hugetlb:       0 kB
+         * Swap:                  0 kB
+         * SwapPss:               0 kB
+         * Locked:                0 kB
+            */
+
+#ifdef TESTME
+        testGetProcessInfos_Parse(tmp);
+#endif
+        unsigned rss = 0, pss = 0;
+        unsigned shared_clean = 0, private_clean = 0, private_dirty = 0;
+        unsigned swap_pss = 0;
+        if (++skipped > lines_To_skip)
+        {
+            if (expect_rss)
+            {
+                if (sscanf(tmp, "Rss: %u kB", &rss))
+                {
+                    PRINT_DBG_SCANNED("Read Rss (%u) after %u/%u lines --> %s\r", rss, skipped,
+                                          lines_To_skip, tmp);
+                    getProcessInfo.rssTotal = rss;
+                    PRINT_DBG_SCANNED("rssTotal (%lu)\n", getProcessInfo.rssTotal);
+                    lines_To_skip = linesToSkipForPss_smaps_rollup;
+                    expect_pss = 1;
+                    expect_rss = 0;
+                    skipped = 1;
+                    continue;
+                }
+            }
+            else if (expect_pss)
+            {
+                if (sscanf(tmp, "Pss: %u kB", &pss))
+                {
+                    PRINT_DBG_SCANNED("Read Pss (%u) after %u/%u lines  --> %s\r", pss, skipped, lines_To_skip,
+                                      tmp);
+                    getProcessInfo.pssTotal = pss;
+                    lines_To_skip = linesToSkipForSharedClean_smaps_rollup;
+                    expect_shared_clean = 1;
+                    skipped = 1;
+                    expect_pss = 0;
+                    continue;
+                }
+            }
+            else if (expect_shared_clean)
+            {
+                if (sscanf(tmp, "Shared_Clean: %u kB", &shared_clean))
+                {
+                    PRINT_DBG_SCANNED("Read shared_clean (%u)  %u/%u lines --> %s\r", shared_clean, skipped,
+                                      lines_To_skip, tmp);
+            // %% This is the main reason as to why we are not reading form smaps_rollup
+                    getProcessInfo.shared_clean_total = shared_clean;
+                    expect_private_clean = 1;
+                    lines_To_skip = linesToSkipForPrivateClean_smaps_rollup;
+                    expect_shared_clean = 0;
+                    skipped = 1;
+                    continue;
+                }
+            }
+            else if (expect_private_clean)
+            {
+                if (sscanf(tmp, "Private_Clean: %u kB", &private_clean))
+                {
+                    expect_private_clean = 0;
+                    PRINT_DBG_SCANNED("Read private_clean (%u)  %u/%u lines --> %s\r", private_clean, skipped,
+                                      lines_To_skip, tmp);
+                    getProcessInfo.private_clean_total = private_clean;
+                    skipped = 1;
+                    expect_private_dirty = 1;
+                    lines_To_skip = linesToSkipForDirtyPrivate_smaps_rollup;
+                    continue;
+                }
+            }
+            else if (expect_private_dirty)
+            {
+                if (sscanf(tmp, "Private_Dirty: %u kB", &private_dirty))
+                {
+                    expect_private_dirty = 0;
+                    PRINT_DBG_SCANNED("Read private_dirty (%u)  %u/%u lines --> %s\r", private_dirty, skipped,
+                                      lines_To_skip, tmp);
+                    getProcessInfo.private_dirty_total = private_dirty;
+                    skipped = 1;
+                    if (0xFFFF != linesToSkipForSwapPss_smaps_rollup)
+                    {
+                        expect_swap_pss = 1;
+                        lines_To_skip = linesToSkipForSwapPss_smaps_rollup;
+            continue;
+                    }
+                    break;
+                }
+            }
+            else if (expect_swap_pss)
+            {
+                if (sscanf(tmp, "SwapPss: %u kB", &swap_pss))
+                {
+                    PRINT_DBG_SCANNED("Read swap_pss (%u)  %u/%u lines --> %s\r", swap_pss, skipped,
+                                      lines_To_skip, tmp);
+                    getProcessInfo.swap_pss_total = swap_pss;
+                    break;
+                }
+            }
+        }
+        else
+        {
+            continue;
+        }
+    }
+    return 0;
+}
+
+int getProcessInfos_rollup(FILE *smap)
+{
+    char tmp[256];
+    unsigned expect_rss = 1;
+    unsigned expect_pss = 0;
+    unsigned expect_shared_clean = 0;
+    unsigned expect_private_clean = 0;
+    unsigned expect_private_dirty = 0;
+    unsigned expect_swap_pss = 0;
+
+    unsigned linesSkippedForRss = 0;
+    unsigned linesSkippedForPss = 0;
+    unsigned linesSkippedForSharedClean = 0;
+    unsigned linesSkippedForPrivateClean = 0;
+    unsigned linesSkippedForDirtyPrivate = 0;
+    unsigned linesSkippedForSwapPss = 0;
+
+    while (fgets(tmp, 256, smap))
+    {
+#ifdef TESTME
+    testGetProcessInfos_Parse(tmp);
+#endif
+        unsigned rss = 0, pss = 0;
+        unsigned shared_clean = 0, private_clean = 0, private_dirty = 0;
+        unsigned swap_pss = 0;
+        if (!linesToSkipForRss_smaps_rollup)
+        {
+            if (sscanf(tmp, "Rss: %u kB", &rss))
+            {
+                getProcessInfo.rssTotal = rss;
+                linesToSkipForRss_smaps_rollup = linesSkippedForRss + 1;
+                PRINT_DBG_INITIAL("After %u lines Read Rss (%u) in --> %s\r", linesToSkipForRss_smaps_rollup, rss, tmp);
+            }
+            else
+            {
+                linesSkippedForRss++;
+            }
+        }
+        else if (!linesToSkipForPss_smaps_rollup)
+        {
+            if (sscanf(tmp, "Pss: %u kB", &pss))
+            {
+                getProcessInfo.pssTotal = pss;
+                linesToSkipForPss_smaps_rollup = linesSkippedForPss + 1;
+                PRINT_DBG_INITIAL("After %u lines Read Pss (%u) in --> %s\r", linesToSkipForPss_smaps_rollup, pss, tmp);
+            }
+            else
+            {
+                linesSkippedForPss++;
+            }
+        }
+        else if (!linesToSkipForSharedClean_smaps_rollup)
+        {
+            if (sscanf(tmp, "Shared_Clean: %u kB", &shared_clean))
+            {
+                getProcessInfo.shared_clean_total = shared_clean;
+                linesToSkipForSharedClean_smaps_rollup = linesSkippedForSharedClean + 1;
+                PRINT_DBG_INITIAL("After %u lines Read Shared_Clean (%u) in --> %s\r",
+                                  linesToSkipForSharedClean_smaps_rollup, shared_clean, tmp);
+            }
+            else
+            {
+                linesSkippedForSharedClean++;
+            }
+        }
+        else if (!linesToSkipForPrivateClean_smaps_rollup)
+        {
+            if (sscanf(tmp, "Private_Clean: %u kB", &private_clean))
+            {
+                getProcessInfo.private_clean_total = private_clean;
+                linesToSkipForPrivateClean_smaps_rollup = linesSkippedForPrivateClean + 1;
+                PRINT_DBG_INITIAL("After %u lines Read PrivateClean (%u) in --> %s\r",
+                                  linesToSkipForPrivateClean_smaps_rollup, private_clean, tmp);
+            }
+            else
+            {
+                linesSkippedForPrivateClean++;
+            }
+        }
+        else if (!linesToSkipForDirtyPrivate_smaps_rollup)
+        {
+            if (sscanf(tmp, "Private_Dirty: %u kB", &private_dirty))
+            {
+                getProcessInfo.private_dirty_total = private_dirty;
+                linesToSkipForDirtyPrivate_smaps_rollup = linesSkippedForDirtyPrivate + 1;
+                PRINT_DBG_INITIAL("After %u lines Read DirtyPrivate (%u) in --> %s\r",
+                                  linesToSkipForDirtyPrivate_smaps_rollup, private_dirty, tmp);
+            }
+            else
+            {
+                linesSkippedForDirtyPrivate++;
+            }
+        }
+        else if (!linesToSkipForSwapPss_smaps_rollup)
+        {
+            if (sscanf(tmp, "SwapPss: %u kB", &swap_pss))
+            {
+                getProcessInfo.swap_pss_total = swap_pss;
+                linesToSkipForSwapPss_smaps_rollup = linesSkippedForSwapPss + 1;
+                PRINT_DBG_INITIAL("After %u lines Read Swap_Pss (%u) in --> %s\r", linesToSkipForSwapPss_smaps_rollup,
+                                  swap_pss, tmp);
+            }
+            else
+            {
+                // check if smap doesn't contain swappss..
+                if (sscanf(tmp, "Locked: %u kB", &swap_pss))
+                {
+                    PRINT_DBG_INITIAL("*****No SwapPss....skipping\n");
+                linesToSkipForSwapPss_smaps_rollup = 0xFFFF;
+                }
+                else
+                {
+                    linesSkippedForSwapPss++;
+                continue;
+                }
+            }
+            getProcessInfos_ptr = getProcessInfos_rollup_learnt;
+            PRINT_DBG_INITIAL("Using getProcessInfos_rollup_learnt, without SwapPss\n");
+            break;
+        }
+        else
+        {
+            PRINT_ERROR("%s-%d: Shouldn't be here expect rss:pss:shared_clean:priv_clean:priv_dirty:swap \
+                        %u:%u:%u:%u:%u:%u read line %s", __FUNCTION__, __LINE__, expect_rss, expect_pss, expect_shared_clean, \
+                        expect_private_clean, expect_private_dirty, expect_swap_pss, tmp);
+            return 1;
+        }
+    }
+    return 0;
+}
+
 /**
  * Parses /proc/[pid]/smaps for a given process and accumulates memory
  * statistics. Returns 0 on success, 1 on failure.
  */
+int getProcessInfos_learnt(FILE *smap)
+{
+    char tmp[256];
+    
+    unsigned lines_To_skip = linesToSkipForRss;
+    unsigned skipped = 1; // Tracks current skips
+    unsigned expect_rss = 1;
+    unsigned expect_pss = 0;
+    unsigned expect_shared_clean = 0;
+    unsigned expect_private_clean = 0;
+    unsigned expect_private_dirty = 0;
+    unsigned expect_swap_pss = 0;
+    unsigned prev_pss = 0;
+
+    while (fgets(tmp, 255, smap))
+    {
+#ifdef TESTME
+        testGetProcessInfos_Parse(tmp);
+#endif
+        unsigned rss = 0, pss = 0;
+        unsigned shared_clean = 0, private_clean = 0, private_dirty = 0;
+        unsigned swap_pss = 0;
+	// This block repeats in getProcessInfos_initial...is redundant, but efficient
+        if (++skipped > lines_To_skip)
+        {
+            if (expect_rss)
+            {
+                if (sscanf(tmp, "Rss: %u kB\n", &rss))
+                {
+                    if (rss)
+                    {
+                        getProcessInfo.rssTotal += rss;
+                        lines_To_skip = linesToSkipForPss;
+                        expect_pss = 1;
+                        expect_rss = 0;
+                    }
+                    else if (linesToSkipForSwapPss)
+                    {
+                        lines_To_skip = linesToSkipForSwapPssIfRss0;
+                        expect_rss = 0;
+                        expect_swap_pss = 1;
+                    }
+                    else
+                    {
+                        lines_To_skip = linesToSkipIfRss0;
+                    }
+                    skipped = 1;
+                    continue;
+                }
+            }
+            else if (expect_pss)
+            {
+                if (sscanf(tmp, "Pss: %u kB\n", &pss))
+                {
+                    getProcessInfo.pssTotal += pss;
+                    lines_To_skip = linesToSkipForSharedClean;
+                    expect_shared_clean = 1;
+                    skipped = 1;
+                    expect_pss = 0;
+                    prev_pss = pss;
+                    continue;
+                }
+            }
+            else if (expect_shared_clean)
+            {
+                if (sscanf(tmp, "Shared_Clean: %u kB\n", &shared_clean))
+                {
+                    if (shared_clean) {
+                        getProcessInfo.shared_clean_total += prev_pss;
+                    }
+
+                    expect_private_clean = 1;
+                    lines_To_skip = linesToSkipForPrivateClean;
+                    expect_shared_clean = 0;
+                    skipped = 1;
+                    continue;
+                }
+            }
+            else if (expect_private_clean)
+            {
+                if (sscanf(tmp, "Private_Clean: %u kB\n", &private_clean))
+                {
+                    expect_private_clean = 0;
+                    getProcessInfo.private_clean_total += private_clean;
+                    skipped = 1;
+                    expect_private_dirty = 1;
+                    lines_To_skip = linesToSkipForDirtyPrivate;
+                    continue;
+                }
+            }
+            else if (expect_private_dirty)
+            {
+                if (sscanf(tmp, "Private_Dirty: %u kB\n", &private_dirty))
+                {
+                    expect_private_dirty = 0;
+                    getProcessInfo.private_dirty_total += private_dirty;
+                    skipped = 1;
+                    if (linesToSkipForSwapPss)
+                    {
+                        expect_swap_pss = 1;
+                        lines_To_skip = linesToSkipForSwapPss;
+                    }
+                    else
+                    {
+                        expect_rss = 1;
+                        lines_To_skip = linesToSkipForRollover;
+                    }
+                    continue;
+                }
+            }
+            else if (expect_swap_pss)
+            {
+                if (sscanf(tmp, "SwapPss: %u kB\n", &swap_pss))
+                {
+                    expect_swap_pss = 0;
+                    expect_rss = 1;
+                    getProcessInfo.swap_pss_total += swap_pss;
+                    lines_To_skip = linesToSkipForRollover;
+                    skipped = 1;
+                    continue;
+                }
+            }
+        }
+        else { 
+                   continue;
+        }
+    }
+    return 0;
+}
+int getProcessInfos_initial(FILE *smap)
+{
+    char tmp[256];
+
+    unsigned lines_To_skip = linesToSkipForRss;
+    unsigned skipped = 1; // Tracks current skips
+    unsigned expect_rss = 1;
+    unsigned expect_pss = 0;
+    unsigned expect_shared_clean = 0;
+    unsigned expect_private_clean = 0;
+    unsigned expect_private_dirty = 0;
+    unsigned expect_swap_pss = 0;
+    unsigned prev_pss = 0;
+
+    unsigned linesSkippedForRss = 0;
+    unsigned linesSkippedForPss = 0;
+    unsigned linesSkippedForSharedClean = 0;
+    unsigned linesSkippedForPrivateClean = 0;
+    unsigned linesSkippedForDirtyPrivate = 0;
+    unsigned linesSkippedForSwapPss = 0;
+    unsigned linesSkippedForRollover = 0;
+
+    while (fgets(tmp, 256, smap))
+    {
+        /*00010000-00041000 r-xp 00000000 fc:00 5600 /usr/sbin/dropbearmulti
+          Size:                196 kB
+          Rss:                 192 kB
+          Pss:                  96 kB
+          Shared_Clean:        192 kB
+          Shared_Dirty:          0 kB
+          Private_Clean:         0 kB
+          Private_Dirty:         0 kB
+          Referenced:          192 kB
+          Anonymous:             0 kB
+          AnonHugePages:         0 kB
+          ShmemPmdMapped:        0 kB
+          Shared_Hugetlb:        0 kB
+          Private_Hugetlb:       0 kB
+          Swap:                  0 kB
+          SwapPss:               0 kB
+          KernelPageSize:        4 kB
+          MMUPageSize:           4 kB
+          Locked:                0 kB
+          VmFlags: rd ex mr mw me dw
+          00050000-00051000 r--p 00030000 fc:00 5600 /usr/sbin/dropbearmulti
+          Size:                  4 kB
+          Rss:                   4 kB
+          Pss:                   4 kB
+          Shared_Clean:          0 kB
+          Shared_Dirty:          0 kB
+          Private_Clean:         0 kB
+          Private_Dirty:         4 kB
+        */
+
+#ifdef TESTME
+        testGetProcessInfos_Parse(tmp);
+#endif
+        unsigned rss = 0, pss = 0;
+        unsigned shared_clean = 0, private_clean = 0, private_dirty = 0;
+        unsigned swap_pss = 0;
+        if (!linesToSkipForRollover)
+        { // Learn here
+            if (!linesToSkipForRss)
+            {
+                if (sscanf(tmp, "Rss: %u kB", &rss))
+                {
+                    getProcessInfo.rssTotal += rss;
+                    linesToSkipForRss = linesSkippedForRss + 1;
+                    PRINT_DBG_INITIAL("After %u lines Read Rss (%u) in --> %s\r", linesToSkipForRss, rss, tmp);
+                }
+                else
+                {
+                    linesSkippedForRss++;
+                }
+            }
+            else if (!linesToSkipForPss)
+            {
+                if (sscanf(tmp, "Pss: %u kB", &pss))
+                {
+                    getProcessInfo.pssTotal += pss;
+                    linesToSkipForPss = linesSkippedForPss + 1;
+                    PRINT_DBG_INITIAL("After %u lines Read Pss (%u) in --> %s\r", linesToSkipForPss, pss, tmp);
+                    prev_pss = pss;
+                }
+                else
+                {
+                    linesSkippedForPss++;
+                }
+            }
+            else if (!linesToSkipForSharedClean)
+            {
+                if (sscanf(tmp, "Shared_Clean: %u kB", &shared_clean))
+                {
+                    if (shared_clean) {
+                        getProcessInfo.shared_clean_total += prev_pss;
+                    }
+                    linesToSkipForSharedClean = linesSkippedForSharedClean + 1;
+                    PRINT_DBG_INITIAL("After %u lines Read Shared_Clean (%u) in --> %s\r",
+                                      linesToSkipForSharedClean, shared_clean, tmp);
+                }
+                else
+                {
+                    linesSkippedForSharedClean++;
+                }
+            }
+            else if (!linesToSkipForPrivateClean)
+            {
+                if (sscanf(tmp, "Private_Clean: %u kB", &private_clean))
+                {
+                    getProcessInfo.private_clean_total += private_clean;
+                    linesToSkipForPrivateClean = linesSkippedForPrivateClean + 1;
+                    PRINT_DBG_INITIAL("After %u lines Read PrivateClean (%u) in --> %s\r",
+                                      linesToSkipForPrivateClean, private_clean, tmp);
+                }
+                else
+                {
+                    linesSkippedForPrivateClean++;
+                }
+            }
+            else if (!linesToSkipForDirtyPrivate)
+            {
+                if (sscanf(tmp, "Private_Dirty: %u kB", &private_dirty))
+                {
+                    getProcessInfo.private_dirty_total += private_dirty;
+                    linesToSkipForDirtyPrivate = linesSkippedForDirtyPrivate + 1;
+                    PRINT_DBG_INITIAL("After %u lines Read DirtyPrivate (%u) in --> %s\r",
+                                      linesToSkipForDirtyPrivate, private_dirty, tmp);
+                }
+                else
+                {
+                    linesSkippedForDirtyPrivate++;
+                }
+            }
+            else if (!linesToSkipForSwapPss)
+            {
+                if (sscanf(tmp, "SwapPss: %u kB", &swap_pss))
+                {
+                    getProcessInfo.swap_pss_total += swap_pss;
+                    linesToSkipForSwapPss = linesSkippedForSwapPss + 1;
+                    PRINT_DBG_INITIAL("After %u lines Read Swap_Pss (%u) in --> %s\r", linesToSkipForSwapPss,
+                                      swap_pss, tmp);
+                    linesToSkipForSwapPssIfRss0 = linesToSkipForPss + linesToSkipForSharedClean + linesToSkipForPrivateClean + linesToSkipForDirtyPrivate + linesToSkipForSwapPss;
+                }
+                else
+                {
+                    // check if smap doesn't contain swappss..
+                    if (sscanf(tmp, "Rss: %u kB", &rss))
+                    {
+                        getProcessInfo.rssTotal += rss;
+                        linesToSkipForRollover = linesSkippedForSwapPss + 1;
+                        PRINT_DBG_INITIAL("*****No SwapPss....skipping\n");
+                        PRINT_DBG_INITIAL("No SwapPss...After %u lines Read Rss (%u) in --> %s\r", linesToSkipForRollover, rss,
+                                          tmp);
+                        lines_To_skip = linesToSkipForPss;
+                        expect_pss = 1;
+                        expect_rss = 0;
+                        linesToSkipIfRss0 = linesToSkipForPss + linesToSkipForSharedClean + linesToSkipForPrivateClean +
+                                            linesToSkipForDirtyPrivate + linesToSkipForRollover - 4;
+                        getProcessInfos_ptr = getProcessInfos_learnt;
+                        PRINT_DBG_INITIAL("Using getProcessInfos_learnt, without SwapPss\n");
+                    }
+                    else
+                    {
+                        linesSkippedForSwapPss++;
+                    }
+                }
+            }
+            else if (!linesToSkipForRollover)
+            {
+                if (sscanf(tmp, "Rss: %u kB", &rss))
+                {
+                    getProcessInfo.rssTotal += rss;
+                    linesToSkipForRollover = linesSkippedForRollover + 1;
+                    PRINT_DBG_INITIAL("After %u lines Read Rss (%u) in --> %s\r", linesToSkipForRollover, rss, tmp);
+                    lines_To_skip = linesToSkipForPss;
+                    expect_pss = 1;
+                    expect_rss = 0;
+                    linesToSkipIfRss0 = linesToSkipForPss + linesToSkipForSharedClean + linesToSkipForDirtyPrivate + linesToSkipForPrivateClean +
+                                        linesToSkipForSwapPss + linesToSkipForRollover - 5;
+                    getProcessInfos_ptr = getProcessInfos_learnt;
+                }
+                else
+                {
+                    linesSkippedForRollover++;
+                }
+            }
+            else
+            {
+            PRINT_ERROR("%s-%d: Shouldn't be here expect rss:pss:shared_clean:priv_clean:priv_dirty:swap \
+                            %u:%u:%u:%u:%u:%u read line %s", __FUNCTION__, __LINE__, expect_rss, expect_pss, expect_shared_clean, \
+                            expect_private_clean, expect_private_dirty, expect_swap_pss, tmp);
+            return 1;
+            }
+        }
+        else
+        { // Learnt the format...instead of calling getProcessInfos_learnt, which involves some more bookkeeping..
+            //return getProcessInfos_learnt(smap);
+	    // This block repeats in getProcessInfos_learnt...is redundant, but efficient
+            if (++skipped > lines_To_skip)
+            {
+                if (expect_rss)
+                {
+                    if (sscanf(tmp, "Rss: %u kB", &rss))
+                    {
+                        PRINT_DBG_SCANNED("Read Rss (%u) after %u/%u lines --> %s\r", rss, skipped,
+                                              lines_To_skip, tmp);
+                        if (rss)
+                        {
+                            getProcessInfo.rssTotal += rss;
+                            PRINT_DBG_SCANNED("rssTotal (%lu)\n", getProcessInfo.rssTotal);
+                            lines_To_skip = linesToSkipForPss;
+                            expect_pss = 1;
+                            expect_rss = 0;
+                        }
+                        else if (linesToSkipForSwapPss)    
+                        {
+                            lines_To_skip = linesToSkipForSwapPssIfRss0;
+                            expect_rss = 0;
+                            expect_swap_pss = 1;
+                        }
+                        else
+                        {
+                            lines_To_skip = linesToSkipIfRss0;
+                        }
+                        skipped = 1;
+                        continue;
+                    }
+                }
+                else if (expect_pss)
+                {
+                    if (sscanf(tmp, "Pss: %u kB", &pss))
+                    {
+                        PRINT_DBG_SCANNED("Read Pss (%u) after %u/%u lines  --> %s\r", pss, skipped, lines_To_skip,
+                                          tmp);
+                        getProcessInfo.pssTotal += pss;
+                        lines_To_skip = linesToSkipForSharedClean;
+                        expect_shared_clean = 1;
+                        skipped = 1;
+                        expect_pss = 0;
+                        prev_pss = pss;
+                        continue;
+                    }
+                }
+                else if (expect_shared_clean)
+                {
+                    if (sscanf(tmp, "Shared_Clean: %u kB", &shared_clean))
+                    {
+                        PRINT_DBG_SCANNED("Read shared_clean (%u)  %u/%u lines --> %s\r", shared_clean, skipped,
+                                          lines_To_skip, tmp);
+                        // %% This is the main reason as to why we are not reading form smaps_rollup
+                        if (shared_clean) {
+                            getProcessInfo.shared_clean_total += prev_pss;
+                        }
+                        expect_private_clean = 1;
+                        lines_To_skip = linesToSkipForPrivateClean;
+                        expect_shared_clean = 0;
+                        skipped = 1;
+                        continue;
+                    }
+                }
+                else if (expect_private_clean)
+                {
+                    if (sscanf(tmp, "Private_Clean: %u kB", &private_clean))
+                    {
+                        expect_private_clean = 0;
+                        PRINT_DBG_SCANNED("Read private_clean (%u)  %u/%u lines --> %s\r", private_clean, skipped,
+                                          lines_To_skip, tmp);
+                        getProcessInfo.private_clean_total += private_clean;
+                        skipped = 1;
+                        expect_private_dirty = 1;
+                        lines_To_skip = linesToSkipForDirtyPrivate;
+                        continue;
+                    }
+                }
+                else if (expect_private_dirty)
+                {
+                    if (sscanf(tmp, "Private_Dirty: %u kB", &private_dirty))
+                    {
+                        expect_private_dirty = 0;
+                        PRINT_DBG_SCANNED("Read private_dirty (%u)  %u/%u lines --> %s\r", private_dirty, skipped,
+                                          lines_To_skip, tmp);
+                        getProcessInfo.private_dirty_total += private_dirty;
+                        skipped = 1;
+                        if (linesToSkipForSwapPss)
+                        {
+                            expect_swap_pss = 1;
+                            lines_To_skip = linesToSkipForSwapPss;
+                        }
+                        else
+                        {
+                            expect_rss = 1;
+                            lines_To_skip = linesToSkipForRollover;
+                        }
+                        continue;
+                    }
+                }
+                else if (expect_swap_pss)
+                {
+                    if (sscanf(tmp, "SwapPss: %u kB", &swap_pss))
+                    {
+                        expect_swap_pss = 0;
+                        expect_rss = 1;
+                        PRINT_DBG_SCANNED("Read swap_pss (%u)  %u/%u lines --> %s\r", swap_pss, skipped,
+                                          lines_To_skip, tmp);
+                        getProcessInfo.swap_pss_total += swap_pss;
+                        lines_To_skip = linesToSkipForRollover;
+                        skipped = 1;
+                        continue;
+                    }
+                }
+            }
+            else
+            {
+                continue;
+            }
+        } // else of if (!linesToSkipForRollover)
+    } // while (fgets(tmp, 256, smap))
+    return 0;
+}
+
 int getProcessInfos(unsigned pid)
 {
-    static unsigned linesToSkipForRss = 0;
-    static unsigned linesToSkipForPss = 0;
-    static unsigned linesToSkipForSharedClean = 0;
-    static unsigned linesToSkipForPrivateClean = 0;
-    static unsigned linesToSkipForDirtyPrivate = 0;
-    static unsigned linesToSkipForSwapPss = 0;
-    static unsigned linesToSkipForRollover = 0;
-    static unsigned linesToSkipIfRss0 = 0;
-    static unsigned linesToSkipForSwapPssIfRss0 = 0;
-
+    int ret;
     char tmp[128];
 #ifdef TESTME
+    memset(&processInfoTest, 0, sizeof(processInfoTest));
+    prev_test_pss = 0;
     if (isTestMode)
     {
         memcpy(tmp, testSmap, 128);
-        PRINT_MUST("Testing with %s\n", tmp);
+        PRINT_MUST("%s: Testing with %s\n", __FUNCTION__, tmp);
     }
     else
 #endif
     {
-        sprintf(tmp, "/proc/%u/smaps", pid);
+        sprintf(tmp, "/proc/%u/%s", pid, gSMAPS_OR_ROLLUP);
     }
 
     FILE *smap = fopen(tmp, "r");
     if (smap)
     {
-        unsigned lines_To_skip = linesToSkipForRss;
-        unsigned skipped = 1; // Tracks current skips
-        unsigned expect_rss = 1;
-        unsigned expect_pss = 0;
-        unsigned expect_shared_clean = 0;
-        unsigned expect_private_clean = 0;
-        unsigned expect_private_dirty = 0;
-        unsigned expect_swap_pss = 0;
-	unsigned prev_pss = 0;
-
-        unsigned linesSkippedForRss = 0;
-        unsigned linesSkippedForPss = 0;
-        unsigned linesSkippedForSharedClean = 0;
-        unsigned linesSkippedForPrivateClean = 0;
-        unsigned linesSkippedForDirtyPrivate = 0;
-        unsigned linesSkippedForSwapPss = 0;
-        unsigned linesSkippedForRollover = 0;
-
-#ifdef TESTME
-        memset(&processInfoTest, 0, sizeof(processInfoTest));
-        unsigned prev_test_pss;
-#endif
-        while (fgets(tmp, 127, smap))
-        {
-#ifdef TESTME
-            unsigned test_rss = 0, test_pss = 0;
-            unsigned test_shared_clean = 0, test_private_clean = 0, test_private_dirty = 0;
-            unsigned test_swap_pss = 0;
-            if (!strncmp(tmp, "Rss:", 4))
-            {
-                PRINT_DBG("%s\n", tmp);
-                if (sscanf(tmp, "Rss: %u kB", &test_rss))
-                {
-                    processInfoTest.rssTotal += test_rss;
-                }
-            }
-            else if (!strncmp(tmp, "Pss:", 4))
-            {
-                PRINT_DBG("%s\n", tmp);
-                if (sscanf(tmp, "Pss: %u kB", &test_pss))
-                {
-                    processInfoTest.pssTotal += test_pss;
-                }
-                prev_test_pss = test_pss;
-            }
-            else if (!strncmp(tmp, "Shared_Clean:", 13))
-            {
-                PRINT_DBG("%s\n", tmp);
-                if (sscanf(tmp, "Shared_Clean: %u kB", &test_shared_clean))
-                {
-		    if (test_shared_clean) {
-                        processInfoTest.shared_clean_total += prev_test_pss;
-		    }
-                }
-            }
-            else if (!strncmp(tmp, "Private_Clean:", 14))
-            {
-                PRINT_DBG("%s\n", tmp);
-                if (sscanf(tmp, "Private_Clean: %u kB", &test_private_clean))
-                {
-                    processInfoTest.private_clean_total += test_private_clean;
-                }
-            }
-            else if (!strncmp(tmp, "Private_Dirty:", 14))
-            {
-                PRINT_DBG("%s\n", tmp);
-                if (sscanf(tmp, "Private_Dirty: %u kB", &test_private_dirty))
-                {
-                    processInfoTest.private_dirty_total += test_private_dirty;
-                }
-            }
-            else if (!strncmp(tmp, "SwapPss:", 8))
-            {
-		PRINT_DBG("\nTest pss: %d %s", prev_test_pss, tmp);
-                if (sscanf(tmp, "SwapPss: %u kB", &test_swap_pss))
-                {
-                    processInfoTest.swap_pss_total += test_swap_pss;
-                }
-		test_rss = test_pss = 0;
-            }
-#endif
-            /*00010000-00041000 r-xp 00000000 fc:00 5600 /usr/sbin/dropbearmulti
-              Size:                196 kB
-              Rss:                 192 kB
-              Pss:                  96 kB
-              Shared_Clean:        192 kB
-              Shared_Dirty:          0 kB
-              Private_Clean:         0 kB
-              Private_Dirty:         0 kB
-              Referenced:          192 kB
-              Anonymous:             0 kB
-              AnonHugePages:         0 kB
-              ShmemPmdMapped:        0 kB
-              Shared_Hugetlb:        0 kB
-              Private_Hugetlb:       0 kB
-              Swap:                  0 kB
-              SwapPss:               0 kB
-              KernelPageSize:        4 kB
-              MMUPageSize:           4 kB
-              Locked:                0 kB
-              VmFlags: rd ex mr mw me dw
-              00050000-00051000 r--p 00030000 fc:00 5600 /usr/sbin/dropbearmulti
-              Size:                  4 kB
-              Rss:                   4 kB
-              Pss:                   4 kB
-              Shared_Clean:          0 kB
-              Shared_Dirty:          0 kB
-              Private_Clean:         0 kB
-              Private_Dirty:         4 kB
-            */
-
-            unsigned rss = 0, pss = 0;
-            unsigned shared_clean = 0, private_clean = 0, private_dirty = 0;
-            unsigned swap_pss = 0;
-            if (linesToSkipForRollover)
-            { // Learnt the format
-                if (++skipped > lines_To_skip)
-                {
-                    if (expect_rss)
-                    {
-                        // rss = 0;
-                        if (sscanf(tmp, "Rss: %u kB", &rss))
-                        {
-                            if (rss)
-                            {
-                                PRINT_DBG_SCANNED("Read Rss (%u) after %u/%u lines --> %s\r", rss, skipped,
-                                                  lines_To_skip, tmp);
-                                getProcessInfo.rssTotal += rss;
-                                PRINT_DBG_SCANNED("rssTotal (%lu)\n", getProcessInfo.rssTotal);
-                                lines_To_skip = linesToSkipForPss;
-                                expect_pss = 1;
-                                expect_rss = 0;
-                            }
-                            else if (linesToSkipForSwapPss)
-			    {
-				    lines_To_skip = linesToSkipForSwapPssIfRss0;
-				    expect_rss = 0;
-				    expect_swap_pss = 1;
-			    }
-			    else
-                            {
-                                lines_To_skip = linesToSkipIfRss0;
-                            }
-                            skipped = 1;
-                            continue;
-                        }
-                    }
-                    else if (expect_pss)
-                    {
-                        // pss = 0;
-                        if (sscanf(tmp, "Pss: %u kB", &pss))
-                        {
-                            PRINT_DBG_SCANNED("Read Pss (%u) after %u/%u lines  --> %s\r", pss, skipped, lines_To_skip,
-                                              tmp);
-                            if (pss) {
-                                getProcessInfo.pssTotal += pss;
-                                lines_To_skip = linesToSkipForSharedClean;
-                                expect_shared_clean = 1;
-                            }
-                            else {
-                                // Check if RSS is also 0. In that case, jump to rollover --> no need, since done in rss
-                                // Else Check if SwapPss is present in this device. If so, jump to check swap pss
-                                // Else jump to rollover
-                                if (linesToSkipForSwapPss) {
-                                    lines_To_skip = linesToSkipForSharedClean + linesToSkipForPrivateClean + linesToSkipForDirtyPrivate - 2;
-                                    expect_swap_pss = 1;
-                                }
-                                else {
-                                    lines_To_skip = linesToSkipForSharedClean + linesToSkipForPrivateClean + linesToSkipForDirtyPrivate + 
-                                            linesToSkipForRollover - 3;
-                                    expect_rss = 1;
-                                }
-                            }
-                            skipped = 1;
-                            expect_pss = 0;
-			    prev_pss = pss;
-                            continue;
-                        }
-                    }
-                    else if (expect_shared_clean)
-                    {
-                        // shared_clean = 0;
-                        if (sscanf(tmp, "Shared_Clean: %u kB", &shared_clean))
-                        {
-                            PRINT_DBG_SCANNED("Read shared_clean (%u)  %u/%u lines --> %s\r", shared_clean, skipped,
-                                              lines_To_skip, tmp);
-                            if (shared_clean) {
-                                getProcessInfo.shared_clean_total += prev_pss;
-                            }
-
-                            expect_private_clean = 1;
-                            lines_To_skip = linesToSkipForPrivateClean;
-                            expect_shared_clean = 0;
-                            skipped = 1;
-                            continue;
-                        }
-                    }
-                    else if (expect_private_clean)
-                    {
-                        // private_clean = 0;
-                        if (sscanf(tmp, "Private_Clean: %u kB", &private_clean))
-                        {
-                            expect_private_clean = 0;
-                            PRINT_DBG_SCANNED("Read private_clean (%u)  %u/%u lines --> %s\r", private_clean, skipped,
-                                              lines_To_skip, tmp);
-                            getProcessInfo.private_clean_total += private_clean;
-                            skipped = 1;
-                            expect_private_dirty = 1;
-                            lines_To_skip = linesToSkipForDirtyPrivate;
-                            continue;
-                        }
-                    }
-                    else if (expect_private_dirty)
-                    {
-                        // private_dirty = 0;
-                        if (sscanf(tmp, "Private_Dirty: %u kB", &private_dirty))
-                        {
-                            expect_private_dirty = 0;
-                            PRINT_DBG_SCANNED("Read private_dirty (%u)  %u/%u lines --> %s\r", private_dirty, skipped,
-                                              lines_To_skip, tmp);
-                            getProcessInfo.private_dirty_total += private_dirty;
-                            skipped = 1;
-                            if (linesToSkipForSwapPss)
-                            {
-                                expect_swap_pss = 1;
-                                lines_To_skip = linesToSkipForSwapPss;
-                            }
-                            else
-                            {
-                                expect_rss = 1;
-                                lines_To_skip = linesToSkipForRollover;
-                            }
-                            continue;
-                        }
-                    }
-                    else if (expect_swap_pss)
-                    {
-                        // swap_pss = 0;
-                        if (sscanf(tmp, "SwapPss: %u kB", &swap_pss))
-                        {
-                            expect_swap_pss = 0;
-                            expect_rss = 1;
-                            PRINT_DBG_SCANNED("Read swap_pss (%u)  %u/%u lines --> %s\r", swap_pss, skipped,
-                                              lines_To_skip, tmp);
-                            getProcessInfo.swap_pss_total += swap_pss;
-                            lines_To_skip = linesToSkipForRollover;
-                            skipped = 1;
-                            continue;
-                        }
-                    }
-                }
-                else
-                {
-                    continue;
-                }
-            }
-            else
-            { // Learn here
-                if (!linesToSkipForRss)
-                {
-                    if (sscanf(tmp, "Rss: %u kB", &rss))
-                    {
-                        getProcessInfo.rssTotal += rss;
-                        linesToSkipForRss = linesSkippedForRss + 1;
-                        PRINT_DBG_INITIAL("After %u lines Read Rss (%u) in --> %s\r", linesToSkipForRss, rss, tmp);
-                        continue;
-                    }
-                    else
-                    {
-                        linesSkippedForRss++;
-                    }
-                }
-                else if (!linesToSkipForPss)
-                {
-                    if (sscanf(tmp, "Pss: %u kB", &pss))
-                    {
-                        getProcessInfo.pssTotal += pss;
-                        linesToSkipForPss = linesSkippedForPss + 1;
-                        PRINT_DBG_INITIAL("After %u lines Read Pss (%u) in --> %s\r", linesToSkipForPss, pss, tmp);
-			prev_pss = pss;
-                        continue;
-                    }
-                    else
-                    {
-                        linesSkippedForPss++;
-                    }
-                }
-                else if (!linesToSkipForSharedClean)
-                {
-                    if (sscanf(tmp, "Shared_Clean: %u kB", &shared_clean))
-                    {
-                        if (shared_clean) {
-                            getProcessInfo.shared_clean_total += prev_pss;
-                        }
-                        linesToSkipForSharedClean = linesSkippedForSharedClean + 1;
-                        PRINT_DBG_INITIAL("After %u lines Read Shared_Clean (%u) in --> %s\r",
-                                          linesToSkipForSharedClean, shared_clean, tmp);
-                        continue;
-                    }
-                    else
-                    {
-                        linesSkippedForSharedClean++;
-                    }
-                }
-                else if (!linesToSkipForPrivateClean)
-                {
-                    if (sscanf(tmp, "Private_Clean: %u kB", &private_clean))
-                    {
-                        getProcessInfo.private_clean_total += private_clean;
-                        linesToSkipForPrivateClean = linesSkippedForPrivateClean + 1;
-                        PRINT_DBG_INITIAL("After %u lines Read PrivateClean (%u) in --> %s\r",
-                                          linesToSkipForPrivateClean, private_clean, tmp);
-                        continue;
-                    }
-                    else
-                    {
-                        linesSkippedForPrivateClean++;
-                    }
-                }
-                else if (!linesToSkipForDirtyPrivate)
-                {
-                    if (sscanf(tmp, "Private_Dirty: %u kB", &private_dirty))
-                    {
-                        getProcessInfo.private_dirty_total += private_dirty;
-                        linesToSkipForDirtyPrivate = linesSkippedForDirtyPrivate + 1;
-                        PRINT_DBG_INITIAL("After %u lines Read DirtyPrivate (%u) in --> %s\r",
-                                          linesToSkipForDirtyPrivate, private_dirty, tmp);
-                        linesToSkipForSwapPssIfRss0 = linesToSkipForPss + linesToSkipForSharedClean + linesToSkipForPrivateClean + linesToSkipForDirtyPrivate - 3;
-                        continue;
-                    }
-                    else
-                    {
-                        linesSkippedForDirtyPrivate++;
-                    }
-                }
-                else if (!linesToSkipForSwapPss)
-                {
-                    if (sscanf(tmp, "SwapPss: %u kB", &swap_pss))
-                    {
-                        getProcessInfo.swap_pss_total += swap_pss;
-                        linesToSkipForSwapPss = linesSkippedForSwapPss + 1;
-                        PRINT_DBG_INITIAL("After %u lines Read Swap_Pss (%u) in --> %s\r", linesToSkipForSwapPss,
-                                          swap_pss, tmp);
-                        continue;
-                    }
-                    else
-                    {
-                        // check if smap doesn't contain swappss..
-                        if (sscanf(tmp, "Rss: %u kB", &rss))
-                        {
-                            getProcessInfo.rssTotal += rss;
-                            linesToSkipForRollover = linesSkippedForSwapPss + 1;
-                            PRINT_DBG_INITIAL("*****No SwapPss....skipping\n");
-                            PRINT_DBG_INITIAL("No SwapPss...After %u lines Read Rss (%u) in --> %s\r", linesToSkipForRollover, rss,
-                                              tmp);
-                            lines_To_skip = linesToSkipForPss;
-                            expect_pss = 1;
-                            expect_rss = 0;
-                            linesToSkipIfRss0 = linesToSkipForPss + linesToSkipForSharedClean + linesToSkipForPrivateClean +
-                                                linesToSkipForDirtyPrivate + linesToSkipForRollover - 4;
-                            continue;
-                        }
-                        else
-                        {
-                            linesSkippedForSwapPss++;
-                        }
-                    }
-                }
-                else if (!linesToSkipForRollover)
-                {
-                    if (sscanf(tmp, "Rss: %u kB", &rss))
-                    {
-                        getProcessInfo.rssTotal += rss;
-                        linesToSkipForRollover = linesSkippedForRollover + 1;
-                        PRINT_DBG_INITIAL("After %u lines Read Rss (%u) in --> %s\r", linesToSkipForRollover, rss, tmp);
-                        lines_To_skip = linesToSkipForPss;
-                        expect_pss = 1;
-                        expect_rss = 0;
-                        linesToSkipIfRss0 = linesToSkipForPss + linesToSkipForSharedClean + linesToSkipForDirtyPrivate + linesToSkipForPrivateClean +
-                                            linesToSkipForSwapPss + linesToSkipForRollover - 5;
-                        continue;
-                    }
-                    else
-                    {
-                        linesSkippedForRollover++;
-                    }
-                }
-                else
-                {
-                    PRINT_ERROR("%s:%d: Shouldn't get here..\n", __FUNCTION__, __LINE__);
-                }
-            }
-        }
+        ret = getProcessInfos_ptr(smap);
         fclose(smap);
-        return 0;
+#ifdef TESTME
+        if ((getProcessInfo.rssTotal != processInfoTest.rssTotal) || (getProcessInfo.pssTotal != processInfoTest.pssTotal) ||
+            (getProcessInfo.shared_clean_total != processInfoTest.shared_clean_total) || 
+            (getProcessInfo.private_clean_total != processInfoTest.private_clean_total) || 
+            (getProcessInfo.private_dirty_total != processInfoTest.private_dirty_total) ||
+            (getProcessInfo.swap_pss_total != processInfoTest.swap_pss_total))
+        {
+            printf("something went wrong while processing smap for pid %d\n", pid);
+            printf("%lu:%lu, %lu:%lu, %lu:%lu, %lu:%lu, %lu:%lu, %lu:%lu\n", 
+                   getProcessInfo.rssTotal, processInfoTest.rssTotal,getProcessInfo.pssTotal,processInfoTest.pssTotal,
+                   getProcessInfo.shared_clean_total, processInfoTest.shared_clean_total, 
+                   getProcessInfo.private_clean_total, processInfoTest.private_clean_total, 
+                   getProcessInfo.private_dirty_total, processInfoTest.private_dirty_total, getProcessInfo.swap_pss_total, processInfoTest.swap_pss_total);
+            unitTestFailed = 1;
+        }
+#endif
     }
-    else
-    {
+    else {
         PRINT_ERROR("%s: Open failed, errno %d [%s]\n", tmp, errno, strerror(errno));
+        ret = 1;
     }
-    return 1;
+    return ret;
 }
-
 /**
  * Prints usage information and exits.
  */
@@ -1005,6 +1439,7 @@ void printHelpAndUsage(char *argv[], bool moreInfo)
     printf("  -o, --output <directory>  Output directory for generated CSV files (default: %s)\n", DEFAULT_OUT_DIR);
     printf("      --interval <seconds>  Interval in seconds between iterations (overrides config)\n");
     printf("      --iterations <count>  Number of iterations to run (overrides config)\n");
+    printf("  -s  --smaps_rollup        Use thin /proc/<pid>/smaps_rollup, with the drawback that Shared_Clean will be an rss value and not pss\n");
     printf("  -h, --help                Show this help message and exit\n");
     printf("  -t, --test <smapsFile> <meminfoFile>   Run in test mode using supplied sample files\n\n");
 
@@ -1110,11 +1545,18 @@ int collectSystemMemoryStats(bool includeKthreads, const char *outDir, int itera
                         {             /*PF_KTHREAD*/
                             continue; // Skip kernel threads if not included
                         }
-#ifdef TESTME
-			memset(&processInfoTest, 0, sizeof(processInfoTest));
-#endif			
+
                         if (!getProcessInfos(pid))
                         {
+#ifdef TESTME
+                            if (isTestMode) {
+				    if (1 >= isTestMode) {
+					    break;
+				    }else {
+					    isTestMode--;
+				    }
+                            }
+#endif                
                             getProcessInfo.pid = pid;
                             // name, majFaults, cputime already filled by
                             // fillProcessStatFields
@@ -1126,28 +1568,6 @@ int collectSystemMemoryStats(bool includeKthreads, const char *outDir, int itera
                             swap_pss_total += getProcessInfo.swap_pss_total;
                             addProcessInfo(&getProcessInfo);
                             noOfPids++;
-#ifdef TESTME
-                            if ((getProcessInfo.rssTotal != processInfoTest.rssTotal) || (getProcessInfo.pssTotal != processInfoTest.pssTotal) ||
-                                (getProcessInfo.shared_clean_total != processInfoTest.shared_clean_total) || 
-                                (getProcessInfo.private_clean_total != processInfoTest.private_clean_total) || 
-				(getProcessInfo.private_dirty_total != processInfoTest.private_dirty_total) ||
-                                (getProcessInfo.swap_pss_total != processInfoTest.swap_pss_total))
-                            {
-                                PRINT_ERROR("something went wrong while processing smap for pid %d\n", pid);
-                                PRINT_ERROR("%lu:%lu, %lu:%lu, %lu:%lu, %lu:%lu, %lu:%lu, %lu:%lu\n", 
-                                       getProcessInfo.rssTotal, processInfoTest.rssTotal,getProcessInfo.pssTotal,processInfoTest.pssTotal,
-				       getProcessInfo.shared_clean_total, processInfoTest.shared_clean_total, 
-				       getProcessInfo.private_clean_total, processInfoTest.private_clean_total, 
-                                       getProcessInfo.private_dirty_total, processInfoTest.private_dirty_total, getProcessInfo.swap_pss_total, processInfoTest.swap_pss_total);
-                                unitTestFailed = 1;
-                            }
-			    if (isTestMode) {
-                                if (1 == isTestMode) {
-					break;
-			        }
-			        isTestMode--;
-			    }
-#endif			    
                         }
                     }
                 }
@@ -1172,7 +1592,7 @@ int collectSystemMemoryStats(bool includeKthreads, const char *outDir, int itera
                "%lu\n>> Shared_Clean_Total %lu\n>> Private_Clean_Total %lu\n>> Private_Dirty_Total %lu\n",
                noOfPids, rssTotal, pssTotal, shared_clean_total, private_clean_total, private_dirty_total);
         fprintf(output, "\n\nProcesses:\nPID,EXE,RSS,PSS,SHARED_CLEAN,PRIVATE_CLEAN,PRIVATE_"
-                        "DIRTY,SWAP_PSS,MAJ_FAULTS,CPU_TIME\n");
+                        "DIRTY,SWAP_PSS,MIN_FAULTS,MAJ_FAULTS,CPU_TIME\n");
         writeProcessInfo(noOfPids, output);
         fprintf(output, "0,Total,%lu,%lu,%lu,%lu,%lu,%lu,0,0,0\n", rssTotal, pssTotal, shared_clean_total,
                 private_clean_total, private_dirty_total, swap_pss_total);
@@ -1304,8 +1724,8 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, int cli_iter
         fprintf(output, "%s,%s,%s,%s\n\n", fwName, mac, ts, reportVersion);
 
         saveMeminfo(output);
-        fprintf(output, "\nPID,EXE,RSS,PSS,SHARED_CLEAN,PRIVATE_DIRTY,SWAP_PSS,"
-                        "MAJ_FAULTS,CPU_TIME\n");
+        fprintf(output, "\nPID,EXE,RSS,PSS,SHARED_CLEAN,PRIVATE_CLEAN,PRIVATE_DIRTY,SWAP_PSS,"
+                        "MIN_FAULTS,MAJ_FAULTS,CPU_TIME\n");
 
         unsigned long rssTotal = 0, pssTotal = 0, shared_clean_total = 0, private_clean_total = 0, private_dirty_total = 0, swap_pss_total = 0;
         unsigned actualCount = 0;
@@ -1364,7 +1784,7 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, int cli_iter
         {
             PRINT_ERROR("No whitelist specified in config.\n");
         }
-        fprintf(output, "0,Total,%lu,%lu,%lu,%lu\n", rssTotal, pssTotal, shared_clean_total, private_dirty_total);
+        fprintf(output, "0,Total,%lu,%lu,%lu,%lu,%lu\n", rssTotal, pssTotal, shared_clean_total, private_clean_total, private_dirty_total);
         fclose(output);
 
         if (final_interval > 0 && iter + 1 < final_iterations)
@@ -1396,148 +1816,148 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, int cli_iter
  */
 void saveMeminfo(FILE *out)
 {
-	/***
-	 * MemTotal,MemFree,MemAvailable,Buffers,Cached,SwapCached
-	 * Active(anon),Inactive(anon),Active(file),Inactive(file)
-	 * SwapTotal,SwapFree,AnonPages,Mapped,Shmem,Slab,KernelStack,
-	 * VmallocUsed,CmaTotal,CmaFree
-	 ***/
+    /***
+     * MemTotal,MemFree,MemAvailable,Buffers,Cached,SwapCached
+     * Active(anon),Inactive(anon),Active(file),Inactive(file)
+     * SwapTotal,SwapFree,AnonPages,Mapped,Shmem,Slab,KernelStack,
+     * VmallocUsed,CmaTotal,CmaFree
+     ***/
 #define MEMINFO_NEEDED_FIELDS_COUNT 20
 #define MEMINFO_HEADER_TOTAL 256
-	static char *meminfoNeeded[MEMINFO_NEEDED_FIELDS_COUNT] = {
-		/* Important, MemTotal needs to be at first...other fields doesn't matter */
-		"MemTotal","MemFree","MemAvailable","Buffers","Cached","SwapCached",
-		"Active(anon)","Inactive(anon)","Active(file)","Inactive(file)",
-		"SwapTotal","SwapFree","AnonPages","Mapped","Shmem","Slab","KernelStack",
-		"VmallocUsed","CmaFree","CmaTotal"};
-	static char meminfoHeader[MEMINFO_HEADER_TOTAL] = {0};
-	static char meminfoValue[MEMINFO_HEADER_TOTAL] = {0};
-	static int skipMemTotal = 0;
-	static int skipArray[MEMINFO_NEEDED_FIELDS_COUNT] = {0};
-	static int learnt = 0;
+    static char *meminfoNeeded[MEMINFO_NEEDED_FIELDS_COUNT] = {
+        /* Important, MemTotal needs to be at first...other fields doesn't matter */
+        "MemTotal","MemFree","MemAvailable","Buffers","Cached","SwapCached",
+        "Active(anon)","Inactive(anon)","Active(file)","Inactive(file)",
+        "SwapTotal","SwapFree","AnonPages","Mapped","Shmem","Slab","KernelStack",
+        "VmallocUsed","CmaFree","CmaTotal"};
+    static char meminfoHeader[MEMINFO_HEADER_TOTAL] = {0};
+    static char meminfoValue[MEMINFO_HEADER_TOTAL] = {0};
+    static int skipMemTotal = 0;
+    static int skipArray[MEMINFO_NEEDED_FIELDS_COUNT] = {0};
+    static int learnt = 0;
 
 #ifdef TESTME
-	char tstmeminfoHeader[MEMINFO_HEADER_TOTAL] = {0};
-	char tstmeminfoValue[MEMINFO_HEADER_TOTAL] = {0};
-	int tstprocessHeaderIndex = 0;
-	int tstprocessValueIndex = 0;
-	FILE *meminfo = fopen((isTestMode)?testMeminfo:MEMINFO_FILE, "r");
+    char tstmeminfoHeader[MEMINFO_HEADER_TOTAL] = {0};
+    char tstmeminfoValue[MEMINFO_HEADER_TOTAL] = {0};
+    int tstprocessHeaderIndex = 0;
+    int tstprocessValueIndex = 0;
+    FILE *meminfo = fopen((isTestMode)?testMeminfo:MEMINFO_FILE, "r");
 #else
-	FILE *meminfo = fopen(MEMINFO_FILE, "r");
+    FILE *meminfo = fopen(MEMINFO_FILE, "r");
 #endif
-	if (meminfo) {
-		unsigned long value;
-		char tmp[128];
-		int skipCount = skipArray[1];
-		int processIndex = learnt;
-		int processValIndex = skipMemTotal;
-		while (fgets(tmp, 127, meminfo) && (processIndex < MEMINFO_NEEDED_FIELDS_COUNT)) {
+    if (meminfo) {
+        unsigned long value;
+        char tmp[128];
+        int skipCount = skipArray[1];
+        int processIndex = learnt;
+        int processValIndex = skipMemTotal;
+        while (fgets(tmp, 127, meminfo) && (processIndex < MEMINFO_NEEDED_FIELDS_COUNT)) {
 #ifdef TESTME
-			char tstname[64];
-			if (!sscanf(tmp, "%s %lu kB", tstname, &value)) {
-				PRINT_ERROR("%s: Error parsing [%s]\n", __FUNCTION__, tmp);
-				continue; 
-			}
-			tstname[strlen(tstname)-1] = '\0';
-			for (int tsti=0; tsti<MEMINFO_NEEDED_FIELDS_COUNT; tsti++) {
-				if (!strcmp(tstname, meminfoNeeded[tsti])) {
-					if (!tstprocessHeaderIndex) {
-						tstprocessHeaderIndex += sprintf(tstmeminfoHeader+tstprocessHeaderIndex, "%s", meminfoNeeded[tsti]);
-						tstprocessValueIndex += sprintf(tstmeminfoValue+tstprocessValueIndex, "%lu", value);
-					}
-					else {
-						tstprocessHeaderIndex += sprintf(tstmeminfoHeader+tstprocessHeaderIndex, ",%s", meminfoNeeded[tsti]);
-						tstprocessValueIndex += sprintf(tstmeminfoValue+tstprocessValueIndex, ",%lu", value);
-					}
-				}
-			}
+            char tstname[64];
+            if (!sscanf(tmp, "%s %lu kB", tstname, &value)) {
+                PRINT_ERROR("%s: Error parsing [%s]\n", __FUNCTION__, tmp);
+                continue; 
+            }
+            tstname[strlen(tstname)-1] = '\0';
+            for (int tsti=0; tsti<MEMINFO_NEEDED_FIELDS_COUNT; tsti++) {
+                if (!strcmp(tstname, meminfoNeeded[tsti])) {
+                    if (!tstprocessHeaderIndex) {
+                        tstprocessHeaderIndex += sprintf(tstmeminfoHeader+tstprocessHeaderIndex, "%s", meminfoNeeded[tsti]);
+                        tstprocessValueIndex += sprintf(tstmeminfoValue+tstprocessValueIndex, "%lu", value);
+                    }
+                    else {
+                        tstprocessHeaderIndex += sprintf(tstmeminfoHeader+tstprocessHeaderIndex, ",%s", meminfoNeeded[tsti]);
+                        tstprocessValueIndex += sprintf(tstmeminfoValue+tstprocessValueIndex, ",%lu", value);
+                    }
+                }
+            }
 #endif
-			if (learnt) {
-				if (! --skipCount) {
-					if (!sscanf(tmp, "%*s %lu kB", &value)) {
-						PRINT_ERROR("%s: Error parsing [%s]\n", __FUNCTION__, tmp);
-						continue; 
-					}
-					skipCount = skipArray[++processIndex];
-					processValIndex += sprintf(meminfoValue+processValIndex, ",%lu", value);
-				}
-			}
-			else 
-			{
-				char name[64];
-				// Below lines repeat, but okay..for clarity and not needed to check whether learnt again
-				if (!sscanf(tmp, "%s %lu kB", name, &value)) {
-					PRINT_ERROR("%s: Error parsing [%s]\n", __FUNCTION__, tmp);
-					continue; 
-				}
-				skipCount++;
-				name[strlen(name)-1] = '\0';
-				if (!strcmp(name, meminfoNeeded[processIndex])) {
-					PRINT_DBG_INITIAL("Found %s storing at index %d\n", name, processIndex);
-					if (processIndex) { // For MemTotal, skip always since we've the constant value
-						skipArray[processIndex++] = skipCount;
-						skipCount = 0;
-						processValIndex += sprintf(meminfoValue+processValIndex, ",%lu", value);
-					}
-					else {
-						processIndex++;
-						processValIndex += sprintf(meminfoValue+processValIndex, "%lu", value);
-						skipMemTotal = processValIndex;
-					}
-	    			}
-				else {
-					// If the list is in order, then we can skip and go on. 
-					// But if for some reason, the order is not maintained, then 
-					// do the loop of meminfoNeeded and figure out..
-					for (int i=processIndex+1; i<MEMINFO_NEEDED_FIELDS_COUNT; i++)
-					{
-						if (!strcmp(name, meminfoNeeded[i])) {
-							PRINT_DBG_INITIAL("Found by looping %s storing at index %d\n", name, processIndex);
-							// Let's swap the entries in meminfoNeeded 
-							char *tmpp = meminfoNeeded[processIndex];
-							meminfoNeeded[processIndex] = meminfoNeeded[i];
-							meminfoNeeded[i] = tmpp;
-							skipArray[processIndex++] = skipCount;
-							skipCount = 0;
-							processValIndex += sprintf(meminfoValue+processValIndex, ",%lu", value);
-							break;
-						}
-					}
-				}
-			}
-		} // while (fgets(tmp, 127,...
-		fclose(meminfo);	    
-		if (!learnt) {
-			PRINT_DBG_INITIAL("Total %d found %d\n", MEMINFO_NEEDED_FIELDS_COUNT, processIndex);
-			learnt = 1;
-			int index = 0;
-			for (int i=0; i < processIndex; i++) {
-				if ((MEMINFO_HEADER_TOTAL - 16) < index) {
-					PRINT_MUST("Buffer insufficient....\n");
-					exit(0);
-				}
-				PRINT_DBG_INITIAL("index %d at %d..meminfo [%s] skip [%d]\n", index,i,meminfoNeeded[i],skipArray[i]);
-				if (index) {
-					index += sprintf(meminfoHeader+index, ",%s", meminfoNeeded[i]);
-				}
-				else {
-					index += sprintf(meminfoHeader+index, "%s", meminfoNeeded[i]);
-				}
-			}
-		}
-		fprintf(out, "%s:\n%s", MEMINFO_FILE, meminfoHeader);
-		fprintf(out, "\n%s\n", meminfoValue);
+            if (learnt) {
+                if (! --skipCount) {
+                    if (!sscanf(tmp, "%*s %lu kB", &value)) {
+                        PRINT_ERROR("%s: Error parsing [%s]\n", __FUNCTION__, tmp);
+                        continue; 
+                    }
+                    skipCount = skipArray[++processIndex];
+                    processValIndex += sprintf(meminfoValue+processValIndex, ",%lu", value);
+                }
+            }
+            else 
+            {
+                char name[64];
+                // Below lines repeat, but okay..for clarity and not needed to check whether learnt again
+                if (!sscanf(tmp, "%s %lu kB", name, &value)) {
+                    PRINT_ERROR("%s: Error parsing [%s]\n", __FUNCTION__, tmp);
+                    continue; 
+                }
+                skipCount++;
+                name[strlen(name)-1] = '\0';
+                if (!strcmp(name, meminfoNeeded[processIndex])) {
+                    PRINT_DBG_INITIAL("Found %s storing at index %d\n", name, processIndex);
+                    if (processIndex) { // For MemTotal, skip always since we've the constant value
+                        skipArray[processIndex++] = skipCount;
+                        skipCount = 0;
+                        processValIndex += sprintf(meminfoValue+processValIndex, ",%lu", value);
+                    }
+                    else {
+                        processIndex++;
+                        processValIndex += sprintf(meminfoValue+processValIndex, "%lu", value);
+                        skipMemTotal = processValIndex;
+                    }
+                    }
+                else {
+                    // If the list is in order, then we can skip and go on. 
+                    // But if for some reason, the order is not maintained, then 
+                    // do the loop of meminfoNeeded and figure out..
+                    for (int i=processIndex+1; i<MEMINFO_NEEDED_FIELDS_COUNT; i++)
+                    {
+                        if (!strcmp(name, meminfoNeeded[i])) {
+                            PRINT_DBG_INITIAL("Found by looping %s storing at index %d\n", name, processIndex);
+                            // Let's swap the entries in meminfoNeeded 
+                            char *tmpp = meminfoNeeded[processIndex];
+                            meminfoNeeded[processIndex] = meminfoNeeded[i];
+                            meminfoNeeded[i] = tmpp;
+                            skipArray[processIndex++] = skipCount;
+                            skipCount = 0;
+                            processValIndex += sprintf(meminfoValue+processValIndex, ",%lu", value);
+                            break;
+                        }
+                    }
+                }
+            }
+        } // while (fgets(tmp, 127,...
+        fclose(meminfo);        
+        if (!learnt) {
+            PRINT_DBG_INITIAL("Total %d found %d\n", MEMINFO_NEEDED_FIELDS_COUNT, processIndex);
+            learnt = 1;
+            int index = 0;
+            for (int i=0; i < processIndex; i++) {
+                if ((MEMINFO_HEADER_TOTAL - 16) < index) {
+                    PRINT_MUST("Buffer insufficient....\n");
+                    exit(0);
+                }
+                PRINT_DBG_INITIAL("index %d at %d..meminfo [%s] skip [%d]\n", index,i,meminfoNeeded[i],skipArray[i]);
+                if (index) {
+                    index += sprintf(meminfoHeader+index, ",%s", meminfoNeeded[i]);
+                }
+                else {
+                    index += sprintf(meminfoHeader+index, "%s", meminfoNeeded[i]);
+                }
+            }
+        }
+        fprintf(out, "%s:\n%s", MEMINFO_FILE, meminfoHeader);
+        fprintf(out, "\n%s\n", meminfoValue);
 #ifdef TESTME
-		if (strcmp(meminfoHeader, tstmeminfoHeader) || strcmp(meminfoValue, tstmeminfoValue)) {
-			PRINT_ERROR("Test Failed..meminfoHeader vs tstmeminfoHeader [%s] vs [%s]\n", meminfoHeader, tstmeminfoHeader);
-			PRINT_ERROR("meminfoValue vs tstmeminfoValue [%s] vs [%s]\n", meminfoValue, tstmeminfoValue);
+        if (strcmp(meminfoHeader, tstmeminfoHeader) || strcmp(meminfoValue, tstmeminfoValue)) {
+            PRINT_ERROR("Test Failed..meminfoHeader vs tstmeminfoHeader [%s] vs [%s]\n", meminfoHeader, tstmeminfoHeader);
+            PRINT_ERROR("meminfoValue vs tstmeminfoValue [%s] vs [%s]\n", meminfoValue, tstmeminfoValue);
             unitTestFailed = 1;
-		}
+        }
 #endif
-	}
-	else {
-		PRINT_MUST("Error opening %s, [%s]\n", MEMINFO_FILE, strerror(errno));
-	}
+    }
+    else {
+        PRINT_MUST("Error opening %s, [%s]\n", MEMINFO_FILE, strerror(errno));
+    }
 }
 
 // -----------------------------
@@ -1608,20 +2028,21 @@ int main(int argc, char *argv[])
                 i++;
                 FILE *testMapFd = fopen(argv[i], "r");
                 if (testMapFd) {
+                    fclose(testMapFd);
+                    strncpy(testSmap, argv[i], 128);
+                    i++;
+                    testMapFd = fopen(argv[i], "r");
+                    if (testMapFd) {
                         fclose(testMapFd);
-                        strncpy(testSmap, argv[i], 128);
-			i++;
-			testMapFd = fopen(argv[i], "r");
-			if (testMapFd) {
-				fclose(testMapFd);
-				strncpy(testMeminfo, argv[i], 128);
-                        	continue;
-			}
-			else {
-                		PRINT_ERROR("Test meminfo file %s open error %d [%s]\n", argv[i], errno, strerror(errno));
-			}
-                } else
-                	PRINT_ERROR("Test map file %s open error %d [%s]\n", argv[i], errno, strerror(errno));
+                        strncpy(testMeminfo, argv[i], 128);
+                        continue;
+                    }
+                    else {
+                        PRINT_ERROR("Test meminfo file %s open error %d [%s]\n", argv[i], errno, strerror(errno));
+                    }
+                } else {
+                    PRINT_ERROR("Test map file %s open error %d [%s]\n", argv[i], errno, strerror(errno));
+		}
             }
             printHelpAndUsage(argv, false);
         }
@@ -1667,6 +2088,10 @@ int main(int argc, char *argv[])
                 printHelpAndUsage(argv, false);
             }
         }
+        else if (!strncmp(argv[i], "-s", 3) || !strncmp(argv[i], "--smaps_rollup", 15))
+        {
+            smaps_rollup = 1;
+        }
         else
         {
             PRINT_ERROR("Error: Unrecognized argument '%s'\n", argv[i]);
@@ -1681,6 +2106,13 @@ int main(int argc, char *argv[])
     }
     printf("\n");
 
+    if (smaps_rollup) {
+        getProcessInfos_ptr = getProcessInfos_rollup;
+    }
+    else {
+        strcpy(gSMAPS_OR_ROLLUP, "smaps");
+        getProcessInfos_ptr = getProcessInfos_initial;
+    }
     includeKthreads = enableKThreads; // Cascade to global for all code paths
     if (isConfigPresent)
     {
@@ -1696,10 +2128,10 @@ int main(int argc, char *argv[])
         int final_iterations = 1;
         if (long_run) {
             final_interval = LONG_RUN_INTERVAL;
-	    final_iterations = LONG_RUN_ITERATIONS;
+        final_iterations = LONG_RUN_ITERATIONS;
         }
         else {
-	    final_interval = (0 < cli_interval)? cli_interval : DEFAULT_INTERVAL;
+            final_interval = (0 < cli_interval)? cli_interval : DEFAULT_INTERVAL;
             final_iterations = (0 < cli_iterations) ? cli_iterations : DEFAULT_ITERATIONS;
         }
         PRINT_MUST("* Running %d iterations with %ds interval (indefinitely?: %s)\n", final_iterations, final_interval, long_run ? "yes" : "no");
@@ -1709,5 +2141,5 @@ int main(int argc, char *argv[])
         collectSystemMemoryStats(enableKThreads, out_dir, final_iterations, final_interval, long_run);
 #endif
     }
-
+    return 0;
 }

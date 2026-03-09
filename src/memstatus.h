@@ -45,7 +45,7 @@
 
 #define PRINT_MUST printf
 
-//#define TESTME
+#define TESTME
 
 #ifdef TESTME
 #define PRINT_ERROR printf
@@ -128,6 +128,7 @@ typedef struct process_info
     unsigned long private_clean_total;  // Private clean memory (kB)
     unsigned long private_dirty_total; // Private dirty memory (kB)
     unsigned long swap_pss_total;      // Swap PSS (kB)
+    unsigned long minFaults;           // Minor page faults
     unsigned long majFaults;           // Major page faults
     unsigned long cputime;             // CPU time (user + system)
     struct process_info *next;         // Next node in linked list
