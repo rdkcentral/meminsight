@@ -35,6 +35,7 @@
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <sys/utsname.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -44,8 +45,6 @@
 // -----------------------------
 
 #define PRINT_MUST printf
-
-#define TESTME
 
 #ifdef TESTME
 #define PRINT_ERROR printf
@@ -89,6 +88,9 @@ This is used to ensure compatibility with older versions of the report parser. *
 #define VERSION_FILE "/version.txt"
 #define DEVICE_PROP_FILE "/etc/device.properties"
 #define MEMINFO_FILE PROC_DIR "/meminfo"
+#define UPTIME_FILE PROC_DIR "/uptime"
+#define BW_DDR_MODE_FILE "/sys/class/aml_ddr/mode"
+#define BW_DDR_FILE "/sys/class/aml_ddr/bandwidth"
 
 /* Default Macros */
 #define DEFAULT_FW_NAME "ACTIVEFW123"
@@ -109,6 +111,8 @@ This is used to ensure compatibility with older versions of the report parser. *
 #define CSV_FILE_NAME "meminsight.csv"
 #define LONG_RUN_INTERVAL 900 // 900 is Default interval for long runs in seconds
 #define LONG_RUN_ITERATIONS 48 // 12 Hour capture, considering 15 mins interval
+
+#define CSV_META_HEADER "FIRMWARE_NAME,MAC_ADDRESS,TIMESTAMP,UPTIME,KERNEL_VERSION,REPORT_VERSION"
 
 // -----------------------------
 // Data Structures
@@ -154,6 +158,7 @@ typedef struct config
 extern int includeKthreads;           // Whether to include kernel threads
 extern Process_Info getProcessInfo;   // Temporary struct for collecting process info
 extern Process_Info *headProcessInfo; // Head of linked list
+extern bool g_bwDataAvailable;
 
 #ifdef TESTME
 extern int testpid; // Used for test mode with custom smap file
@@ -173,9 +178,12 @@ int getProcessInfos(unsigned pid);
 void printHelp(char *argv[]);
 void printHelpAndUsage(char *argv[], bool moreInfo);
 void saveMeminfo(FILE *out);
+void collectBandwidthData(FILE *out);
 int getPropertyFromFile(const char *filename, const char *property, char *propertyValue, size_t propertyValueLen);
 size_t getMacAddress(const char *iface, char *macAddress, size_t szBufSize);
 int getFirmwareImageName(char *fwName, size_t fwNameLen);
+const char *getSystemUptime(void);
+const char *getKernelVersion(void);
 
 int isPID(const char *str);
 int getPIDByProcessName(const char *procName, unsigned int *pidOut);

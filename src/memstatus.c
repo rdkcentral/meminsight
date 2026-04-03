@@ -24,7 +24,9 @@
 int includeKthreads = 0;              // Whether to include kernel threads
 Process_Info getProcessInfo = {0};    // Temporary struct for collecting process info
 Process_Info *headProcessInfo = NULL; // Head of linked list
-unsigned smaps_rollup;
+bool g_bwDataAvailable = false;
+unsigned smaps_rollup;                // Effective source for current parse: 1=smaps_rollup, 0=smaps
+unsigned force_smaps = 0;             // CLI override: force reading /proc/<pid>/smaps
 char gSMAPS_OR_ROLLUP[] = "smaps_rollup";
 
 #ifdef TESTME
@@ -59,6 +61,11 @@ static void ensure_output_dir(const char *dir)
             PRINT_MUST("Failed to create output directory '%s': %s\n", dir, strerror(errno));
         }
     }
+}
+
+static void updateBandwidthAvailability(void)
+{
+    ((access(BW_DDR_MODE_FILE, F_OK) == 0) && (access(BW_DDR_FILE, F_OK) == 0)) ? (g_bwDataAvailable = true) : (g_bwDataAvailable = false);
 }
 
 /**
@@ -122,30 +129,143 @@ int getPropertyFromFile(const char *filename, const char *property, char *proper
         propertyValue[0] = '\0';
     return found;
 }
+#endif
+
 /**
  * Retrieves the system uptime from /proc/uptime.
- * Returns a string in "HH:MM:SS" format.
+ *
+ * /proc/uptime format:  <uptime_seconds> <idle_seconds>
+ *   uptime_seconds  - total wall-clock seconds since boot (fractional).
+ *   idle_seconds    - sum of per-CPU idle time (fractional, not used here).
+ *
+ * Example:  "10658.36 37479.52"
+ *   10658 s  →  2 h  57 m  38 s  (matches `uptime` output: "up  2:57")
+ *
+ * double is used for uptime_seconds so that precision is preserved for
+ * devices running longer than ~194 days (where float would lose sub-second
+ * accuracy and eventually whole seconds).
+ *
+ * Returns a pointer to a static buffer in "DDd HH:MM:SS" format, or
+ * "unknown" if /proc/uptime cannot be read.
  */
-char *getSystemUptime() { # TODO
+const char *getSystemUptime(void)
+{
     static char uptimeStr[32] = {0};
-    FILE *fp = fopen("/proc/uptime", "r");
-    if (!fp) {
+    FILE *fp = fopen(UPTIME_FILE, "r");
+    if (!fp)
+    {
         strncpy(uptimeStr, "unknown", sizeof(uptimeStr) - 1);
+        uptimeStr[sizeof(uptimeStr) - 1] = '\0';
         return uptimeStr;
     }
-    float uptimeSeconds = 0.0f;
-    if (fscanf(fp, "%f", &uptimeSeconds) == 1) {
-        unsigned int hours = (unsigned int)(uptimeSeconds / 3600);
-        unsigned int minutes = (unsigned int)((uptimeSeconds - (hours * 3600)) / 60);
-        unsigned int seconds = (unsigned int)(uptimeSeconds) % 60;
-        snprintf(uptimeStr, sizeof(uptimeStr), "%02u:%02u:%02u", hours, minutes, seconds);
-    } else {
-        strncpy(uptimeStr, "unknown", sizeof(uptimeStr) - 1);
-    }
+
+    double uptimeSeconds = 0.0;
+    int parsed = fscanf(fp, "%lf", &uptimeSeconds);
     fclose(fp);
+
+    if (parsed != 1 || uptimeSeconds < 0.0)
+    {
+        strncpy(uptimeStr, "unknown", sizeof(uptimeStr) - 1);
+        uptimeStr[sizeof(uptimeStr) - 1] = '\0';
+        return uptimeStr;
+    }
+
+    unsigned long totalSec = (unsigned long)uptimeSeconds;
+    unsigned int days    = (unsigned int)(totalSec / 86400);
+    unsigned int hours   = (unsigned int)((totalSec % 86400) / 3600);
+    unsigned int minutes = (unsigned int)((totalSec % 3600) / 60);
+    unsigned int seconds = (unsigned int)(totalSec % 60);
+
+    if (days > 0)
+        snprintf(uptimeStr, sizeof(uptimeStr), "%ud %02u:%02u:%02u", days, hours, minutes, seconds);
+    else
+        snprintf(uptimeStr, sizeof(uptimeStr), "%02u:%02u:%02u", hours, minutes, seconds);
+
     return uptimeStr;
 }
-#endif
+
+/**
+ * Returns the running kernel version string.
+ *
+ * Uses uname(2) — a single syscall — which is lighter and more portable
+ * than parsing /proc/version.  The release field (e.g. "5.15.0-91-generic"
+ * or "4.14.71") is the standard string reported by `uname -r`.
+ *
+ * Returns a pointer to a static buffer, or "unknown" on failure.
+ */
+const char *getKernelVersion(void)
+{
+    static char kernelVer[64] = {0};
+    struct utsname uts;
+    if (uname(&uts) == 0)
+    {
+        strncpy(kernelVer, uts.release, sizeof(kernelVer) - 1);
+        kernelVer[sizeof(kernelVer) - 1] = '\0';
+    }
+    else
+    {
+        strncpy(kernelVer, "unknown", sizeof(kernelVer) - 1);
+        kernelVer[sizeof(kernelVer) - 1] = '\0';
+    }
+    return kernelVer;
+}
+
+void collectBandwidthData(FILE *out)
+{
+    if (!out)
+        return;
+
+    FILE *fp = NULL;
+    char buffer[128] = {0};
+    unsigned long totalBandwidth = 0;
+    float usagePercentage = 0.0f;
+
+    fp = fopen(BW_DDR_MODE_FILE, "r");
+    if (!fp)
+    {
+        PRINT_ERROR("Failed to open %s: %s\n", BW_DDR_MODE_FILE, strerror(errno));
+        return;
+    }
+
+    if (!fgets(buffer, sizeof(buffer), fp) || buffer[0] != '1')
+    {
+        fclose(fp);
+        fp = fopen(BW_DDR_MODE_FILE, "w");
+        if (!fp)
+        {
+            PRINT_ERROR("Failed to open %s for writing: %s\n", BW_DDR_MODE_FILE, strerror(errno));
+            return;
+        }
+        if (fputs("1\n", fp) == EOF)
+        {
+            PRINT_ERROR("Failed to enable DDR bandwidth monitoring: %s\n", strerror(errno));
+            fclose(fp);
+            return;
+        }
+        fclose(fp);
+        return;
+    }
+    fclose(fp);
+
+    fp = fopen(BW_DDR_FILE, "r");
+    if (!fp)
+    {
+        PRINT_ERROR("Failed to open %s: %s\n", BW_DDR_FILE, strerror(errno));
+        return;
+    }
+
+    if (fgets(buffer, sizeof(buffer), fp) &&
+        sscanf(buffer, "Total bandwidth: %lu KB/s, usage: %f%%", &totalBandwidth, &usagePercentage) == 2)
+    {
+        fprintf(out, "\n\nBandwidth:\nTotalBandwidth,UsagePercentage\n%lu,%.2f\n", totalBandwidth, usagePercentage);
+    }
+    else
+    {
+        PRINT_ERROR("Failed to parse bandwidth data from %s\n", BW_DDR_FILE);
+    }
+
+    fclose(fp);
+}
 
 /**
  * Reads the firmware image name from /version.txt.
@@ -1371,23 +1491,58 @@ int getProcessInfos_initial(FILE *smap)
 
 int getProcessInfos(unsigned pid)
 {
-    int ret;
+    int ret = 1;
     char tmp[128];
+    FILE *smap = NULL;
 #ifdef TESTME
     memset(&processInfoTest, 0, sizeof(processInfoTest));
     prev_test_pss = 0;
     if (isTestMode)
     {
         memcpy(tmp, testSmap, 128);
+        if (strstr(testSmap, "smaps_rollup") != NULL)
+        {
+            smaps_rollup = 1;
+            getProcessInfos_ptr = getProcessInfos_rollup;
+        }
+        else
+        {
+            smaps_rollup = 0;
+            getProcessInfos_ptr = getProcessInfos_initial;
+        }
         PRINT_MUST("%s: Testing with %s\n", __FUNCTION__, tmp);
+        smap = fopen(tmp, "r");
     }
     else
 #endif
     {
-        sprintf(tmp, "/proc/%u/%s", pid, gSMAPS_OR_ROLLUP);
+        if (force_smaps)
+        {
+            smaps_rollup = 0;
+            strcpy(gSMAPS_OR_ROLLUP, "smaps");
+            getProcessInfos_ptr = getProcessInfos_initial;
+            snprintf(tmp, sizeof(tmp), "/proc/%u/smaps", pid);
+            smap = fopen(tmp, "r");
+        }
+        else
+        {
+            smaps_rollup = 1;
+            strcpy(gSMAPS_OR_ROLLUP, "smaps_rollup");
+            getProcessInfos_ptr = getProcessInfos_rollup;
+            snprintf(tmp, sizeof(tmp), "/proc/%u/smaps_rollup", pid);
+            smap = fopen(tmp, "r");
+
+            if (!smap)
+            {
+                smaps_rollup = 0;
+                strcpy(gSMAPS_OR_ROLLUP, "smaps");
+                getProcessInfos_ptr = getProcessInfos_initial;
+                snprintf(tmp, sizeof(tmp), "/proc/%u/smaps", pid);
+                smap = fopen(tmp, "r");
+            }
+        }
     }
 
-    FILE *smap = fopen(tmp, "r");
     if (smap)
     {
         ret = getProcessInfos_ptr(smap);
@@ -1439,7 +1594,7 @@ void printHelpAndUsage(char *argv[], bool moreInfo)
     printf("  -o, --output <directory>  Output directory for generated CSV files (default: %s)\n", DEFAULT_OUT_DIR);
     printf("      --interval <seconds>  Interval in seconds between iterations (overrides config)\n");
     printf("      --iterations <count>  Number of iterations to run (overrides config)\n");
-    printf("  -s  --smaps_rollup        Use thin /proc/<pid>/smaps_rollup, with the drawback that Shared_Clean will be an rss value and not pss\n");
+    printf("  -s, --smaps               Force /proc/<pid>/smaps (disable auto smaps_rollup detection)\n");
     printf("  -h, --help                Show this help message and exit\n");
     printf("  -t, --test <smapsFile> <meminfoFile>   Run in test mode using supplied sample files\n\n");
 
@@ -1489,7 +1644,11 @@ int collectSystemMemoryStats(bool includeKthreads, const char *outDir, int itera
     // Get Firmware image name
     char fwName[FW_LEN] = {0};
     getFirmwareImageName(fwName, sizeof(fwName));
-    
+
+    // Get Uptime and Kernel Version (stable for the lifetime of the process)
+    const char *uptime = getSystemUptime();
+    const char *kernelVersion = getKernelVersion();
+
     // outDir or default /tmp/meminsight
     const char *dir = (outDir && outDir[0]) ? outDir : DEFAULT_OUT_DIR;
     ensure_output_dir(dir);
@@ -1519,8 +1678,8 @@ int collectSystemMemoryStats(bool includeKthreads, const char *outDir, int itera
         }
         PRINT_INFO("Capturing Process stats into: %s\n", outputfile);
 
-        fprintf(output, "FIRMWARE_NAME,MAC_ADDRESS,TIMESTAMP,REPORT_VERSION\n");
-        fprintf(output, "%s,%s,%s,%s\n\n", fwName, mac, ts, reportVersion);
+        fprintf(output, "%s\n", CSV_META_HEADER);
+        fprintf(output, "%s,%s,%s,%s,%s,%s\n\n", fwName, mac, ts, uptime, kernelVersion, reportVersion);
 
         unsigned long rssTotal = 0, pssTotal = 0, shared_clean_total = 0, private_clean_total = 0, private_dirty_total = 0, swap_pss_total = 0;
         DIR *proc = opendir(PROC_DIR);
@@ -1596,6 +1755,10 @@ int collectSystemMemoryStats(bool includeKthreads, const char *outDir, int itera
         writeProcessInfo(noOfPids, output);
         fprintf(output, "0,Total,%lu,%lu,%lu,%lu,%lu,%lu,0,0,0\n", rssTotal, pssTotal, shared_clean_total,
                 private_clean_total, private_dirty_total, swap_pss_total);
+        if (g_bwDataAvailable)
+        {
+            collectBandwidthData(output);
+        }
         fclose(output);
 #ifdef TESTME
         if (1 == isTestMode) {
@@ -1683,6 +1846,10 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, int cli_iter
     char fwName[FW_LEN] = {0};
     getFirmwareImageName(fwName, sizeof(fwName));
 
+    // Uptime and Kernel Version (captured once; stable across the run)
+    const char *uptime = getSystemUptime();
+    const char *kernelVersion = getKernelVersion();
+
     for (int iter = 0; long_run || iter < final_iterations; iter++)
     {
         PRINT_INFO("\n==== Iteration %d%s ====\n", iter + 1, long_run ? "/∞" : "");
@@ -1720,8 +1887,8 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, int cli_iter
             return -1;
         }
 
-        fprintf(output, "FIRMWARE_NAME,MAC_ADDRESS,TIMESTAMP,REPORT_VERSION\n");
-        fprintf(output, "%s,%s,%s,%s\n\n", fwName, mac, ts, reportVersion);
+        fprintf(output, "%s\n", CSV_META_HEADER);
+        fprintf(output, "%s,%s,%s,%s,%s,%s\n\n", fwName, mac, ts, uptime, kernelVersion, reportVersion);
 
         saveMeminfo(output);
         fprintf(output, "\nPID,EXE,RSS,PSS,SHARED_CLEAN,PRIVATE_CLEAN,PRIVATE_DIRTY,SWAP_PSS,"
@@ -1785,6 +1952,10 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, int cli_iter
             PRINT_ERROR("No whitelist specified in config.\n");
         }
         fprintf(output, "0,Total,%lu,%lu,%lu,%lu,%lu\n", rssTotal, pssTotal, shared_clean_total, private_clean_total, private_dirty_total);
+        if (g_bwDataAvailable)
+        {
+            collectBandwidthData(output);
+        }
         fclose(output);
 
         if (final_interval > 0 && iter + 1 < final_iterations)
@@ -2088,9 +2259,9 @@ int main(int argc, char *argv[])
                 printHelpAndUsage(argv, false);
             }
         }
-        else if (!strncmp(argv[i], "-s", 3) || !strncmp(argv[i], "--smaps_rollup", 15))
+        else if (!strncmp(argv[i], "-s", 3) || !strncmp(argv[i], "--smaps", 8))
         {
-            smaps_rollup = 1;
+            force_smaps = 1;
         }
         else
         {
@@ -2106,12 +2277,19 @@ int main(int argc, char *argv[])
     }
     printf("\n");
 
-    if (smaps_rollup) {
-        getProcessInfos_ptr = getProcessInfos_rollup;
-    }
-    else {
+    updateBandwidthAvailability();
+
+    if (force_smaps)
+    {
+        smaps_rollup = 0;
         strcpy(gSMAPS_OR_ROLLUP, "smaps");
         getProcessInfos_ptr = getProcessInfos_initial;
+    }
+    else
+    {
+        smaps_rollup = 1;
+        strcpy(gSMAPS_OR_ROLLUP, "smaps_rollup");
+        getProcessInfos_ptr = getProcessInfos_rollup;
     }
     includeKthreads = enableKThreads; // Cascade to global for all code paths
     if (isConfigPresent)

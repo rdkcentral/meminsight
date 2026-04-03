@@ -1,0 +1,17 @@
+Makefile
+Makefile.in
+aclocal.m4
+autom4te.cache/
+compile
+config.h
+config.h.in
+config.status
+configure
+depcomp
+install-sh
+meminsight
+missing
+src/.deps/
+src/.dirstamp
+src/memstatus.o
+stamp-h1
