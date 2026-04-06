@@ -95,6 +95,8 @@ This is used to ensure compatibility with older versions of the report parser. *
 /* Default Macros */
 #define DEFAULT_FW_NAME "ACTIVEFW123"
 #define FW_LEN 64
+#define KERNEL_LEN 64
+#define MAC_LEN 32
 #define DEFAULT_ITERATIONS 1
 #define DEFAULT_INTERVAL 5
 #define DEFAULT_LOG_LEVEL "INFO"
@@ -109,6 +111,7 @@ This is used to ensure compatibility with older versions of the report parser. *
 /* Config Macros */
 #define CONFIG_EXTN ".conf"
 #define CSV_FILE_NAME "meminsight.csv"
+#define JSON_FILE_NAME "meminsight.json"
 #define LONG_RUN_INTERVAL 900 // 900 is Default interval for long runs in seconds
 #define LONG_RUN_ITERATIONS 48 // 12 Hour capture, considering 15 mins interval
 
@@ -151,18 +154,42 @@ typedef struct config
     char logLevel[8];            // Log level (e.g., "DEBUG", "INFO", "ERROR")
 } Config_Data;
 
+/*
+ * Struct to hold setup information for report generation (one-time cache)
+ * kernelVersion is cached once at startup and reused across all iterations.
+ * uptime and timestamp are calculated fresh on each report iteration.
+ */
+typedef struct {
+    char mac[MAC_LEN];
+    char fwName[FW_LEN];
+    char kernelVersion[KERNEL_LEN];
+    const char *outputDir;
+    const char *reportFileName;
+    bool dirCreated;
+} SetupInfo;
+
+/*
+ * Report output format
+ */
+typedef enum
+{
+    REPORT_CSV,
+    REPORT_JSON
+} Report_Format;
+
 // -----------------------------
 // Global Variables
 // -----------------------------
-
-extern int includeKthreads;           // Whether to include kernel threads
 extern Process_Info getProcessInfo;   // Temporary struct for collecting process info
 extern Process_Info *headProcessInfo; // Head of linked list
 extern bool g_bwDataAvailable;
+extern Report_Format g_reportFormat;  // Active output format (default: REPORT_CSV)
+extern bool g_jsonPrettyPrint;        // Pretty-print JSON when true
 
 #ifdef TESTME
-extern int testpid; // Used for test mode with custom smap file
+extern unsigned isTestMode;
 extern char testSmap[128];
+extern char testMeminfo[128];
 extern Process_Info processInfoTest;
 void checkAndFree();
 void testList();
@@ -171,6 +198,7 @@ void testList();
 // -----------------------------
 // Function Prototypes
 // -----------------------------
+SetupInfo initializeSetupInfo(const char *outDir, Report_Format format);
 
 void writeProcessInfo(unsigned noOfpids, FILE *output);
 void addProcessInfo(Process_Info *addPInfo);
@@ -188,8 +216,35 @@ const char *getKernelVersion(void);
 int isPID(const char *str);
 int getPIDByProcessName(const char *procName, unsigned int *pidOut);
 int parseConfig(const char *configFile, Config_Data *config);
-int collectSystemMemoryStats(bool includeKthreads, const char *outDir, int iterations, int interval, bool long_run);
+int collectSystemMemoryStats(bool enableKThreads, const char *outDir, int iterations, int interval, bool long_run);
 int handleConfigMode(const char *confFile, const char *cli_out_dir, int cli_iterations, int cli_interval, bool enableKThreads, bool long_run);
 int fillProcessStatFields(unsigned pid, Process_Info *info, unsigned *flagsOut);
+
+#ifdef ENABLE_CJSON
+/*
+ * Minimal cJSON struct layout — mirrors the real cJSON internals.
+ * Defined here so we can work with cJSON objects via our own pointers
+ * without needing to install cjson/cJSON.h at build time.
+ * This layout has been stable across all cJSON releases since 1.x.
+ */
+typedef struct cJSON_s {
+    struct cJSON_s *next;
+    struct cJSON_s *prev;
+    struct cJSON_s *child;
+    int    type;
+    char  *valuestring;
+    int    valueint;
+    double valuedouble;
+    char  *string;
+} cJSON_t;
+
+/*
+ * JSON output functions - cJSON is loaded at runtime via dlopen.
+ * No cjson/cJSON.h include is needed at build time.
+ */
+void saveMeminfo_JSON(cJSON_t *root);
+void writeProcessInfo_JSON(cJSON_t *processesArray);
+int writeJSONToFile(const char *filepath, const SetupInfo *setup);
+#endif
 
 #endif // MEMSTATUS_H

@@ -16,14 +16,116 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+#include "config.h"
 #include "memstatus.h"
+
+#ifdef ENABLE_CJSON
+#include <dlfcn.h>
+
+/*
+ * Function pointer table for all cJSON symbols we need.
+ * Resolved at runtime by loadCjson(); zeroed on unload.
+ */
+typedef struct {
+    void    *handle;
+    cJSON_t *(*CreateObject)(void);
+    cJSON_t *(*CreateArray)(void);
+    cJSON_t *(*AddStringToObject)(cJSON_t *obj, const char *name, const char *str);
+    cJSON_t *(*AddNumberToObject)(cJSON_t *obj, const char *name, double n);
+    cJSON_t *(*AddItemToObject)(cJSON_t *obj, const char *key, cJSON_t *item);
+    cJSON_t *(*AddItemToArray)(cJSON_t *arr, cJSON_t *item);
+    char    *(*Print)(const cJSON_t *item);
+    char    *(*PrintUnformatted)(const cJSON_t *item);
+    void     (*Delete)(cJSON_t *item);
+} CjsonLib;
+
+static CjsonLib g_cjson;
+static cJSON_t *g_rootObject = NULL;
+
+/*
+ * -----------------------------------------------------------------------
+ * WHY DLOPEN INSTEAD OF STATIC LINKING
+ * -----------------------------------------------------------------------
+ * cJSON is an optional feature. We load it at runtime via dlopen() rather
+ * than linking -lcjson at build time for two key reasons:
+ *
+ *  1. Portability: the xmeminsight binary deploys on embedded/RDK targets
+ *     that may not have libcjson installed. On those devices CSV output
+ *     continues to work as-is — no library, no problem.
+ *
+ *  2. Zero overhead when unused: if --fmt json is never passed, dlopen()
+ *     is never called. The JSON code path stays completely dormant — no
+ *     library mapped into memory, no symbols resolved.
+ *
+ * On load failure we log a clear diagnostic and fall back to CSV so the
+ * capture session continues rather than aborting. For embedded targets a
+ * data gap is almost always better than a dead process.
+ *
+ * If JSON output ever becomes a hard requirement for a deployment, replace
+ * this block with a static -lcjson link and remove the CSV fallback below.
+ * -----------------------------------------------------------------------
+ */
+static int loadCjson(void)
+{
+    memset(&g_cjson, 0, sizeof(g_cjson));
+
+    /* Try the versioned SO first; fall back to the bare soname. */
+    g_cjson.handle = dlopen("libcjson.so.1", RTLD_LAZY | RTLD_LOCAL);
+    if (!g_cjson.handle)
+        g_cjson.handle = dlopen("libcjson.so", RTLD_LAZY | RTLD_LOCAL);
+
+    if (!g_cjson.handle) {
+        PRINT_MUST("JSON: Failed to load libcjson: %s\n", dlerror());
+        PRINT_MUST("JSON: Falling back to CSV format.\n");
+        g_reportFormat = REPORT_CSV;
+        return -1;
+    }
+
+#define LOAD_SYM(fn) \
+    do { \
+        g_cjson.fn = (void *)dlsym(g_cjson.handle, "cJSON_" #fn); \
+        if (!g_cjson.fn) { \
+            PRINT_MUST("JSON: Failed to resolve cJSON_" #fn ": %s\n", dlerror()); \
+            dlclose(g_cjson.handle); \
+            memset(&g_cjson, 0, sizeof(g_cjson)); \
+            PRINT_MUST("JSON: Symbol resolution failed. Falling back to CSV.\n"); \
+            g_reportFormat = REPORT_CSV; \
+            return -1; \
+        } \
+    } while (0)
+
+    LOAD_SYM(CreateObject);
+    LOAD_SYM(CreateArray);
+    LOAD_SYM(AddStringToObject);
+    LOAD_SYM(AddNumberToObject);
+    LOAD_SYM(AddItemToObject);
+    LOAD_SYM(AddItemToArray);
+    LOAD_SYM(Print);
+    LOAD_SYM(PrintUnformatted);
+    LOAD_SYM(Delete);
+
+#undef LOAD_SYM
+
+    PRINT_INFO("JSON: libcjson loaded successfully.\n");
+    return 0;
+}
+
+static void unloadCjson(void)
+{
+    if (g_cjson.handle) {
+        dlclose(g_cjson.handle);
+    }
+    memset(&g_cjson, 0, sizeof(g_cjson));
+}
+#endif /* ENABLE_CJSON */
 
 // -----------------------------
 // Global Variables
 // -----------------------------
-int includeKthreads = 0;              // Whether to include kernel threads
 Process_Info getProcessInfo = {0};    // Temporary struct for collecting process info
 Process_Info *headProcessInfo = NULL; // Head of linked list
+Report_Format g_reportFormat  = REPORT_CSV; // Active output format (default: REPORT_CSV)
+bool g_jsonPrettyPrint         = false;
 bool g_bwDataAvailable = false;
 unsigned smaps_rollup;                // Effective source for current parse: 1=smaps_rollup, 0=smaps
 unsigned force_smaps = 0;             // CLI override: force reading /proc/<pid>/smaps
@@ -50,17 +152,67 @@ int (*getProcessInfos_ptr)(FILE*);
 /**
  * Ensures that the specified output directory exists.
  * If it doesn't exist, it attempts to create it.
+ * Returns true if directory exists or was successfully created.
  */
-static void ensure_output_dir(const char *dir)
+static bool ensure_output_dir(const char *dir)
 {
     struct stat st = {0};
-    if (stat(dir, &st) == -1)
+    if (stat(dir, &st) == 0) // Exists
     {
-        if (mkdir(dir, 0755) == -1)
+        if (S_ISDIR(st.st_mode)) // Is a directory
         {
-            PRINT_MUST("Failed to create output directory '%s': %s\n", dir, strerror(errno));
+            return true;
         }
+        PRINT_MUST("Path '%s' exists but is not a directory\n", dir);
+        return false;
     }
+    if (mkdir(dir, 0755) == -1) // Try to create
+    {
+        PRINT_MUST("Failed to create output directory '%s': %s\n", dir, strerror(errno));
+        return false;
+    }
+    return true;
+}
+
+/**
+ * @brief Initialize runtime setup information (one-time cache).
+ *
+ * Populates a SetupInfo struct once at startup:
+ *  - Output directory, MAC address, firmware name (cached for entire run)
+ *  - Report filename based on format (cached)
+ *  - Kernel version (captured ONCE, reused across all iterations)
+ *
+ * NOTE: uptime and timestamp are NOT cached here — they are calculated
+ * fresh on each report iteration in collectSystemMemoryStats() to reflect
+ * current system state at report generation time.
+ *
+ * @param[in] outDir   Preferred output directory (may be NULL or empty).
+ * @param[in] format   Report format (REPORT_CSV or REPORT_JSON).
+ * @return SetupInfo populated structure (by-value).
+ */
+SetupInfo initializeSetupInfo(const char *outDir, Report_Format format)
+{
+    SetupInfo info = {0};
+
+    /* One-time directory and file setup. */
+    info.outputDir = (outDir && *outDir) ? outDir : DEFAULT_OUT_DIR;
+    info.dirCreated = ensure_output_dir(info.outputDir);
+    info.reportFileName = (format == REPORT_JSON) ? JSON_FILE_NAME : CSV_FILE_NAME;
+
+    /* One-time device metadata. */
+    getMacAddress(deviceIdentifierName, info.mac, sizeof(info.mac));
+    if (info.mac[0] == '\0') {
+        strncpy(info.mac, DEFAULT_MAC, sizeof(info.mac) - 1);
+        info.mac[sizeof(info.mac) - 1] = '\0';
+    }
+    getFirmwareImageName(info.fwName, sizeof(info.fwName));
+
+    /* Cache kernel version once (stable across iterations). */
+    const char *kv = getKernelVersion();
+    strncpy(info.kernelVersion, kv, sizeof(info.kernelVersion) - 1);
+    info.kernelVersion[sizeof(info.kernelVersion) - 1] = '\0';
+
+    return info;
 }
 
 static void updateBandwidthAvailability(void)
@@ -1589,14 +1741,21 @@ void printHelpAndUsage(char *argv[], bool moreInfo)
     printf("A lightweight, configurable tool for collecting detailed system and per-process memory and CPU statistics.\n\n");
 
     printf("Options:\n");
-    printf("  -a, --all                 Include kernel threads for process monitoring\n");
-    printf("  -c, --config <file>       Path to configuration file with %s extension\n", CONFIG_EXTN);
-    printf("  -o, --output <directory>  Output directory for generated CSV files (default: %s)\n", DEFAULT_OUT_DIR);
-    printf("      --interval <seconds>  Interval in seconds between iterations (overrides config)\n");
-    printf("      --iterations <count>  Number of iterations to run (overrides config)\n");
+    printf("  -a, --all                             Include kernel threads for process monitoring\n");
+    printf("  -c, --config <file>                   Path to configuration file with %s extension\n", CONFIG_EXTN);
+    printf("  -o, --output <directory>              Output directory for generated report files (default: %s)\n", DEFAULT_OUT_DIR);
+    printf("      --interval <seconds>              Interval in seconds between iterations (overrides config)\n");
+    printf("      --iterations <count>              Number of iterations to run (overrides config)\n");
     printf("  -s, --smaps               Force /proc/<pid>/smaps (disable auto smaps_rollup detection)\n");
-    printf("  -h, --help                Show this help message and exit\n");
-    printf("  -t, --test <smapsFile> <meminfoFile>   Run in test mode using supplied sample files\n\n");
+    printf("  -h, --help                            Show this help message and exit\n");
+#ifdef TESTME
+    printf("  -t, --test <smapsFile> <meminfoFile>  Run in test mode using supplied sample files\n\n");
+#endif
+#ifdef ENABLE_CJSON
+    printf("      --fmt <format>                    Specify report format: csv (default) or json\n");
+    printf("                                        (cJSON loaded at runtime via dlopen)\n");
+    printf("      --json-pretty                     Pretty-print JSON output (only with --fmt json)\n\n");
+#endif
 
     if (moreInfo)
     {
@@ -1613,7 +1772,9 @@ void printHelpAndUsage(char *argv[], bool moreInfo)
         printf("  %s --config /etc/meminsight_configuration%s\n", argv[0], CONFIG_EXTN);
         printf("  %s -c myconfig%s -a --interval 10 --iterations 5\n", argv[0], CONFIG_EXTN);
         printf("  %s --output /var/log/ --iterations 3\n", argv[0]);
+#ifdef TESTME
         printf("  %s --test ../tst/smaps.txt ../tst/meminfo.txt\n\n", argv[0]);
+#endif
 
         printf("Sample config file:\n");
         printf("  process_whitelist=myapp,systemd,1234\n  output_dir=/var/log/\n  iterations=10\n  interval=60\n  log_level=INFO\n\n");
@@ -1631,28 +1792,16 @@ void printHelpAndUsage(char *argv[], bool moreInfo)
  * Collects system-wide memory statistics and writes to output file.
  * Returns 0 on success, -1 on failure.
  */
-int collectSystemMemoryStats(bool includeKthreads, const char *outDir, int iterations, int interval, bool long_run)
+int collectSystemMemoryStats(bool enableKThreads, const char *outDir, int iterations, int interval, bool long_run)
 {
-    // Get MAC Address
-    char mac[32] = {0};
-    getMacAddress(deviceIdentifierName, mac, sizeof(mac));
-    if (mac[0] == '\0')
-    {
-        strncpy(mac, DEFAULT_MAC, sizeof(mac) - 1);
-        mac[sizeof(mac) - 1] = '\0';
+    // Initialize setup info (MAC, firmware name, output dir, file extension)
+    SetupInfo setup = initializeSetupInfo(outDir, g_reportFormat);
+    if (!setup.dirCreated) {
+        PRINT_MUST("Failed to create output directory: %s\n", setup.outputDir);
+        return -1;
     }
-    // Get Firmware image name
-    char fwName[FW_LEN] = {0};
-    getFirmwareImageName(fwName, sizeof(fwName));
 
-    // Get Uptime and Kernel Version (stable for the lifetime of the process)
-    const char *uptime = getSystemUptime();
-    const char *kernelVersion = getKernelVersion();
-
-    // outDir or default /tmp/meminsight
-    const char *dir = (outDir && outDir[0]) ? outDir : DEFAULT_OUT_DIR;
-    ensure_output_dir(dir);
-    PRINT_MUST("Capturing System wide stats into directory %s\n", dir);
+    PRINT_MUST("Capturing System wide stats into directory %s\n", setup.outputDir);
     char outputfile[512];
 
     for (int iter = 0; long_run || iter < iterations; iter++)
@@ -1668,18 +1817,38 @@ int collectSystemMemoryStats(bool includeKthreads, const char *outDir, int itera
         strftime(ts, sizeof(ts), "%Y-%m-%d %H:%M:%S", tm_info);
         strftime(timestamp, sizeof(timestamp), "%Y%m%d%H%M%S", tm_info);
 
-        snprintf(outputfile, sizeof(outputfile), "%s/%s_%s_iter%d_%s", dir, mac, timestamp, iter + 1, CSV_FILE_NAME);
-
-        FILE *output = fopen(outputfile, "w");
-        if (NULL == output)
-        {
-            PRINT_MUST("%s: Open failed, %d [%s]\n", outputfile, errno, strerror(errno));
-            return -1;
-        }
+        snprintf(outputfile, sizeof(outputfile), "%s/%s_%s_iter%d_%s",
+                 setup.outputDir, setup.mac, timestamp, iter + 1, setup.reportFileName);
         PRINT_INFO("Capturing Process stats into: %s\n", outputfile);
 
-        fprintf(output, "%s\n", CSV_META_HEADER);
-        fprintf(output, "%s,%s,%s,%s,%s,%s\n\n", fwName, mac, ts, uptime, kernelVersion, reportVersion);
+#ifdef ENABLE_CJSON
+        if (g_reportFormat == REPORT_JSON) {
+            g_rootObject = g_cjson.CreateObject();
+            if (!g_rootObject) {
+                PRINT_ERROR("Failed to create JSON root object\n");
+                return -1;
+            }
+            g_cjson.AddStringToObject(g_rootObject, "firmware_name", setup.fwName);
+            g_cjson.AddStringToObject(g_rootObject, "mac_address",   setup.mac);
+            g_cjson.AddStringToObject(g_rootObject, "timestamp",     ts);
+            g_cjson.AddStringToObject(g_rootObject, "uptime",        uptime);
+            g_cjson.AddStringToObject(g_rootObject, "kernel_version", kernelVersion);
+            g_cjson.AddStringToObject(g_rootObject, "report_version", reportVersion);
+        }
+#endif
+
+        FILE *output = NULL;
+        if (g_reportFormat == REPORT_CSV) {
+            output = fopen(outputfile, "w");
+            if (NULL == output) {
+                PRINT_MUST("%s: Open failed, %d [%s]\n", outputfile, errno, strerror(errno));
+                return -1;
+            }
+            /* Recalculate uptime fresh on each iteration */
+            const char *uptime = getSystemUptime();
+            fprintf(output, "%s\n", CSV_META_HEADER);
+            fprintf(output, "%s,%s,%s,%s,%s,%s\n\n", setup.fwName, setup.mac, ts, uptime, setup.kernelVersion, reportVersion);
+        }
 
         unsigned long rssTotal = 0, pssTotal = 0, shared_clean_total = 0, private_clean_total = 0, private_dirty_total = 0, swap_pss_total = 0;
         DIR *proc = opendir(PROC_DIR);
@@ -1700,7 +1869,7 @@ int collectSystemMemoryStats(bool includeKthreads, const char *outDir, int itera
                             PRINT_ERROR("Failed to fill process stat fields for PID %d\n", pid);
                             continue;
                         }
-                        if (flags & PF_KTHREAD && !includeKthreads)
+                        if (flags & PF_KTHREAD && !enableKThreads)
                         {             /*PF_KTHREAD*/
                             continue; // Skip kernel threads if not included
                         }
@@ -1736,30 +1905,51 @@ int collectSystemMemoryStats(bool includeKthreads, const char *outDir, int itera
         else
         {
             PRINT_ERROR("Failed to open %s directory: %s\n", PROC_DIR, strerror(errno));
-            fclose(output);
+            if (output) fclose(output);
+#ifdef ENABLE_CJSON
+            if (g_reportFormat == REPORT_JSON && g_rootObject) {
+                g_cjson.Delete(g_rootObject);
+                g_rootObject = NULL;
+            }
+#endif
             return -1;
         }
-        saveMeminfo(output);
-    #ifdef TESTME
-        if (isTestMode && unitTestFailed)
-        {
-            fclose(output);
-            return -1;
-        }
-    #endif
+
         PRINT_INFO("\nProcessed %u processes\n>> RSS_Total %lu\n>> PSS_Total "
                "%lu\n>> Shared_Clean_Total %lu\n>> Private_Clean_Total %lu\n>> Private_Dirty_Total %lu\n",
                noOfPids, rssTotal, pssTotal, shared_clean_total, private_clean_total, private_dirty_total);
-        fprintf(output, "\n\nProcesses:\nPID,EXE,RSS,PSS,SHARED_CLEAN,PRIVATE_CLEAN,PRIVATE_"
-                        "DIRTY,SWAP_PSS,MIN_FAULTS,MAJ_FAULTS,CPU_TIME\n");
-        writeProcessInfo(noOfPids, output);
-        fprintf(output, "0,Total,%lu,%lu,%lu,%lu,%lu,%lu,0,0,0\n", rssTotal, pssTotal, shared_clean_total,
-                private_clean_total, private_dirty_total, swap_pss_total);
-        if (g_bwDataAvailable)
-        {
-            collectBandwidthData(output);
+
+        if (g_reportFormat == REPORT_CSV) {
+            saveMeminfo(output);
+    #ifdef TESTME
+            if (isTestMode && unitTestFailed) {
+                fclose(output);
+                return -1;
+            }
+    #endif
+            fprintf(output, "\n\nProcesses:\nPID,EXE,RSS,PSS,SHARED_CLEAN,PRIVATE_CLEAN,PRIVATE_"
+                            "DIRTY,SWAP_PSS,MIN_FAULTS,MAJ_FAULTS,CPU_TIME\n");
+            writeProcessInfo(noOfPids, output);
+            fprintf(output, "0,Total,%lu,%lu,%lu,%lu,%lu,%lu,0,0,0\n", rssTotal, pssTotal, shared_clean_total,
+                    private_clean_total, private_dirty_total, swap_pss_total);
+            if (g_bwDataAvailable)
+                collectBandwidthData(output);
+            fclose(output);
         }
-        fclose(output);
+#ifdef ENABLE_CJSON
+        else if (g_reportFormat == REPORT_JSON) {
+            saveMeminfo_JSON(g_rootObject);
+            cJSON_t *processesArray = g_cjson.CreateArray();
+            if (processesArray) {
+                writeProcessInfo_JSON(processesArray);
+                g_cjson.AddItemToObject(g_rootObject, "processes", processesArray);
+            }
+            if (writeJSONToFile(outputfile, &setup) != 0) {
+                PRINT_ERROR("Failed to write JSON output file: %s\n", outputfile);
+                return -1;
+            }
+        }
+#endif
 #ifdef TESTME
         if (1 == isTestMode) {
             break;
@@ -1777,7 +1967,7 @@ int collectSystemMemoryStats(bool includeKthreads, const char *outDir, int itera
 
 int handleConfigMode(const char *confFile, const char *cli_out_dir, int cli_iterations, int cli_interval, bool enableKThreads, bool long_run)
 {
-    Config_Data config;
+    Config_Data config = {0};
     if (parseConfig(confFile, &config) != 0)
     {
         PRINT_ERROR("Error: Failed to parse config file '%s'\n", confFile);
@@ -1788,6 +1978,16 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, int cli_iter
     const char *final_out_dir = (cli_out_dir[0] && strncmp(cli_out_dir, DEFAULT_OUT_DIR, strlen(DEFAULT_OUT_DIR) + 1) != 0)
                                     ? cli_out_dir
                                     : (config.outputDir[0] ? config.outputDir : DEFAULT_OUT_DIR);
+
+    // Initialize setup info (MAC, firmware name, output dir, file extension)
+    SetupInfo setup = initializeSetupInfo(final_out_dir, g_reportFormat);
+    if (!setup.dirCreated) {
+        PRINT_ERROR("Failed to create output directory: %s\n", setup.outputDir);
+        for (unsigned j = 0; j < config.whiteListCount; j++)
+            if (config.whitelist[j]) free(config.whitelist[j]);
+        if (config.whitelist) free(config.whitelist);
+        return -1;
+    }
 
     // Interval/Iterations logic (CLI > config > default)
     int final_iterations = config.iterations;
@@ -1834,22 +2034,6 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, int cli_iter
         long_run = false; // If both interval and iterations are specified, it's not a long run
     }
 
-    // Get MAC Address
-    char mac[32] = {0};
-    getMacAddress(deviceIdentifierName, mac, sizeof(mac));
-    if (mac[0] == '\0') {
-        strncpy(mac, DEFAULT_MAC, sizeof(mac) - 1);
-        mac[sizeof(mac) - 1] = '\0'; // Ensure null-termination
-    }
-
-    // Firmware image name
-    char fwName[FW_LEN] = {0};
-    getFirmwareImageName(fwName, sizeof(fwName));
-
-    // Uptime and Kernel Version (captured once; stable across the run)
-    const char *uptime = getSystemUptime();
-    const char *kernelVersion = getKernelVersion();
-
     for (int iter = 0; long_run || iter < final_iterations; iter++)
     {
         PRINT_INFO("\n==== Iteration %d%s ====\n", iter + 1, long_run ? "/∞" : "");
@@ -1864,35 +2048,48 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, int cli_iter
 
         // Generate output file name
         char outputFilePath[PATH_MAX * 2] = {0};
-        ensure_output_dir(final_out_dir);
-        snprintf(outputFilePath, sizeof(outputFilePath), "%s/%s_%s_iter%d_%s", final_out_dir, mac, timestamp, iter+1, CSV_FILE_NAME);
-
+        snprintf(outputFilePath, sizeof(outputFilePath), "%s/%s_%s_iter%d_%s",
+                 setup.outputDir, setup.mac, timestamp, iter + 1, setup.reportFileName);
         PRINT_INFO("Capturing Process stats into %s\n", outputFilePath);
-        // Open output file
-        FILE *output = fopen(outputFilePath, "w");
-        if (!output)
-        {
-            PRINT_ERROR("Error: Failed to open output file '%s' for writing\n", outputFilePath);
-            for (unsigned j = 0; j < config.whiteListCount; j++)
-            {
-                if (config.whitelist[j] != NULL)
-                {
-                    free(config.whitelist[j]);
-                }
+
+        /* Recalculate uptime fresh on each iteration */
+        const char *uptime = getSystemUptime();
+
+#ifdef ENABLE_CJSON
+        if (g_reportFormat == REPORT_JSON) {
+            g_rootObject = g_cjson.CreateObject();
+            if (!g_rootObject) {
+                PRINT_ERROR("Failed to create JSON root object\n");
+                for (unsigned j = 0; j < config.whiteListCount; j++)
+                    if (config.whitelist[j]) free(config.whitelist[j]);
+                if (config.whitelist) free(config.whitelist);
+                return -1;
             }
-            if (config.whitelist != NULL)
-            {
-                free(config.whitelist);
-            }
-            return -1;
+            g_cjson.AddStringToObject(g_rootObject, "firmware_name",  setup.fwName);
+            g_cjson.AddStringToObject(g_rootObject, "mac_address",    setup.mac);
+            g_cjson.AddStringToObject(g_rootObject, "timestamp",      ts);
+            g_cjson.AddStringToObject(g_rootObject, "uptime",         uptime);
+            g_cjson.AddStringToObject(g_rootObject, "kernel_version", setup.kernelVersion);
+            g_cjson.AddStringToObject(g_rootObject, "report_version", reportVersion);
         }
+#endif
 
-        fprintf(output, "%s\n", CSV_META_HEADER);
-        fprintf(output, "%s,%s,%s,%s,%s,%s\n\n", fwName, mac, ts, uptime, kernelVersion, reportVersion);
-
-        saveMeminfo(output);
-        fprintf(output, "\nPID,EXE,RSS,PSS,SHARED_CLEAN,PRIVATE_CLEAN,PRIVATE_DIRTY,SWAP_PSS,"
-                        "MIN_FAULTS,MAJ_FAULTS,CPU_TIME\n");
+        FILE *output = NULL;
+        if (g_reportFormat == REPORT_CSV) {
+            output = fopen(outputFilePath, "w");
+            if (!output) {
+                PRINT_ERROR("Error: Failed to open output file '%s' for writing\n", outputFilePath);
+                for (unsigned j = 0; j < config.whiteListCount; j++)
+                    if (config.whitelist[j]) free(config.whitelist[j]);
+                if (config.whitelist) free(config.whitelist);
+                return -1;
+            }
+            fprintf(output, "%s\n", CSV_META_HEADER);
+            fprintf(output, "%s,%s,%s,%s,%s,%s\n\n", setup.fwName, setup.mac, ts, uptime, setup.kernelVersion, reportVersion);
+            saveMeminfo(output);
+            fprintf(output, "\nPID,EXE,RSS,PSS,SHARED_CLEAN,PRIVATE_CLEAN,PRIVATE_DIRTY,SWAP_PSS,"
+                            "MIN_FAULTS,MAJ_FAULTS,CPU_TIME\n");
+        }
 
         unsigned long rssTotal = 0, pssTotal = 0, shared_clean_total = 0, private_clean_total = 0, private_dirty_total = 0, swap_pss_total = 0;
         unsigned actualCount = 0;
@@ -1950,13 +2147,41 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, int cli_iter
         else
         {
             PRINT_ERROR("No whitelist specified in config.\n");
+            if (output) fclose(output);
+#ifdef ENABLE_CJSON
+            if (g_reportFormat == REPORT_JSON && g_rootObject) {
+                g_cjson.Delete(g_rootObject);
+                g_rootObject = NULL;
+            }
+#endif
+            continue;
         }
-        fprintf(output, "0,Total,%lu,%lu,%lu,%lu,%lu\n", rssTotal, pssTotal, shared_clean_total, private_clean_total, private_dirty_total);
-        if (g_bwDataAvailable)
-        {
-            collectBandwidthData(output);
+
+        if (g_reportFormat == REPORT_CSV) {
+            fprintf(output, "0,Total,%lu,%lu,%lu,%lu,%lu,%lu,0,0,0\n",
+                    rssTotal, pssTotal, shared_clean_total, private_clean_total,
+                    private_dirty_total, swap_pss_total);
+            if (g_bwDataAvailable)
+                collectBandwidthData(output);
+            fclose(output);
         }
-        fclose(output);
+#ifdef ENABLE_CJSON
+        else if (g_reportFormat == REPORT_JSON) {
+            saveMeminfo_JSON(g_rootObject);
+            cJSON_t *processesArray = g_cjson.CreateArray();
+            if (processesArray) {
+                writeProcessInfo_JSON(processesArray);
+                g_cjson.AddItemToObject(g_rootObject, "processes", processesArray);
+            }
+            if (writeJSONToFile(outputFilePath, &setup) != 0) {
+                PRINT_ERROR("Failed to write JSON output file: %s\n", outputFilePath);
+                for (unsigned j = 0; j < config.whiteListCount; j++)
+                    if (config.whitelist[j]) free(config.whitelist[j]);
+                if (config.whitelist) free(config.whitelist);
+                return -1;
+            }
+        }
+#endif
 
         if (final_interval > 0 && iter + 1 < final_iterations)
         {
@@ -2132,6 +2357,179 @@ void saveMeminfo(FILE *out)
 }
 
 // -----------------------------
+// JSON Output Functions
+// -----------------------------
+
+#ifdef ENABLE_CJSON
+
+/**
+ * @brief Add meminfo key/value fields to a JSON root object.
+ *
+ * Reads /proc/meminfo (or the test fixture when TESTME is set) and
+ * writes each needed field as a numeric member of @p root.
+ * Uses the same field list as the CSV saveMeminfo() for consistency.
+ */
+void saveMeminfo_JSON(cJSON_t *root)
+{
+    static const char *meminfoNeeded[] = {
+        "MemTotal", "MemFree", "MemAvailable", "Buffers", "Cached", "SwapCached",
+        "Active(anon)", "Inactive(anon)", "Active(file)", "Inactive(file)",
+        "SwapTotal", "SwapFree", "AnonPages", "Mapped", "Shmem", "Slab",
+        "KernelStack", "VmallocUsed", "CmaFree", "CmaTotal"
+    };
+    const int fieldCount = (int)(sizeof(meminfoNeeded) / sizeof(meminfoNeeded[0]));
+
+    cJSON_t *meminfoObj = g_cjson.CreateObject();
+    if (!meminfoObj) {
+        PRINT_ERROR("Failed to create meminfo JSON object\n");
+        return;
+    }
+
+#ifdef TESTME
+    FILE *meminfo = fopen((isTestMode) ? testMeminfo : MEMINFO_FILE, "r");
+#else
+    FILE *meminfo = fopen(MEMINFO_FILE, "r");
+#endif
+    if (!meminfo) {
+        PRINT_ERROR("Error opening %s: %s\n", MEMINFO_FILE, strerror(errno));
+        g_cjson.Delete(meminfoObj);
+        return;
+    }
+
+    char tmp[128];
+    char name[64];
+    unsigned long value;
+
+    while (fgets(tmp, sizeof(tmp), meminfo)) {
+        if (sscanf(tmp, "%63s %lu kB", name, &value) == 2) {
+            size_t len = strlen(name);
+            if (len > 0 && name[len - 1] == ':')
+                name[len - 1] = '\0';
+            for (int i = 0; i < fieldCount; i++) {
+                if (strcmp(name, meminfoNeeded[i]) == 0) {
+                    g_cjson.AddNumberToObject(meminfoObj, name, (double)value);
+                    break;
+                }
+            }
+        }
+    }
+    fclose(meminfo);
+    g_cjson.AddItemToObject(root, "meminfo", meminfoObj);
+}
+
+/**
+ * @brief Write process linked-list to a JSON array, then free each node.
+ *
+ * Mirrors writeProcessInfo() for CSV. Accumulates totals and appends a
+ * synthetic "Total" entry as the last element of @p processesArray.
+ */
+void writeProcessInfo_JSON(cJSON_t *processesArray)
+{
+    unsigned long rssTotal = 0, pssTotal = 0;
+    unsigned long shared_clean_total = 0, private_clean_total = 0;
+    unsigned long private_dirty_total = 0, swap_pss_total = 0;
+
+    Process_Info *cur = headProcessInfo;
+    Process_Info *tofree;
+
+    while (cur) {
+        cJSON_t *procObj = g_cjson.CreateObject();
+        if (procObj) {
+            g_cjson.AddNumberToObject(procObj, "pid",           (double)cur->pid);
+            g_cjson.AddStringToObject(procObj, "name",          cur->name);
+            g_cjson.AddNumberToObject(procObj, "rss",           (double)cur->rssTotal);
+            g_cjson.AddNumberToObject(procObj, "pss",           (double)cur->pssTotal);
+            g_cjson.AddNumberToObject(procObj, "shared_clean",  (double)cur->shared_clean_total);
+            g_cjson.AddNumberToObject(procObj, "private_clean", (double)cur->private_clean_total);
+            g_cjson.AddNumberToObject(procObj, "private_dirty", (double)cur->private_dirty_total);
+            g_cjson.AddNumberToObject(procObj, "swap_pss",      (double)cur->swap_pss_total);
+            g_cjson.AddNumberToObject(procObj, "min_faults",    (double)cur->minFaults);
+            g_cjson.AddNumberToObject(procObj, "maj_faults",    (double)cur->majFaults);
+            g_cjson.AddNumberToObject(procObj, "cpu_time",      (double)cur->cputime);
+            g_cjson.AddItemToArray(processesArray, procObj);
+        }
+        rssTotal           += cur->rssTotal;
+        pssTotal           += cur->pssTotal;
+        shared_clean_total += cur->shared_clean_total;
+        private_clean_total+= cur->private_clean_total;
+        private_dirty_total+= cur->private_dirty_total;
+        swap_pss_total     += cur->swap_pss_total;
+
+        tofree = cur;
+        cur    = cur->next;
+        free(tofree);
+    }
+    headProcessInfo = NULL;
+
+    // Append a synthetic totals row (mirrors the CSV "0,Total,..." line)
+    cJSON_t *totalObj = g_cjson.CreateObject();
+    if (totalObj) {
+        g_cjson.AddNumberToObject(totalObj, "pid",           0);
+        g_cjson.AddStringToObject(totalObj, "name",          "Total");
+        g_cjson.AddNumberToObject(totalObj, "rss",           (double)rssTotal);
+        g_cjson.AddNumberToObject(totalObj, "pss",           (double)pssTotal);
+        g_cjson.AddNumberToObject(totalObj, "shared_clean",  (double)shared_clean_total);
+        g_cjson.AddNumberToObject(totalObj, "private_clean", (double)private_clean_total);
+        g_cjson.AddNumberToObject(totalObj, "private_dirty", (double)private_dirty_total);
+        g_cjson.AddNumberToObject(totalObj, "swap_pss",      (double)swap_pss_total);
+        g_cjson.AddNumberToObject(totalObj, "min_faults",    0);
+        g_cjson.AddNumberToObject(totalObj, "maj_faults",    0);
+        g_cjson.AddNumberToObject(totalObj, "cpu_time",      0);
+        g_cjson.AddItemToArray(processesArray, totalObj);
+    }
+}
+
+/**
+ * @brief Serialise g_rootObject to @p filepath and free the JSON tree.
+ *
+ * Uses cJSON_Print (pretty) or cJSON_PrintUnformatted depending on the
+ * g_jsonPrettyPrint flag.  Always cleans up g_rootObject regardless of
+ * success or failure.
+ *
+ * @return 0 on success, -1 on any error.
+ */
+int writeJSONToFile(const char *filepath, const SetupInfo *setup)
+{
+    (void)setup; /* metadata already written into g_rootObject at creation */
+
+    if (!g_rootObject) {
+        PRINT_ERROR("No JSON data to write\n");
+        return -1;
+    }
+
+    FILE *out = fopen(filepath, "w");
+    if (!out) {
+        PRINT_ERROR("Failed to open %s for writing: %s\n", filepath, strerror(errno));
+        g_cjson.Delete(g_rootObject);
+        g_rootObject = NULL;
+        return -1;
+    }
+
+    char *jsonStr = g_jsonPrettyPrint
+                    ? g_cjson.Print(g_rootObject)
+                    : g_cjson.PrintUnformatted(g_rootObject);
+
+    int rc = 0;
+    if (jsonStr) {
+        if (fprintf(out, "%s\n", jsonStr) < 0) {
+            PRINT_ERROR("Failed to write JSON to %s: %s\n", filepath, strerror(errno));
+            rc = -1;
+        }
+        free(jsonStr);
+    } else {
+        PRINT_ERROR("cJSON serialisation returned NULL for %s\n", filepath);
+        rc = -1;
+    }
+
+    fclose(out);
+    g_cjson.Delete(g_rootObject);
+    g_rootObject = NULL;
+    return rc;
+}
+
+#endif /* ENABLE_CJSON */
+
+// -----------------------------
 // Main Program
 // -----------------------------
 
@@ -2263,6 +2661,45 @@ int main(int argc, char *argv[])
         {
             force_smaps = 1;
         }
+        else if (!strncmp(argv[i], "--fmt", 5))
+        { // output format: csv or json
+            if (i + 1 < argc)
+            {
+                i++;
+                if (!strncmp(argv[i], "json", 5))
+                {
+#ifdef ENABLE_CJSON
+                    g_reportFormat = REPORT_JSON;
+#else
+                    printf("Warning: --fmt json requested but cJSON support not compiled in.\n");
+                    printf("         Build with --enable-cjson flag. Falling back to CSV.\n");
+                    g_reportFormat = REPORT_CSV;
+#endif
+                }
+                else if (!strncmp(argv[i], "csv", 4))
+                {
+                    g_reportFormat = REPORT_CSV;
+                }
+                else
+                {
+                    PRINT_MUST("Error: Unsupported format '%s'. Supported: csv, json.\n", argv[i]);
+                    printHelpAndUsage(argv, false);
+                }
+            }
+            else
+            {
+                PRINT_MUST("Error: Missing format value after %s\n", argv[i]);
+                printHelpAndUsage(argv, false);
+            }
+        }
+        else if (!strncmp(argv[i], "--json-pretty", 13))
+        {
+#ifdef ENABLE_CJSON
+            g_jsonPrettyPrint = true;
+#else
+            printf("Warning: --json-pretty ignored (cJSON support not compiled in).\n");
+#endif
+        }
         else
         {
             PRINT_ERROR("Error: Unrecognized argument '%s'\n", argv[i]);
@@ -2291,7 +2728,16 @@ int main(int argc, char *argv[])
         strcpy(gSMAPS_OR_ROLLUP, "smaps_rollup");
         getProcessInfos_ptr = getProcessInfos_rollup;
     }
-    includeKthreads = enableKThreads; // Cascade to global for all code paths
+
+#ifdef ENABLE_CJSON
+    if (g_reportFormat == REPORT_JSON) {
+        if (loadCjson() != 0) {
+            /* loadCjson() already set g_reportFormat = REPORT_CSV and printed the reason */
+            PRINT_MUST("JSON: Continuing with CSV fallback.\n");
+        }
+    }
+#endif
+
     if (isConfigPresent)
     {
 #ifdef TESTME
@@ -2319,5 +2765,9 @@ int main(int argc, char *argv[])
         collectSystemMemoryStats(enableKThreads, out_dir, final_iterations, final_interval, long_run);
 #endif
     }
+
+#ifdef ENABLE_CJSON
+    unloadCjson();
+#endif
     return 0;
 }
