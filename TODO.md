@@ -7,7 +7,7 @@
   - Check `/proc/pagetypeinfo` first; if present, collect and dump to CSV/JSON.
   - Fallback to `/proc/buddyinfo`; if present, collect and dump to CSV/JSON.
   - If neither exists, don't log any data.
-- [ ] Change default output directory to `/opt/meminsight` (keep `/tmp/meminsight` as configurable fallback).
+- [x] Change default output directory to `/opt/meminsight` (keep `/tmp/meminsight` as configurable fallback).
 - [ ] Add upload cadence logic to trigger upload through external script/binary based on configured intervals.
 - [ ] Document meminsight execution flow for both manual and automatic/systemd runs.
 - [ ] Reorganize code and introduce centralized macros/constants for modular configuration.
