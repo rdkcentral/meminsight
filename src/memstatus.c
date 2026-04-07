@@ -135,6 +135,8 @@ char gSMAPS_OR_ROLLUP[] = "smaps_rollup";
 unsigned isTestMode = 0;
 char testSmap[128];
 char testMeminfo[128];
+char testBuddyinfo[128];
+char testPagetypeinfo[128];
 Process_Info processInfoTest;
 static int unitTestFailed = 0;
 #endif
@@ -362,6 +364,366 @@ const char *getKernelVersion(void)
     return kernelVer;
 }
 
+static void trimTrailingWhitespace(char *str)
+{
+    size_t len = strlen(str);
+    while (len > 0 && (str[len - 1] == '\n' || str[len - 1] == '\r' || str[len - 1] == ' ' || str[len - 1] == '\t')) {
+        str[len - 1] = '\0';
+        len--;
+    }
+}
+
+static void trimLeadingWhitespace(char **str)
+{
+    while (**str == ' ' || **str == '\t') {
+        (*str)++;
+    }
+}
+
+static int parseUnsignedSeries(const char *start, unsigned long *values, int maxValues)
+{
+    int count = 0;
+    const char *p = start;
+    while (*p && count < maxValues) {
+        while (*p == ' ' || *p == '\t')
+            p++;
+        if (*p == '\0' || *p == '\n' || *p == '\r')
+            break;
+
+        char *end = NULL;
+        unsigned long v = strtoul(p, &end, 10);
+        if (end == p)
+            break;
+        values[count++] = v;
+        p = end;
+    }
+    return count;
+}
+
+static int writePagetypeInfoCSV(FILE *out)
+{
+#define FRAG_MAX_ORDERS 32
+    FILE *fp = NULL;
+#ifdef TESTME
+    if (isTestMode) {
+        if (!testPagetypeinfo[0])
+            return -1;
+        fp = fopen(testPagetypeinfo, "r");
+    } else {
+        fp = fopen(PGT_FILE, "r");
+    }
+#else
+    fp = fopen(PGT_FILE, "r");
+#endif
+    if (!fp)
+        return -1;
+
+    char line[1024];
+    int pageBlockOrder = -1;
+    int pagesPerBlock = -1;
+    int rowCount = 0;
+    int headerCols = 0;
+    bool headerWritten = false;
+
+    fprintf(out, "\n\nFragmentation_PagetypeInfo:\n");
+    fprintf(out, "STAT,VALUE\n");
+
+    while (fgets(line, sizeof(line), fp)) {
+        if (pageBlockOrder < 0 && sscanf(line, "Page block order: %d", &pageBlockOrder) == 1)
+            continue;
+        if (pagesPerBlock < 0 && sscanf(line, "Pages per block: %d", &pagesPerBlock) == 1)
+            continue;
+
+        unsigned node = 0;
+        char zone[64] = {0};
+        char type[64] = {0};
+        int consumed = 0;
+        int matched = sscanf(line, "Node %u, zone %63[^,], type %63s %n", &node, zone, type, &consumed);
+        if (matched != 3 || consumed <= 0)
+            continue;
+
+        char *zonePtr = zone;
+        trimLeadingWhitespace(&zonePtr);
+        trimTrailingWhitespace(zonePtr);
+
+        unsigned long values[FRAG_MAX_ORDERS] = {0};
+        int valueCount = parseUnsignedSeries(line + consumed, values, FRAG_MAX_ORDERS);
+        if (valueCount <= 0)
+            continue;
+
+        if (!headerWritten) {
+            if (pageBlockOrder >= 0)
+                fprintf(out, "page_block_order,%d\n", pageBlockOrder);
+            if (pagesPerBlock >= 0)
+                fprintf(out, "pages_per_block,%d\n", pagesPerBlock);
+
+            fprintf(out, "\nNODE,ZONE,TYPE");
+            headerCols = valueCount;
+            for (int i = 0; i < headerCols; i++)
+                fprintf(out, ",ORDER_%d", i);
+            fprintf(out, "\n");
+            headerWritten = true;
+        }
+
+        fprintf(out, "%u,%s,%s", node, zonePtr, type);
+        for (int i = 0; i < headerCols; i++) {
+            unsigned long v = (i < valueCount) ? values[i] : 0;
+            fprintf(out, ",%lu", v);
+        }
+        fprintf(out, "\n");
+        rowCount++;
+    }
+
+    if (!headerWritten)
+        fprintf(out, "parse_status,no_rows_parsed\n");
+
+    fclose(fp);
+    return rowCount;
+#undef FRAG_MAX_ORDERS
+}
+
+static int writeBuddyinfoCSV(FILE *out)
+{
+#define FRAG_MAX_ORDERS 32
+    FILE *fp = NULL;
+#ifdef TESTME
+    if (isTestMode) {
+        if (!testBuddyinfo[0])
+            return -1;
+        fp = fopen(testBuddyinfo, "r");
+    } else {
+        fp = fopen(BUDDYINFO_FILE, "r");
+    }
+#else
+    fp = fopen(BUDDYINFO_FILE, "r");
+#endif
+    if (!fp)
+        return -1;
+
+    char line[1024];
+    int rowCount = 0;
+    int headerCols = 0;
+    bool headerWritten = false;
+
+    fprintf(out, "\n\nFragmentation_BuddyInfo:\n");
+
+    while (fgets(line, sizeof(line), fp)) {
+        unsigned node = 0;
+        char zone[64] = {0};
+        int consumed = 0;
+
+        int matched = sscanf(line, "Node %u, zone %63s %n", &node, zone, &consumed);
+        if (matched != 2 || consumed <= 0)
+            continue;
+
+        unsigned long values[FRAG_MAX_ORDERS] = {0};
+        int valueCount = parseUnsignedSeries(line + consumed, values, FRAG_MAX_ORDERS);
+        if (valueCount <= 0)
+            continue;
+
+        if (!headerWritten) {
+            headerCols = valueCount;
+            fprintf(out, "NODE,ZONE");
+            for (int i = 0; i < headerCols; i++)
+                fprintf(out, ",ORDER_%d", i);
+            fprintf(out, "\n");
+            headerWritten = true;
+        }
+
+        fprintf(out, "%u,%s", node, zone);
+        for (int i = 0; i < headerCols; i++) {
+            unsigned long v = (i < valueCount) ? values[i] : 0;
+            fprintf(out, ",%lu", v);
+        }
+        fprintf(out, "\n");
+        rowCount++;
+    }
+
+    if (!headerWritten)
+        fprintf(out, "parse_status,no_rows_parsed\n");
+
+    fclose(fp);
+    return rowCount;
+#undef FRAG_MAX_ORDERS
+}
+
+void saveFragmentationInfo(FILE *out)
+{
+    if (!out)
+        return;
+
+    if (writePagetypeInfoCSV(out) >= 0)
+        return;
+
+    (void)writeBuddyinfoCSV(out);
+}
+
+#ifdef ENABLE_CJSON
+static int addPagetypeInfoJSON(cJSON_t *fragRoot)
+{
+#define FRAG_MAX_ORDERS 32
+    FILE *fp = NULL;
+#ifdef TESTME
+    if (isTestMode) {
+        if (!testPagetypeinfo[0])
+            return -1;
+        fp = fopen(testPagetypeinfo, "r");
+    } else {
+        fp = fopen(PGT_FILE, "r");
+    }
+#else
+    fp = fopen(PGT_FILE, "r");
+#endif
+    if (!fp)
+        return -1;
+
+    cJSON_t *rows = g_cjson.CreateArray();
+    if (!rows) {
+        fclose(fp);
+        return -1;
+    }
+
+    char line[1024];
+    int pageBlockOrder = -1;
+    int pagesPerBlock = -1;
+    int rowCount = 0;
+
+    while (fgets(line, sizeof(line), fp)) {
+        if (pageBlockOrder < 0 && sscanf(line, "Page block order: %d", &pageBlockOrder) == 1)
+            continue;
+        if (pagesPerBlock < 0 && sscanf(line, "Pages per block: %d", &pagesPerBlock) == 1)
+            continue;
+
+        unsigned node = 0;
+        char zone[64] = {0};
+        char type[64] = {0};
+        int consumed = 0;
+        int matched = sscanf(line, "Node %u, zone %63[^,], type %63s %n", &node, zone, type, &consumed);
+        if (matched != 3 || consumed <= 0)
+            continue;
+
+        char *zonePtr = zone;
+        trimLeadingWhitespace(&zonePtr);
+        trimTrailingWhitespace(zonePtr);
+
+        unsigned long values[FRAG_MAX_ORDERS] = {0};
+        int valueCount = parseUnsignedSeries(line + consumed, values, FRAG_MAX_ORDERS);
+        if (valueCount <= 0)
+            continue;
+
+        cJSON_t *row = g_cjson.CreateObject();
+        if (!row)
+            continue;
+
+        g_cjson.AddNumberToObject(row, "node", (double)node);
+        g_cjson.AddStringToObject(row, "zone", zonePtr);
+        g_cjson.AddStringToObject(row, "type", type);
+        for (int i = 0; i < valueCount; i++) {
+            char key[24];
+            snprintf(key, sizeof(key), "order_%d", i);
+            g_cjson.AddNumberToObject(row, key, (double)values[i]);
+        }
+        g_cjson.AddItemToArray(rows, row);
+        rowCount++;
+    }
+
+    fclose(fp);
+
+    if (pageBlockOrder >= 0)
+        g_cjson.AddNumberToObject(fragRoot, "page_block_order", (double)pageBlockOrder);
+    if (pagesPerBlock >= 0)
+        g_cjson.AddNumberToObject(fragRoot, "pages_per_block", (double)pagesPerBlock);
+    g_cjson.AddNumberToObject(fragRoot, "row_count", (double)rowCount);
+    g_cjson.AddItemToObject(fragRoot, "rows", rows);
+    return 0;
+#undef FRAG_MAX_ORDERS
+}
+
+static int addBuddyinfoJSON(cJSON_t *fragRoot)
+{
+#define FRAG_MAX_ORDERS 32
+    FILE *fp = NULL;
+#ifdef TESTME
+    if (isTestMode) {
+        if (!testBuddyinfo[0])
+            return -1;
+        fp = fopen(testBuddyinfo, "r");
+    } else {
+        fp = fopen(BUDDYINFO_FILE, "r");
+    }
+#else
+    fp = fopen(BUDDYINFO_FILE, "r");
+#endif
+    if (!fp)
+        return -1;
+
+    cJSON_t *rows = g_cjson.CreateArray();
+    if (!rows) {
+        fclose(fp);
+        return -1;
+    }
+
+    char line[1024];
+    int rowCount = 0;
+
+    while (fgets(line, sizeof(line), fp)) {
+        unsigned node = 0;
+        char zone[64] = {0};
+        int consumed = 0;
+        int matched = sscanf(line, "Node %u, zone %63s %n", &node, zone, &consumed);
+        if (matched != 2 || consumed <= 0)
+            continue;
+
+        unsigned long values[FRAG_MAX_ORDERS] = {0};
+        int valueCount = parseUnsignedSeries(line + consumed, values, FRAG_MAX_ORDERS);
+        if (valueCount <= 0)
+            continue;
+
+        cJSON_t *row = g_cjson.CreateObject();
+        if (!row)
+            continue;
+
+        g_cjson.AddNumberToObject(row, "node", (double)node);
+        g_cjson.AddStringToObject(row, "zone", zone);
+        for (int i = 0; i < valueCount; i++) {
+            char key[24];
+            snprintf(key, sizeof(key), "order_%d", i);
+            g_cjson.AddNumberToObject(row, key, (double)values[i]);
+        }
+        g_cjson.AddItemToArray(rows, row);
+        rowCount++;
+    }
+
+    fclose(fp);
+    g_cjson.AddNumberToObject(fragRoot, "row_count", (double)rowCount);
+    g_cjson.AddItemToObject(fragRoot, "rows", rows);
+    return 0;
+#undef FRAG_MAX_ORDERS
+}
+
+void saveFragmentationInfo_JSON(cJSON_t *root)
+{
+    if (!root)
+        return;
+
+    cJSON_t *frag = g_cjson.CreateObject();
+    if (!frag)
+        return;
+
+    if (addPagetypeInfoJSON(frag) == 0) {
+        g_cjson.AddStringToObject(frag, "source", "pagetypeinfo");
+        g_cjson.AddStringToObject(frag, "path", PGT_FILE);
+    } else if (addBuddyinfoJSON(frag) == 0) {
+        g_cjson.AddStringToObject(frag, "source", "buddyinfo");
+        g_cjson.AddStringToObject(frag, "path", BUDDYINFO_FILE);
+    } else {
+        g_cjson.AddStringToObject(frag, "source", "none");
+    }
+
+    g_cjson.AddItemToObject(root, "fragmentation", frag);
+}
+#endif
+
 void collectBandwidthData(FILE *out)
 {
     if (!out)
@@ -486,7 +848,7 @@ size_t getMacAddress(const char *iface, char *macAddress, size_t szBufSize)
     ifr.ifr_addr.sa_family = AF_INET;
     if (ioctl(fd, SIOCGIFHWADDR, &ifr) == -1)
     {
-        PRINT_ERROR("ioctl SIOCGIFHWADDR failed: %s\n", strerror(errno));
+        PRINT_ERROR("ioctl SIOCGIFHWADDR failed: %s (errno=%d)\n", strerror(errno), errno);
         close(fd);
         return 0;
     }
@@ -516,12 +878,23 @@ int getPIDByProcessName(const char *procName, unsigned int *pidOut)
     DIR *proc = opendir(PROC_DIR);
     if (!proc)
         return 0;
+    
+    if (!procName || !pidOut) {
+        closedir(proc);
+        return 0;
+    }
+    
     struct dirent *entry;
     char commPath[PATH_MAX];
     char nameBuf[PATH_MAX];
     int found = 0;
-    while ((entry = readdir(proc)) != NULL)
+    size_t procNameLen = strlen(procName);
+    int maxEntries = 10000;  // Prevent unbounded iteration
+    int entryCount = 0;
+    
+    while ((entry = readdir(proc)) != NULL && entryCount < maxEntries)
     {
+        entryCount++;
         if (entry->d_type != DT_DIR)
             continue;
         if (!isPID(entry->d_name))
@@ -536,7 +909,7 @@ int getPIDByProcessName(const char *procName, unsigned int *pidOut)
             char *nl = strchr(nameBuf, '\n');
             if (nl)
                 *nl = '\0';
-            if (strncmp(nameBuf, procName, strlen(procName) + 1) == 0)
+            if (strncmp(nameBuf, procName, procNameLen + 1) == 0)
             {
                 *pidOut = (unsigned int)atoi(entry->d_name);
                 found = 1;
@@ -611,6 +984,12 @@ int fillProcessStatFields(unsigned pid, Process_Info *info, unsigned *flagsOut)
  */
 int parseConfig(const char *configPath, Config_Data *config)
 {
+    if (!configPath || !config)
+    {
+        PRINT_ERROR("Invalid config input\n");
+        return -1;
+    }
+
     const char *dot = strrchr(configPath, '.');
     if (!dot || (strncmp(dot, ".conf", 6) != 0))
     {
@@ -655,13 +1034,31 @@ int parseConfig(const char *configPath, Config_Data *config)
                     count++;
             config->whiteListCount = count;
             config->whitelist = (char **)calloc(count, sizeof(char *));
+            if (!config->whitelist)
+            {
+                PRINT_ERROR("Failed to allocate whitelist for %d entries\n", count);
+                fclose(fp);
+                return -1;
+            }
             int idx = 0;
+            int j = 0;
             char *tok = strtok(val, ",");
             while (tok && idx < count)
             {
                 while (*tok == ' ')
                     tok++;
                 config->whitelist[idx++] = strdup(tok);
+                if (!config->whitelist[idx - 1])
+                {
+                    PRINT_ERROR("Failed to allocate whitelist entry\n");
+                    for (j = 0; j < idx - 1; j++)
+                        free(config->whitelist[j]);
+                    free(config->whitelist);
+                    config->whitelist = NULL;
+                    config->whiteListCount = 0;
+                    fclose(fp);
+                    return -1;
+                }
                 tok = strtok(NULL, ",");
             }
         }
@@ -1749,7 +2146,8 @@ void printHelpAndUsage(char *argv[], bool moreInfo)
     printf("  -s, --smaps               Force /proc/<pid>/smaps (disable auto smaps_rollup detection)\n");
     printf("  -h, --help                            Show this help message and exit\n");
 #ifdef TESTME
-    printf("  -t, --test <smapsFile> <meminfoFile>  Run in test mode using supplied sample files\n\n");
+    printf("  -t, --test <smapsFile> <meminfoFile> [buddyinfoFile] [pagetypeinfoFile]\n");
+    printf("                                      Run in test mode using supplied sample files\n\n");
 #endif
 #ifdef ENABLE_CJSON
     printf("      --fmt <format>                    Specify report format: csv (default) or json\n");
@@ -1773,7 +2171,8 @@ void printHelpAndUsage(char *argv[], bool moreInfo)
         printf("  %s -c myconfig%s -a --interval 10 --iterations 5\n", argv[0], CONFIG_EXTN);
         printf("  %s --output /var/log/ --iterations 3\n", argv[0]);
 #ifdef TESTME
-        printf("  %s --test ../tst/smaps.txt ../tst/meminfo.txt\n\n", argv[0]);
+    printf("  %s --test ../tst/smaps.txt ../tst/meminfo.txt\n", argv[0]);
+    printf("  %s --test ../tst/smaps.txt ../tst/meminfo.txt ../tst/buddyinfo.txt ../tst/pagetypeinfo.txt\n\n", argv[0]);
 #endif
 
         printf("Sample config file:\n");
@@ -1821,6 +2220,9 @@ int collectSystemMemoryStats(bool enableKThreads, const char *outDir, int iterat
                  setup.outputDir, setup.mac, timestamp, iter + 1, setup.reportFileName);
         PRINT_INFO("Capturing Process stats into: %s\n", outputfile);
 
+        /* Recalculate uptime fresh on each iteration. */
+        const char *uptime = getSystemUptime();
+
 #ifdef ENABLE_CJSON
         if (g_reportFormat == REPORT_JSON) {
             g_rootObject = g_cjson.CreateObject();
@@ -1832,7 +2234,7 @@ int collectSystemMemoryStats(bool enableKThreads, const char *outDir, int iterat
             g_cjson.AddStringToObject(g_rootObject, "mac_address",   setup.mac);
             g_cjson.AddStringToObject(g_rootObject, "timestamp",     ts);
             g_cjson.AddStringToObject(g_rootObject, "uptime",        uptime);
-            g_cjson.AddStringToObject(g_rootObject, "kernel_version", kernelVersion);
+            g_cjson.AddStringToObject(g_rootObject, "kernel_version", setup.kernelVersion);
             g_cjson.AddStringToObject(g_rootObject, "report_version", reportVersion);
         }
 #endif
@@ -1844,8 +2246,6 @@ int collectSystemMemoryStats(bool enableKThreads, const char *outDir, int iterat
                 PRINT_MUST("%s: Open failed, %d [%s]\n", outputfile, errno, strerror(errno));
                 return -1;
             }
-            /* Recalculate uptime fresh on each iteration */
-            const char *uptime = getSystemUptime();
             fprintf(output, "%s\n", CSV_META_HEADER);
             fprintf(output, "%s,%s,%s,%s,%s,%s\n\n", setup.fwName, setup.mac, ts, uptime, setup.kernelVersion, reportVersion);
         }
@@ -1921,6 +2321,7 @@ int collectSystemMemoryStats(bool enableKThreads, const char *outDir, int iterat
 
         if (g_reportFormat == REPORT_CSV) {
             saveMeminfo(output);
+            saveFragmentationInfo(output);
     #ifdef TESTME
             if (isTestMode && unitTestFailed) {
                 fclose(output);
@@ -1939,6 +2340,7 @@ int collectSystemMemoryStats(bool enableKThreads, const char *outDir, int iterat
 #ifdef ENABLE_CJSON
         else if (g_reportFormat == REPORT_JSON) {
             saveMeminfo_JSON(g_rootObject);
+            saveFragmentationInfo_JSON(g_rootObject);
             cJSON_t *processesArray = g_cjson.CreateArray();
             if (processesArray) {
                 writeProcessInfo_JSON(processesArray);
@@ -2087,6 +2489,7 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, int cli_iter
             fprintf(output, "%s\n", CSV_META_HEADER);
             fprintf(output, "%s,%s,%s,%s,%s,%s\n\n", setup.fwName, setup.mac, ts, uptime, setup.kernelVersion, reportVersion);
             saveMeminfo(output);
+            saveFragmentationInfo(output);
             fprintf(output, "\nPID,EXE,RSS,PSS,SHARED_CLEAN,PRIVATE_CLEAN,PRIVATE_DIRTY,SWAP_PSS,"
                             "MIN_FAULTS,MAJ_FAULTS,CPU_TIME\n");
         }
@@ -2168,6 +2571,7 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, int cli_iter
 #ifdef ENABLE_CJSON
         else if (g_reportFormat == REPORT_JSON) {
             saveMeminfo_JSON(g_rootObject);
+            saveFragmentationInfo_JSON(g_rootObject);
             cJSON_t *processesArray = g_cjson.CreateArray();
             if (processesArray) {
                 writeProcessInfo_JSON(processesArray);
@@ -2604,6 +3008,31 @@ int main(int argc, char *argv[])
                     if (testMapFd) {
                         fclose(testMapFd);
                         strncpy(testMeminfo, argv[i], 128);
+
+                        if ((i + 1) < argc && argv[i + 1][0] != '-') {
+                            i++;
+                            testMapFd = fopen(argv[i], "r");
+                            if (testMapFd) {
+                                fclose(testMapFd);
+                                strncpy(testBuddyinfo, argv[i], 128);
+                            } else {
+                                PRINT_ERROR("Test buddyinfo file %s open error %d [%s]\n", argv[i], errno, strerror(errno));
+                                printHelpAndUsage(argv, false);
+                            }
+                        }
+
+                        if ((i + 1) < argc && argv[i + 1][0] != '-') {
+                            i++;
+                            testMapFd = fopen(argv[i], "r");
+                            if (testMapFd) {
+                                fclose(testMapFd);
+                                strncpy(testPagetypeinfo, argv[i], 128);
+                            } else {
+                                PRINT_ERROR("Test pagetypeinfo file %s open error %d [%s]\n", argv[i], errno, strerror(errno));
+                                printHelpAndUsage(argv, false);
+                            }
+                        }
+
                         continue;
                     }
                     else {

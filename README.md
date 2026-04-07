@@ -33,9 +33,10 @@
 ### 🛠️ **Flexible Configuration**
 - **Process Whitelisting** - Monitor specific processes by name or PID
 - **Configurable Sampling** - Set iterations and intervals for data collection
-- **Multiple Output Formats** - CSV export with timestamps and metadata
+- **Multiple Output Formats** - CSV and JSON export with timestamps and metadata
 - **Kernel Thread Support** - Optional inclusion of kernel threads
 - **Long-running Mode** - Extended monitoring with automatic intervals
+- **Fragmentation Data Capture** - `/proc/pagetypeinfo` preferred with `/proc/buddyinfo` fallback
 
 ### 🔧 **Advanced Capabilities**
 - **Network Interface Detection** - Automatic MAC address retrieval
@@ -53,6 +54,9 @@
 # Run basic system-wide memory analysis
 ./meminsight
 
+# Enable JSON output (requires --enable-cjson at build time)
+./meminsight --fmt json --json-pretty --iterations 2 --interval 10
+
 # Run a finite capture (overrides defaults)
 ./meminsight --iterations 10 --interval 30
 
@@ -62,6 +66,65 @@
 # Write reports to a custom directory
 ./meminsight --output /tmp/memreports --iterations 3
 ```
+
+## 📊 Build & Testing Scripts
+
+MemInsight includes organized build and testing infrastructure in the `scripts/` directory:
+
+### Quick Build & Test
+
+```bash
+# Full build pipeline: compile, test, memory leak detection
+sh cov_build.sh --clean && \
+sh cov_build.sh --enable-cjson --test && \
+sh scripts/run_ut.sh && \
+sh scripts/build_memleak.sh && \
+sh scripts/detect_leak.sh -o /tmp/output -i 1 -I 0
+```
+
+### Build & Memory Leak Detection
+
+```bash
+# 1. Build meminsight with test features
+sh cov_build.sh --enable-cjson --test
+
+# 2. Build memleakutil (memory leak detection library)
+sh scripts/build_memleak.sh
+
+# 3. Run meminsight with leak detection instrumentation
+sh scripts/detect_leak.sh -o /tmp/output -i 1 --json-pretty
+
+# 4. View leak detection report
+cat /tmp/meminsight-leak-reports/leak_report_*.txt
+```
+
+### Available Scripts
+
+| Script | Purpose |
+|--------|---------|
+| `scripts/build_memleak.sh` | Clone and build memleakutil library for memory profiling |
+| `scripts/detect_leak.sh` | Run meminsight with LD_PRELOAD instrumentation for leak detection |
+| `scripts/README.md` | Complete documentation and troubleshooting guide |
+| `cov_build.sh` | Main autotools build wrapper (root-level for compatibility) |
+| `scripts/run_ut.sh` | Unit test runner for all test fixtures |
+
+**See [scripts/README.md](scripts/README.md) for complete documentation and environment variables.**
+
+## 📋 Code Audit & Hardening
+
+A comprehensive code audit has been performed identifying memory safety, resource management, and optimization improvements:
+
+📄 **[docs/CODE_AUDIT_AND_HARDENING.md](docs/CODE_AUDIT_AND_HARDENING.md)** - Complete findings including:
+- **3 CRITICAL resource leaks** (file handles, directory handles) with fixes
+- **7 High/Medium issues** (overflow risks, crash possibilities, missing checks)
+- **5 Low-severity optimizations** (code structure, performance)
+- **Remediation roadmap** with effort estimates
+- **Safe C programming patterns** and best practices
+
+**Status**: 
+- ✅ Code audit and findings complete
+- ⏳ CRITICAL fixes in progress (incremental, regression-safe)
+- ℹ️ Integrated memleakutil for runtime leak detection in CI/CD
 
 ## Development Setup
 
@@ -73,7 +136,7 @@ make
 
 # Run test fixtures (requires TESTME build)
 make clean && make CFLAGS="-DTESTME"
-./run_ut.sh
+sh scripts/run_ut.sh
 ```
 
 ## 🔨 Installation
@@ -113,16 +176,19 @@ meminsight [OPTIONS]
 OPTIONS:
    -a, --all                   Include kernel threads for process monitoring
    -c, --config FILE           Path to configuration file (must end with .conf)
-   -o, --output DIR            Output directory for generated CSV files (default: /tmp/meminsight)
+   -o, --output DIR            Output directory for generated reports (default: /opt/meminsight)
          --iterations N          Number of iterations to run (overrides config)
          --interval SECONDS      Seconds between iterations (overrides config)
-   -t, --test SMAPS MEMINFO     Run in test mode using supplied sample files (requires TESTME build)
+      --fmt FORMAT            Report format: csv (default) or json
+      --json-pretty           Pretty-print JSON output (only with --fmt json)
+   -t, --test SMAPS MEMINFO [BUDDYINFO] [PAGETYPEINFO]
+                               Run in test mode using supplied sample files (requires TESTME build)
    -h, --help                  Show help message and exit
 ```
 
 ### Default Behavior
 
-If you run `./meminsight` with no flags, it runs in a long-running mode (indefinite iterations) with a 15-minute interval and writes CSV reports under `/tmp/meminsight/`.
+If you run `./meminsight` with no flags, it runs in a long-running mode (indefinite iterations) with a 15-minute interval and writes CSV reports under `/opt/meminsight/`.
 
 To run a finite capture, specify `--iterations` and/or `--interval`.
 
@@ -159,10 +225,30 @@ log_level=INFO
 | Parameter | Description | Default Value | Example |
 |-----------|-------------|---------------|---------|
 | `process_whitelist` | Comma-separated list of process names/PIDs | All processes | `apache2,mysql,1234` |
-| `output_dir` | Directory for output files | `/tmp/meminsight` | `/var/log/monitoring` |
+| `output_dir` | Directory for output files | `/opt/meminsight` | `/var/log/monitoring` |
 | `iterations` | Number of sampling cycles | `1` | `10` |
 | `interval` | Seconds between samples | `5` | `60` |
 | `log_level` | Logging verbosity (parsed from config; current builds may not print logs unless debug is enabled) | `INFO` | `DEBUG`, `ERROR` |
+
+### JSON and Fragmentation Output
+
+- Build with JSON support:
+
+```bash
+./configure --enable-cjson
+make
+```
+
+- Run with JSON output:
+
+```bash
+./meminsight --fmt json --json-pretty --iterations 2 --interval 30
+```
+
+- Fragmentation collection behavior (both CSV and JSON):
+   - If `/proc/pagetypeinfo` is readable, collect and emit pagetype data.
+   - Else if `/proc/buddyinfo` is readable, collect and emit buddyinfo data.
+   - Else, skip fragmentation section for that iteration.
 
 ### Network Interface Configuration
 
@@ -199,11 +285,14 @@ echo "process_whitelist=systemd,NetworkManager,sshd" > services.conf
 # Build with test-mode enabled (required for -t/--test)
 make clean && make CFLAGS="-DTESTME"
 
-# Run using sample fixtures
+# Run using sample fixtures (smaps + meminfo)
 ./meminsight --test tst/1-non-zero-swap-entry/meminsight_testSmap.txt tst/1-non-zero-swap-entry/meminsight_testMeminfo.txt
 
+# Run using sample fixtures including fragmentation (buddyinfo + pagetypeinfo)
+./meminsight --test tst/1-non-zero-swap-entry/meminsight_testSmap.txt tst/1-non-zero-swap-entry/meminsight_testMeminfo.txt tst/6-buddyinfo-sample/meminsight_testBuddyinfo.txt tst/7-pagetypeinfo-sample/meminsight_testPagetypeinfo.txt
+
 # Run the repository unit-test runner (executes all fixtures and a negative test)
-./run_ut.sh
+sh scripts/run_ut.sh
 ```
 
 The `tst/` directory contains per-test subdirectories (e.g. `tst/1-non-zero-swap-entry/`) holding:
@@ -212,6 +301,10 @@ The `tst/` directory contains per-test subdirectories (e.g. `tst/1-non-zero-swap
 
 There is also a negative fixture in `tst/4-negative-duplicate-meminfo-field/` that is expected to fail in test mode and emit:
 `Test Failed..meminfoHeader vs tstmeminfoHeader ...`
+
+Fragmentation fixture coverage is also included via:
+- `tst/6-buddyinfo-sample/meminsight_testBuddyinfo.txt`
+- `tst/7-pagetypeinfo-sample/meminsight_testPagetypeinfo.txt`
 
 ## 🏗️ Build System
 
@@ -251,6 +344,12 @@ make install
 3. **Data Aggregation** - Calculate totals and averages
 4. **Sorting & Filtering** - Apply whitelist and sort by PSS
 5. **Output Generation** - Write CSV with metadata
+
+### Execution Flow (Manual and Automatic)
+
+1. Manual run (CLI): Parse CLI/config, initialize setup metadata, then iterate capture/write loop.
+2. Per iteration: capture timestamp/uptime, collect meminfo + fragmentation + process stats, then emit CSV/JSON.
+3. Automatic run (systemd): service starts `meminsight` with desired flags/config at boot; restart policy keeps collection resilient.
 
 ### Key Functions
 
@@ -298,6 +397,31 @@ EOF
 CPPFLAGS="-DDEVICE_IDENTIFIER=\"eth0\"" make clean && make
 ./meminsight --iterations 24 --interval 3600 --output /mnt/logs/
 ```
+
+## 📦 Integration Samples
+
+- Sample systemd unit file: `deploy/systemd/meminsight.service`
+- Sample Yocto recipe: `deploy/yocto/meminsight.bb`
+
+## 🤖 Agent Customization Layout
+
+The repository includes a project-scoped customization layout under `.github/`:
+
+- Workspace instruction: `.github/copilot-instructions.md`
+- File instructions: `.github/instructions/`
+- Agent modes: `.github/agents/`
+- Skills: `.github/skills/`
+
+Each directory includes a local README for short usage guidance.
+
+## 🧪 CI Workflows
+
+Workflows are intentionally split by responsibility:
+
+- `.github/workflows/native_full_build.yml`
+   - Build-only workflow using `cov_build.sh --clean` then `cov_build.sh --enable-cjson --test`
+- `.github/workflows/unit-test.yml`
+   - Builds with the same flags and runs fixture tests through `scripts/run_ut.sh`
 
 ## 🔧 Troubleshooting
 

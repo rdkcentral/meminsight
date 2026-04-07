@@ -1,0 +1,39 @@
+name: Unit Tests
+
+permissions:
+  contents: read
+
+on:
+  pull_request:
+    branches: [ develop ]
+    paths: ['**/*.c', '**/*.cpp', '**/*.cc', '**/*.cxx', '**/*.h', '**/*.hpp', '**/*.sh', 'configure.ac', 'Makefile.am', 'tst/**', '.github/workflows/**/*.yml']
+
+jobs:
+  meminsight-unit-tests:
+    name: Build and run meminsight unit tests
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/rdkcentral/docker-device-mgt-service-test/native-platform:latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          apt-get update
+          apt-get install -y autotools-dev autoconf automake pkg-config
+
+      - name: Clean build artifacts
+        run: |
+          sh cov_build.sh --clean
+
+      - name: Build test binary (cjson + test)
+        run: |
+          sh cov_build.sh --enable-cjson --test
+
+      - name: Run fixture tests
+        run: |
+          chmod +x scripts/run_ut.sh
+          sh scripts/run_ut.sh
+        shell: bash

@@ -90,7 +90,15 @@ This is used to ensure compatibility with older versions of the report parser. *
 #define MEMINFO_FILE PROC_DIR "/meminfo"
 #define UPTIME_FILE PROC_DIR "/uptime"
 #define BW_DDR_MODE_FILE "/sys/class/aml_ddr/mode"
+#ifndef BW_DDR_FILE
 #define BW_DDR_FILE "/sys/class/aml_ddr/bandwidth"
+#endif
+#ifndef BUDDYINFO_FILE
+#define BUDDYINFO_FILE PROC_DIR "/buddyinfo"
+#endif
+#ifndef PGT_FILE
+#define PGT_FILE PROC_DIR "/pagetypeinfo"
+#endif
 
 /* Default Macros */
 #define DEFAULT_FW_NAME "ACTIVEFW123"
@@ -190,6 +198,8 @@ extern bool g_jsonPrettyPrint;        // Pretty-print JSON when true
 extern unsigned isTestMode;
 extern char testSmap[128];
 extern char testMeminfo[128];
+extern char testBuddyinfo[128];
+extern char testPagetypeinfo[128];
 extern Process_Info processInfoTest;
 void checkAndFree();
 void testList();
@@ -206,6 +216,7 @@ int getProcessInfos(unsigned pid);
 void printHelp(char *argv[]);
 void printHelpAndUsage(char *argv[], bool moreInfo);
 void saveMeminfo(FILE *out);
+void saveFragmentationInfo(FILE *out);
 void collectBandwidthData(FILE *out);
 int getPropertyFromFile(const char *filename, const char *property, char *propertyValue, size_t propertyValueLen);
 size_t getMacAddress(const char *iface, char *macAddress, size_t szBufSize);
@@ -243,6 +254,7 @@ typedef struct cJSON_s {
  * No cjson/cJSON.h include is needed at build time.
  */
 void saveMeminfo_JSON(cJSON_t *root);
+void saveFragmentationInfo_JSON(cJSON_t *root);
 void writeProcessInfo_JSON(cJSON_t *processesArray);
 int writeJSONToFile(const char *filepath, const SetupInfo *setup);
 #endif

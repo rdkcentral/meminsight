@@ -59,9 +59,9 @@ while [ "$i" -le "$NUM_TESTS" ]; do
     echo "------------------------------------------"
     echo "Test $i: $DESC"
     echo "------------------------------------------"
-    echo "Command: $MEM_BIN -t $SMAP_FILE $MEMINFO_FILE"
+    echo "Command: $MEM_BIN -o /tmp/meminsight -t $SMAP_FILE $MEMINFO_FILE"
 
-    if $MEM_BIN -t "$SMAP_FILE" "$MEMINFO_FILE"; then
+    if $MEM_BIN -o /tmp/meminsight -t "$SMAP_FILE" "$MEMINFO_FILE"; then
         echo "✓ Test $i PASSED"
         echo ""
         echo "Output file contents:"
@@ -86,8 +86,62 @@ while [ "$i" -le "$NUM_TESTS" ]; do
     i=$((i + 1))
 done
 
+# Fragmentation parsing test 1: pagetypeinfo preferred when both files are provided
+FRAG_DESC1="Test 6: Fragmentation pagetypeinfo preferred"
+FRAG_SMAP_FILE="tst/1-non-zero-swap-entry/meminsight_testSmap.txt"
+FRAG_MEMINFO_FILE="tst/1-non-zero-swap-entry/meminsight_testMeminfo.txt"
+FRAG_BUDDY_FILE="tst/6-buddyinfo-sample/meminsight_testBuddyinfo.txt"
+FRAG_PGT_FILE="tst/7-pagetypeinfo-sample/meminsight_testPagetypeinfo.txt"
+
+echo "------------------------------------------"
+echo "$FRAG_DESC1"
+echo "------------------------------------------"
+echo "Command: $MEM_BIN -o /tmp/meminsight -t $FRAG_SMAP_FILE $FRAG_MEMINFO_FILE $FRAG_BUDDY_FILE $FRAG_PGT_FILE"
+
+rm -rf /tmp/meminsight/*.csv
+
+if $MEM_BIN -o /tmp/meminsight -t "$FRAG_SMAP_FILE" "$FRAG_MEMINFO_FILE" "$FRAG_BUDDY_FILE" "$FRAG_PGT_FILE"; then
+    CSV_FILE=$(ls /tmp/meminsight/*.csv 2>/dev/null | head -n 1)
+    if [ -n "$CSV_FILE" ] && grep -F "Fragmentation_PagetypeInfo:" "$CSV_FILE" >/dev/null 2>&1; then
+        echo "✓ $FRAG_DESC1 PASSED"
+    else
+        echo "✗ $FRAG_DESC1 FAILED (pagetypeinfo section missing)"
+        [ -n "$CSV_FILE" ] && cat "$CSV_FILE"
+        TEST_FAILED=$((TEST_FAILED + 1))
+    fi
+else
+    echo "✗ $FRAG_DESC1 FAILED (command execution failed)"
+    TEST_FAILED=$((TEST_FAILED + 1))
+fi
+echo ""
+
+# Fragmentation parsing test 2: buddyinfo fallback when pagetypeinfo fixture is omitted
+FRAG_DESC2="Test 7: Fragmentation buddyinfo fallback"
+
+echo "------------------------------------------"
+echo "$FRAG_DESC2"
+echo "------------------------------------------"
+echo "Command: $MEM_BIN -o /tmp/meminsight -t $FRAG_SMAP_FILE $FRAG_MEMINFO_FILE $FRAG_BUDDY_FILE"
+
+rm -rf /tmp/meminsight/*.csv
+
+if $MEM_BIN -o /tmp/meminsight -t "$FRAG_SMAP_FILE" "$FRAG_MEMINFO_FILE" "$FRAG_BUDDY_FILE"; then
+    CSV_FILE=$(ls /tmp/meminsight/*.csv 2>/dev/null | head -n 1)
+    if [ -n "$CSV_FILE" ] && grep -F "Fragmentation_BuddyInfo:" "$CSV_FILE" >/dev/null 2>&1; then
+        echo "✓ $FRAG_DESC2 PASSED"
+    else
+        echo "✗ $FRAG_DESC2 FAILED (buddyinfo section missing)"
+        [ -n "$CSV_FILE" ] && cat "$CSV_FILE"
+        TEST_FAILED=$((TEST_FAILED + 1))
+    fi
+else
+    echo "✗ $FRAG_DESC2 FAILED (command execution failed)"
+    TEST_FAILED=$((TEST_FAILED + 1))
+fi
+echo ""
+
 # Negative test 1: intentionally malformed meminfo fixture (duplicate needed field)
-NEG_DESC="Test 4 (Negative): meminfo data failure"
+NEG_DESC="Test 8 (Negative): meminfo data failure"
 NEG_SMAP_FILE="tst/1-non-zero-swap-entry/meminsight_testSmap.txt"
 NEG_MEMINFO_FILE="tst/4-negative-duplicate-meminfo-field/meminsight_testMeminfo.txt"
 NEG_LOG_FILE="/tmp/meminsight/negative_test.log"
@@ -95,11 +149,11 @@ NEG_LOG_FILE="/tmp/meminsight/negative_test.log"
 echo "------------------------------------------"
 echo "$NEG_DESC"
 echo "------------------------------------------"
-echo "Command: $MEM_BIN -t $NEG_SMAP_FILE $NEG_MEMINFO_FILE"
+echo "Command: $MEM_BIN -o /tmp/meminsight -t $NEG_SMAP_FILE $NEG_MEMINFO_FILE"
 
 rm -rf /tmp/meminsight/*.csv
 
-$MEM_BIN -t "$NEG_SMAP_FILE" "$NEG_MEMINFO_FILE" >"$NEG_LOG_FILE" 2>&1
+$MEM_BIN -o /tmp/meminsight -t "$NEG_SMAP_FILE" "$NEG_MEMINFO_FILE" >"$NEG_LOG_FILE" 2>&1
 RC=$?
 
 if [ "$RC" -eq 0 ]; then
@@ -121,7 +175,7 @@ fi
 echo ""
 
 # Negative test 2: duplicate smap field triggers failure
-NEG_DESC2="Test 5 (Negative): smap data failure"
+NEG_DESC2="Test 9 (Negative): smap data failure"
 NEG_SMAP_FILE2="tst/5-negative-duplicate-smaps-field/meminsight_testSmap.txt"
 NEG_MEMINFO_FILE2="tst/1-non-zero-swap-entry/meminsight_testMeminfo.txt"
 NEG_LOG_FILE2="/tmp/meminsight/negative_test2.log"
@@ -129,11 +183,11 @@ NEG_LOG_FILE2="/tmp/meminsight/negative_test2.log"
 echo "------------------------------------------"
 echo "$NEG_DESC2"
 echo "------------------------------------------"
-echo "Command: $MEM_BIN -t $NEG_SMAP_FILE2 $NEG_MEMINFO_FILE2"
+echo "Command: $MEM_BIN -o /tmp/meminsight -t $NEG_SMAP_FILE2 $NEG_MEMINFO_FILE2"
 
 rm -rf /tmp/meminsight/*.csv
 
-$MEM_BIN -t "$NEG_SMAP_FILE2" "$NEG_MEMINFO_FILE2" >"$NEG_LOG_FILE2" 2>&1
+$MEM_BIN -o /tmp/meminsight -t "$NEG_SMAP_FILE2" "$NEG_MEMINFO_FILE2" >"$NEG_LOG_FILE2" 2>&1
 RC=$?
 
 if [ "$RC" -eq 0 ]; then
