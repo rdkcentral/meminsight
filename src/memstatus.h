@@ -228,7 +228,7 @@ int isPID(const char *str);
 int getPIDByProcessName(const char *procName, unsigned int *pidOut);
 int parseConfig(const char *configFile, Config_Data *config);
 int collectSystemMemoryStats(bool enableKThreads, const char *outDir, int iterations, int interval, bool long_run);
-int handleConfigMode(const char *confFile, const char *cli_out_dir, int cli_iterations, int cli_interval, bool enableKThreads, bool long_run);
+int handleConfigMode(const char *confFile, const char *cli_out_dir, bool cli_output_set, int cli_iterations, int cli_interval, bool enableKThreads, bool long_run);
 int fillProcessStatFields(unsigned pid, Process_Info *info, unsigned *flagsOut);
 
 #ifdef ENABLE_CJSON

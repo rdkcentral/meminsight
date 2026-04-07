@@ -1123,6 +1123,20 @@ void writeProcessInfo(unsigned noOfPids, FILE *output)
     }
 }
 
+static void freeProcessInfoList(void)
+{
+    Process_Info *tmp = headProcessInfo;
+    Process_Info *tofree;
+
+    while (tmp)
+    {
+        tofree = tmp;
+        tmp = tmp->next;
+        free(tofree);
+    }
+    headProcessInfo = NULL;
+}
+
 /**
  * Inserts a new process info node into the linked list, sorted by descending
  * pssTotal.
@@ -2352,10 +2366,15 @@ int collectSystemMemoryStats(bool enableKThreads, const char *outDir, int iterat
             saveMeminfo_JSON(g_rootObject);
             saveFragmentationInfo_JSON(g_rootObject);
             cJSON_t *processesArray = g_cjson.CreateArray();
-            if (processesArray) {
-                writeProcessInfo_JSON(processesArray);
-                g_cjson.AddItemToObject(g_rootObject, "processes", processesArray);
+            if (!processesArray) {
+                PRINT_ERROR("Failed to create JSON processes array\n");
+                freeProcessInfoList();
+                g_cjson.Delete(g_rootObject);
+                g_rootObject = NULL;
+                return -1;
             }
+            writeProcessInfo_JSON(processesArray);
+            g_cjson.AddItemToObject(g_rootObject, "processes", processesArray);
             if (writeJSONToFile(outputfile, &setup) != 0) {
                 PRINT_ERROR("Failed to write JSON output file: %s\n", outputfile);
                 return -1;
@@ -2377,7 +2396,7 @@ int collectSystemMemoryStats(bool enableKThreads, const char *outDir, int iterat
     return 0;
 }
 
-int handleConfigMode(const char *confFile, const char *cli_out_dir, int cli_iterations, int cli_interval, bool enableKThreads, bool long_run)
+int handleConfigMode(const char *confFile, const char *cli_out_dir, bool cli_output_set, int cli_iterations, int cli_interval, bool enableKThreads, bool long_run)
 {
     Config_Data config = {0};
     if (parseConfig(confFile, &config) != 0)
@@ -2387,7 +2406,7 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, int cli_iter
     }
 
     // Output directory: CLI > config > default
-    const char *final_out_dir = (cli_out_dir[0] && strncmp(cli_out_dir, DEFAULT_OUT_DIR, strlen(DEFAULT_OUT_DIR) + 1) != 0)
+    const char *final_out_dir = cli_output_set
                                     ? cli_out_dir
                                     : (config.outputDir[0] ? config.outputDir : DEFAULT_OUT_DIR);
 
@@ -2554,8 +2573,31 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, int cli_iter
                     PRINT_ERROR("Failed to get process info for PID %u\n", pid);
                 }
             }
-            writeProcessInfo(actualCount, output);
-            headProcessInfo = NULL; // Reset for next iteration
+            if (g_reportFormat == REPORT_CSV) {
+                writeProcessInfo(actualCount, output);
+            }
+#ifdef ENABLE_CJSON
+            else if (g_reportFormat == REPORT_JSON) {
+                cJSON_t *processesArray = g_cjson.CreateArray();
+                if (!processesArray) {
+                    PRINT_ERROR("Failed to create JSON processes array\n");
+                    freeProcessInfoList();
+                    if (g_rootObject) {
+                        g_cjson.Delete(g_rootObject);
+                        g_rootObject = NULL;
+                    }
+                    for (unsigned j = 0; j < config.whiteListCount; j++)
+                        if (config.whitelist[j]) free(config.whitelist[j]);
+                    if (config.whitelist) free(config.whitelist);
+                    return -1;
+                }
+                writeProcessInfo_JSON(processesArray);
+                g_cjson.AddItemToObject(g_rootObject, "processes", processesArray);
+            }
+#endif
+            else {
+                freeProcessInfoList();
+            }
         }
         else
         {
@@ -2582,11 +2624,6 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, int cli_iter
         else if (g_reportFormat == REPORT_JSON) {
             saveMeminfo_JSON(g_rootObject);
             saveFragmentationInfo_JSON(g_rootObject);
-            cJSON_t *processesArray = g_cjson.CreateArray();
-            if (processesArray) {
-                writeProcessInfo_JSON(processesArray);
-                g_cjson.AddItemToObject(g_rootObject, "processes", processesArray);
-            }
             if (writeJSONToFile(outputFilePath, &setup) != 0) {
                 PRINT_ERROR("Failed to write JSON output file: %s\n", outputFilePath);
                 for (unsigned j = 0; j < config.whiteListCount; j++)
@@ -2958,6 +2995,7 @@ int main(int argc, char *argv[])
     bool enableKThreads = false;
     bool isSystemWide = true;
     bool long_run = true;
+    bool cli_output_set = false;
     char confFile[PATH_MAX] = {0};
     char out_dir[PATH_MAX] = DEFAULT_OUT_DIR;
     int cli_iterations = -1;
@@ -3058,6 +3096,7 @@ int main(int argc, char *argv[])
             if (i + 1 < argc)
             {
                 strncpy(out_dir, argv[i + 1], PATH_MAX - 1);
+                cli_output_set = true;
                 i++; // skip next arg (output directory)
             }
             else
@@ -3178,9 +3217,9 @@ int main(int argc, char *argv[])
     if (isConfigPresent)
     {
 #ifdef TESTME
-        return (handleConfigMode(confFile, out_dir, cli_iterations, cli_interval, enableKThreads, long_run) == 0) ? 0 : 1;
+    return (handleConfigMode(confFile, out_dir, cli_output_set, cli_iterations, cli_interval, enableKThreads, long_run) == 0) ? 0 : 1;
 #else
-        handleConfigMode(confFile, out_dir, cli_iterations, cli_interval, enableKThreads, long_run);
+    handleConfigMode(confFile, out_dir, cli_output_set, cli_iterations, cli_interval, enableKThreads, long_run);
 #endif
     }
     else if (isSystemWide)
