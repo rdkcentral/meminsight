@@ -3116,7 +3116,7 @@ int main(int argc, char *argv[])
             else
             {
                 PRINT_MUST("Error: Missing format value after %s\n", argv[i]);
-                printHelpAndUsage(argv, false);
+                printHelpAndUsage(argv, false, 1);
             }
         }
         else if (!strncmp(argv[i], "--json-pretty", 13))
