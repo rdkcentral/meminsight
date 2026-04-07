@@ -186,7 +186,7 @@ Execution Summary
 Exit Code:           ${rc}
 Execution Duration:  ${RUN_DURATION}ms
 
-Memoinformation:
+Memory information:
   - Allocations tracked via LD_PRELOAD interposition
   - All malloc/free/calloc/realloc operations captured
   - Thread-safe tracking with mutex protection

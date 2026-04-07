@@ -32,11 +32,12 @@ typedef struct {
     cJSON_t *(*CreateArray)(void);
     cJSON_t *(*AddStringToObject)(cJSON_t *obj, const char *name, const char *str);
     cJSON_t *(*AddNumberToObject)(cJSON_t *obj, const char *name, double n);
-    cJSON_t *(*AddItemToObject)(cJSON_t *obj, const char *key, cJSON_t *item);
-    cJSON_t *(*AddItemToArray)(cJSON_t *arr, cJSON_t *item);
+    void     (*AddItemToObject)(cJSON_t *obj, const char *key, cJSON_t *item);
+    void     (*AddItemToArray)(cJSON_t *arr, cJSON_t *item);
     char    *(*Print)(const cJSON_t *item);
     char    *(*PrintUnformatted)(const cJSON_t *item);
     void     (*Delete)(cJSON_t *item);
+    void     (*Free)(void *ptr);
 } CjsonLib;
 
 static CjsonLib g_cjson;
@@ -103,6 +104,16 @@ static int loadCjson(void)
     LOAD_SYM(Print);
     LOAD_SYM(PrintUnformatted);
     LOAD_SYM(Delete);
+
+    g_cjson.Free = (void (*)(void *))dlsym(g_cjson.handle, "cJSON_free");
+    if (!g_cjson.Free) {
+        PRINT_MUST("JSON: Failed to resolve cJSON_free: %s\n", dlerror());
+        dlclose(g_cjson.handle);
+        memset(&g_cjson, 0, sizeof(g_cjson));
+        PRINT_MUST("JSON: Missing allocator hook. Falling back to CSV.\n");
+        g_reportFormat = REPORT_CSV;
+        return -1;
+    }
 
 #undef LOAD_SYM
 
@@ -219,7 +230,9 @@ SetupInfo initializeSetupInfo(const char *outDir, Report_Format format)
 
 static void updateBandwidthAvailability(void)
 {
-    ((access(BW_DDR_MODE_FILE, F_OK) == 0) && (access(BW_DDR_FILE, F_OK) == 0)) ? (g_bwDataAvailable = true) : (g_bwDataAvailable = false);
+    bool modeAccessible = (access(BW_DDR_MODE_FILE, R_OK | W_OK) == 0);
+    bool bwReadable = (access(BW_DDR_FILE, R_OK) == 0);
+    g_bwDataAvailable = (modeAccessible && bwReadable);
 }
 
 /**
@@ -889,12 +902,9 @@ int getPIDByProcessName(const char *procName, unsigned int *pidOut)
     char nameBuf[PATH_MAX];
     int found = 0;
     size_t procNameLen = strlen(procName);
-    int maxEntries = 10000;  // Prevent unbounded iteration
-    int entryCount = 0;
     
-    while ((entry = readdir(proc)) != NULL && entryCount < maxEntries)
+    while ((entry = readdir(proc)) != NULL)
     {
-        entryCount++;
         if (entry->d_type != DT_DIR)
             continue;
         if (!isPID(entry->d_name))
@@ -2919,7 +2929,7 @@ int writeJSONToFile(const char *filepath, const SetupInfo *setup)
             PRINT_ERROR("Failed to write JSON to %s: %s\n", filepath, strerror(errno));
             rc = -1;
         }
-        free(jsonStr);
+        g_cjson.Free(jsonStr);
     } else {
         PRINT_ERROR("cJSON serialisation returned NULL for %s\n", filepath);
         rc = -1;

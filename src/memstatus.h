@@ -77,7 +77,7 @@ This is used to ensure compatibility with older versions of the binary. */
 /* REPORT_MAJOR_VERSION and REPORT_MINOR_VERSION are to track the report format, any changes in the report format should increment this version.
 This is used to ensure compatibility with older versions of the report parser. */
 #define REPORT_MAJOR_VERSION "1"
-#define REPORT_MINOR_VERSION "0"
+#define REPORT_MINOR_VERSION "1"
 
 #ifndef DEVICE_IDENTIFIER
 #define DEVICE_IDENTIFIER "eth0"
@@ -121,7 +121,7 @@ This is used to ensure compatibility with older versions of the report parser. *
 #define CSV_FILE_NAME "meminsight.csv"
 #define JSON_FILE_NAME "meminsight.json"
 #define LONG_RUN_INTERVAL 900 // 900 is Default interval for long runs in seconds
-#define LONG_RUN_ITERATIONS 48 // 12 Hour capture, considering 15 mins interval
+#define LONG_RUN_ITERATIONS 48 // 12-hour capture at 15-minute interval; caller may override via CLI/config
 
 #define CSV_META_HEADER "FIRMWARE_NAME,MAC_ADDRESS,TIMESTAMP,UPTIME,KERNEL_VERSION,REPORT_VERSION"
 
@@ -232,22 +232,8 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, int cli_iter
 int fillProcessStatFields(unsigned pid, Process_Info *info, unsigned *flagsOut);
 
 #ifdef ENABLE_CJSON
-/*
- * Minimal cJSON struct layout — mirrors the real cJSON internals.
- * Defined here so we can work with cJSON objects via our own pointers
- * without needing to install cjson/cJSON.h at build time.
- * This layout has been stable across all cJSON releases since 1.x.
- */
-typedef struct cJSON_s {
-    struct cJSON_s *next;
-    struct cJSON_s *prev;
-    struct cJSON_s *child;
-    int    type;
-    char  *valuestring;
-    int    valueint;
-    double valuedouble;
-    char  *string;
-} cJSON_t;
+/* Opaque cJSON type loaded via dlopen; no dependency on cJSON headers. */
+typedef struct cJSON cJSON_t;
 
 /*
  * JSON output functions - cJSON is loaded at runtime via dlopen.
