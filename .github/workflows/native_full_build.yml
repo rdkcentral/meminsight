@@ -49,7 +49,6 @@ jobs:
           export MEMLEAK_INSTALL_DIR=/tmp/memleakutil-install
           export LEAK_REPORT_DIR=/tmp/meminsight-leak-reports
           sh scripts/detect_leak.sh
-          fi
 
       - name: Summary
         run: |
