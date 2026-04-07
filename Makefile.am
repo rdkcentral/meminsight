@@ -25,12 +25,6 @@ meminsight_SOURCES = src/memstatus.c
 meminsightdir = $(includedir)
 meminsight_HEADERS = src/memstatus.h
 
-# Link -ldl when JSON support is compiled in (needed for dlopen/dlsym/dlclose).
-# Note: libcjson itself is NOT linked here — it is loaded at runtime via dlopen.
-if ENABLE_CJSON
-meminsight_LDADD = -ldl
-endif
-
 AM_CPPFLAGS = @CPPFLAGS@
 
 # Add clean targets for better cleanup
