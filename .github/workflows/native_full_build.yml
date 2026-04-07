@@ -48,39 +48,7 @@ jobs:
           chmod +x scripts/detect_leak.sh
           export MEMLEAK_INSTALL_DIR=/tmp/memleakutil-install
           export LEAK_REPORT_DIR=/tmp/meminsight-leak-reports
-          sh scripts/detect_leak.sh -o /tmp/meminsight-output -i 1 -I 0 || true
-
-      - name: Display memory leak detection report
-        run: |
-          echo "======================================================================"
-          echo "MemInsight Memory Leak Detection Report"
-          echo "======================================================================"
-          echo ""
-          if [ -d /tmp/meminsight-leak-reports ]; then
-            ls -la /tmp/meminsight-leak-reports/
-            echo ""
-            echo "--- Latest Leak Report ---"
-            tail -100 /tmp/meminsight-leak-reports/leak_report_*.txt 2>/dev/null || echo "No leak reports generated"
-          else
-            echo "Leak reports directory not found"
-          fi
-
-      - name: Display meminsight output
-        run: |
-          echo ""
-          echo "======================================================================"
-          echo "MemInsight Output Files"
-          echo "======================================================================"
-          if [ -d /tmp/meminsight-output ]; then
-            ls -lh /tmp/meminsight-output/
-            echo ""
-            echo "CSV Output (first 20 lines):"
-            find /tmp/meminsight-output -name "*.csv" -exec head -20 {} \; || true
-            echo ""
-            echo "JSON Output (last 30 lines):"
-            find /tmp/meminsight-output -name "*.json" -exec tail -30 {} \; || true
-          else
-            echo "Output directory not found"
+          sh scripts/detect_leak.sh
           fi
 
       - name: Summary
@@ -93,12 +61,11 @@ jobs:
           echo "✓ Meminsight built with --enable-cjson --test"
           echo "✓ Memleakutil library built and installed"
           echo "✓ Memory leak detection executed"
-          echo "✓ Reports generated and verified"
+          echo "✓ Reports generated and printed by scripts/detect_leak.sh"
           echo ""
           echo "Artifacts:"
           echo "  - Meminsight binary: ./meminsight"
           echo "  - Leak detection lib: /tmp/memleakutil-install/lib/libmemfnswrap.so"
           echo "  - Leak reports: /tmp/meminsight-leak-reports/"
-          echo "  - Meminsight output: /tmp/meminsight-output/"
           echo ""
           echo "Complete and ready for next stage: Unit Tests"

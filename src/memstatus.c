@@ -2131,7 +2131,7 @@ void printHelp(char *argv[])
 /**
  * Prints detailed help and usage information and exits.
  */
-void printHelpAndUsage(char *argv[], bool moreInfo)
+void printHelpAndUsage(char *argv[], bool moreInfo, int returnCode)
 {
     printf("%s (v%s)\n\n", MEMINSIGHT_BIN, memInsightVersion);
     printf("Usage: %s [OPTIONS]\n", MEMINSIGHT_BIN);
@@ -2184,7 +2184,7 @@ void printHelpAndUsage(char *argv[], bool moreInfo)
         printf("  - If only one is set, the other uses its default or config value.\n");
         printf("  - Output file name format: <MAC>_<TIMESTAMP>_iter<iteration>_%s\n", CSV_FILE_NAME);
     }
-    exit(1);
+    exit(returnCode);
 }
 
 /**
@@ -2969,10 +2969,8 @@ int main(int argc, char *argv[])
                 FILE *fp = fopen(confFile, "r");
                 if (!fp)
                 {
-                    PRINT_ERROR("Error: Config file '%s' does not exist or cannot "
-                           "be opened.\n",
-                           confFile);
-                    printHelpAndUsage(argv, true);
+                    PRINT_ERROR("Error: Config file '%s' does not exist or cannot be opened.\n", confFile);
+                    printHelpAndUsage(argv, true, 1);
                 }
                 fclose(fp);
                 isSystemWide = false; // Config mode implies not system-wide
@@ -2982,7 +2980,7 @@ int main(int argc, char *argv[])
             else
             {
                 PRINT_ERROR("Error: Missing config file path after %s\n", argv[i]);
-                printHelpAndUsage(argv, false);
+                printHelpAndUsage(argv, false, 1);
             }
         }
         else if (!strncmp(argv[i], "-a", 3) || !strncmp(argv[i], "--all", 6))
@@ -2991,7 +2989,7 @@ int main(int argc, char *argv[])
         }
         else if (!strncmp(argv[i], "-h", 3) || !strncmp(argv[i], "--help", 7))
         { // help
-            printHelpAndUsage(argv, true);
+            printHelpAndUsage(argv, true, 0);
         }
 #ifdef TESTME
         else if (!strncmp(argv[i], "-t", 3) || !strncmp(argv[i], "--test", 7))
@@ -3017,7 +3015,7 @@ int main(int argc, char *argv[])
                                 strncpy(testBuddyinfo, argv[i], 128);
                             } else {
                                 PRINT_ERROR("Test buddyinfo file %s open error %d [%s]\n", argv[i], errno, strerror(errno));
-                                printHelpAndUsage(argv, false);
+                                printHelpAndUsage(argv, false, 1);
                             }
                         }
 
@@ -3029,7 +3027,7 @@ int main(int argc, char *argv[])
                                 strncpy(testPagetypeinfo, argv[i], 128);
                             } else {
                                 PRINT_ERROR("Test pagetypeinfo file %s open error %d [%s]\n", argv[i], errno, strerror(errno));
-                                printHelpAndUsage(argv, false);
+                                printHelpAndUsage(argv, false, 1);
                             }
                         }
 
@@ -3040,9 +3038,9 @@ int main(int argc, char *argv[])
                     }
                 } else {
                     PRINT_ERROR("Test map file %s open error %d [%s]\n", argv[i], errno, strerror(errno));
-		}
+		        }
             }
-            printHelpAndUsage(argv, false);
+            printHelpAndUsage(argv, false, 1);
         }
 #endif
         else if (!strncmp(argv[i], "-o", 3) || !strncmp(argv[i], "--output", 9))
@@ -3055,7 +3053,7 @@ int main(int argc, char *argv[])
             else
             {
                 PRINT_ERROR("Error: Missing output directory path after %s\n", argv[i]);
-                printHelpAndUsage(argv, false);
+                printHelpAndUsage(argv, false, 1);
             }
         }
         else if (!strncmp(argv[i], "--interval", 11))
@@ -3069,7 +3067,7 @@ int main(int argc, char *argv[])
             else
             {
                 PRINT_ERROR("Error: Missing interval value after %s\n", argv[i]);
-                printHelpAndUsage(argv, false);
+                printHelpAndUsage(argv, false, 1);
             }
         }
         else if (!strncmp(argv[i], "--iterations", 13))
@@ -3083,7 +3081,7 @@ int main(int argc, char *argv[])
             else
             {
                 PRINT_ERROR("Error: Missing iterations value after %s\n", argv[i]);
-                printHelpAndUsage(argv, false);
+                printHelpAndUsage(argv, false, 1);
             }
         }
         else if (!strncmp(argv[i], "-s", 3) || !strncmp(argv[i], "--smaps", 8))
@@ -3112,7 +3110,7 @@ int main(int argc, char *argv[])
                 else
                 {
                     PRINT_MUST("Error: Unsupported format '%s'. Supported: csv, json.\n", argv[i]);
-                    printHelpAndUsage(argv, false);
+                    printHelpAndUsage(argv, false, 1);
                 }
             }
             else
@@ -3132,7 +3130,7 @@ int main(int argc, char *argv[])
         else
         {
             PRINT_ERROR("Error: Unrecognized argument '%s'\n", argv[i]);
-            printHelpAndUsage(argv, false);
+            printHelpAndUsage(argv, false, 1);
         }
     }
 

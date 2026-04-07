@@ -24,8 +24,7 @@
 #          memory leaks, track allocations, and generate heap walk reports
 #
 # Usage:
-#   sh scripts/detect_leak.sh [MEMINSIGHT_ARGS...]
-#   sh scripts/detect_leak.sh -o /tmp/out -i 2 -I 1
+#   sh scripts/detect_leak.sh
 #   sh scripts/detect_leak.sh --help
 #
 # Environment Variables:
@@ -35,9 +34,9 @@
 #
 # Output:
 #   Generates:
-#   - leak_report_TIMESTAMP.txt - Heap walk summary
-#   - meminsight_output.csv - Standard meminsight CSV output
-#   - meminsight_output.json - Standard meminsight JSON output (if enabled)
+#   - leak_report_0_help_TIMESTAMP.txt (sanity/help case)
+#   - leak_report_1_csv_TIMESTAMP.txt (CSV runtime case)
+#   - leak_report_2_json_TIMESTAMP.txt (JSON runtime case)
 
 set -e
 
@@ -50,14 +49,6 @@ MEMLEAK_INSTALL_DIR="${MEMLEAK_INSTALL_DIR:-/tmp/memleakutil-install}"
 MEMINSIGHT_BIN="${MEMINSIGHT_BIN:-${PROJECT_ROOT}/meminsight}"
 LEAK_REPORT_DIR="${LEAK_REPORT_DIR:-/tmp/meminsight-leak-reports}"
 
-# Colors for output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-CYAN='\033[0;36m'
-NC='\033[0m' # No Color
-
 # Parse --help
 case " $* " in
   *" --help "*|*" -h "*)
@@ -65,17 +56,11 @@ case " $* " in
 detect_leak.sh - Memory leak detection for meminsight
 
 USAGE:
-  sh scripts/detect_leak.sh [OPTIONS] [MEMINSIGHT_ARGS]
+  sh scripts/detect_leak.sh [OPTIONS]
 
 EXAMPLES:
-  # Single iteration, no interval
-  sh scripts/detect_leak.sh -o /tmp/output -i 1 -I 0
-
-  # Multiple iterations with 1-second interval
-  sh scripts/detect_leak.sh -o /tmp/output -i 5 -I 1
-
-  # Enable JSON output with leak detection
-  sh scripts/detect_leak.sh -o /tmp/output -f json -i 1
+  # Run all default leak test cases
+  sh scripts/detect_leak.sh
 
 ENVIRONMENT VARIABLES:
   MEMLEAK_INSTALL_DIR   Path to memleakutil installation
@@ -86,35 +71,39 @@ ENVIRONMENT VARIABLES:
                         (default: /tmp/meminsight-leak-reports)
 
 OUTPUT FILES:
-  - leak_report_TIMESTAMP.txt    : Memory leak detection report
-  - meminsight_output.*          : Standard meminsight outputs
+  - leak_report_0_help_*.txt      : Help sanity run
+  - leak_report_1_csv_*.txt      : CSV run report
+  - leak_report_2_json_*.txt     : JSON run report
 
 NOTES:
   - Requires memleakutil to be built first via sh scripts/build_memleak.sh
   - Uses LD_PRELOAD to instrument meminsight process
-  - All meminsight arguments are passed through unchanged
+  - Runs these built-in cases:
+      0) --help
+      1) --interval 2 --iterations 5 --output /tmp/meminsight/leak
+      2) --interval 2 --iterations 5 --output /tmp/meminsight/leak2 --fmt json --json-pretty
 
 EOF
     exit 0
     ;;
 esac
 
-printf "%s\n" "${BLUE}================================================${NC}"
-printf "%s\n" "${BLUE}  MemInsight Leak Detection Runner${NC}"
-printf "%s\n\n" "${BLUE}================================================${NC}"
+printf "%s\n" "================================================"
+printf "%s\n" "  MemInsight Leak Detection Runner"
+printf "%s\n\n" "================================================"
 
 # Verify memleakutil installation
 if [ ! -f "${MEMLEAK_INSTALL_DIR}/lib/libmemfnswrap.so" ]; then
-    printf "%s\n\n" "${RED}ERROR: memleakutil not found at ${MEMLEAK_INSTALL_DIR}${NC}"
-    printf "%s\n" "${YELLOW}Please build memleakutil first:${NC}"
+  printf "%s\n\n" "ERROR: memleakutil not found at ${MEMLEAK_INSTALL_DIR}"
+  printf "%s\n" "Please build memleakutil first:"
     echo "  sh scripts/build_memleak.sh"
     exit 1
 fi
 
 # Verify meminsight binary
 if [ ! -f "${MEMINSIGHT_BIN}" ]; then
-    printf "%s\n\n" "${RED}ERROR: meminsight binary not found at ${MEMINSIGHT_BIN}${NC}"
-    printf "%s\n" "${YELLOW}Please build meminsight first:${NC}"
+  printf "%s\n\n" "ERROR: meminsight binary not found at ${MEMINSIGHT_BIN}"
+  printf "%s\n" "Please build meminsight first:"
     echo "  sh cov_build.sh --clean"
     echo "  sh cov_build.sh --enable-cjson --test"
     exit 1
@@ -122,24 +111,37 @@ fi
 
 # Create report directory
 mkdir -p "${LEAK_REPORT_DIR}"
+mkdir -p /tmp/meminsight
 
-# Generate timestamp
+# Clear previous report files for a clean run view.
+printf "%s\n" "Clearing previous leak reports from ${LEAK_REPORT_DIR}..."
+find "${LEAK_REPORT_DIR}" -mindepth 1 -maxdepth 1 -exec rm -rf {} \; 2>/dev/null || true
+printf "%s\n\n" "Previous leak reports cleared"
+
+# Generate timestamp shared by all case reports
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-LEAK_REPORT="${LEAK_REPORT_DIR}/leak_report_${TIMESTAMP}.txt"
+REPORT_0="${LEAK_REPORT_DIR}/leak_report_0_help_${TIMESTAMP}.txt"
+REPORT_1="${LEAK_REPORT_DIR}/leak_report_1_csv_${TIMESTAMP}.txt"
+REPORT_2="${LEAK_REPORT_DIR}/leak_report_2_json_${TIMESTAMP}.txt"
 
-printf "%s\n" "${BLUE}Configuration:${NC}"
+printf "%s\n" "Configuration:"
 echo "  Memleakutil:       ${MEMLEAK_INSTALL_DIR}"
 echo "  Meminsight Binary: ${MEMINSIGHT_BIN}"
 echo "  Report Directory:  ${LEAK_REPORT_DIR}"
 echo "  Timestamp:         ${TIMESTAMP}"
 printf "\n"
 
-# Setup environment for leak detection
-export LD_PRELOAD="${MEMLEAK_INSTALL_DIR}/lib/libmemfnswrap.so"
-export LD_LIBRARY_PATH="${MEMLEAK_INSTALL_DIR}/lib:${LD_LIBRARY_PATH:-}"
+# Setup library paths for leak detection (applied per meminsight invocation only)
+LEAK_LD_PRELOAD="${MEMLEAK_INSTALL_DIR}/lib/libmemfnswrap.so"
+LEAK_LD_LIBRARY_PATH="${MEMLEAK_INSTALL_DIR}/lib:${LD_LIBRARY_PATH:-}"
 
-# Build report header
-cat > "${LEAK_REPORT}" << EOF
+# Helper: run one leak case and write report
+run_case() {
+  case_id="$1"
+  report_file="$2"
+  shift 2
+
+  cat > "${report_file}" << EOF
 ================================================================================
 MemInsight Memory Leak Detection Report
 Generated: $(date -u)
@@ -149,6 +151,7 @@ Build Information:
   Memleakutil Library: ${MEMLEAK_INSTALL_DIR}/lib/libmemfnswrap.so
   Meminsight Binary:   ${MEMINSIGHT_BIN}
   Detection Method:    LD_PRELOAD function interposition
+  Case ID:             ${case_id}
 
 Memory Functions Instrumented:
   - malloc(), free()
@@ -165,31 +168,22 @@ Execution Log
 
 EOF
 
-printf "%s\n" "${BLUE}Starting meminsight with leak detection...${NC}"
-echo "  Command: ${MEMINSIGHT_BIN} $@"
-echo "  LD_PRELOAD: ${LD_PRELOAD}"
-printf "\n"
+  printf "%s\n" "Running case ${case_id}: ${MEMINSIGHT_BIN} $*"
+  RUN_START=$(date +%s%N)
+  set +e
+  LD_PRELOAD="${LEAK_LD_PRELOAD}" LD_LIBRARY_PATH="${LEAK_LD_LIBRARY_PATH}" "${MEMINSIGHT_BIN}" "$@" >> "${report_file}" 2>&1
+  rc=$?
+  set -e
+  RUN_END=$(date +%s%N)
+  RUN_DURATION=$(( (RUN_END - RUN_START) / 1000000 ))
 
-# Run meminsight with leak detection instrumentation
-# Capture both stdout and stderr
-RUN_START=$(date +%s%N)
-set +e
-"${MEMINSIGHT_BIN}" "$@" >> "${LEAK_REPORT}" 2>&1
-EXIT_CODE=$?
-set -e
-RUN_END=$(date +%s%N)
-RUN_DURATION=$(( (RUN_END - RUN_START) / 1000000 ))  # Convert to milliseconds
-
-printf "%s\n\n" "${CYAN}Execution completed (${RUN_DURATION}ms)${NC}"
-
-# Append summary
-cat >> "${LEAK_REPORT}" << EOF
+  cat >> "${report_file}" << EOF
 
 ================================================================================
 Execution Summary
 ================================================================================
 
-Exit Code:           ${EXIT_CODE}
+Exit Code:           ${rc}
 Execution Duration:  ${RUN_DURATION}ms
 
 Memoinformation:
@@ -212,27 +206,62 @@ For detailed heap walks and allocation tracking:
      memleakutil (interactive commands for heap walk)
 
 ================================================================================
-Report Generated: ${LEAK_REPORT}
+Report Generated: ${report_file}
 ================================================================================
 
 EOF
 
-# Display report
-printf "%s\n" "${BLUE}Leak Detection Report:${NC}"
-echo "  Location: ${LEAK_REPORT}"
-printf "\n"
-printf "%s\n" "${GREEN}Report Preview (last 30 lines):${NC}"
-tail -30 "${LEAK_REPORT}"
+  printf "%s\n\n" "Case ${case_id} completed in ${RUN_DURATION}ms with exit code ${rc}"
+  return ${rc}
+}
+
+printf "%s\n" "Starting meminsight leak test matrix..."
+echo "  LD_PRELOAD: ${LEAK_LD_PRELOAD}"
 printf "\n"
 
-if [ ${EXIT_CODE} -eq 0 ]; then
-    printf "%s\n" "${GREEN}================================================${NC}"
-    printf "%s\n" "${GREEN}  + Leak detection SUCCESSFUL${NC}"
-    printf "%s\n" "${GREEN}================================================${NC}"
-    exit 0
+FAIL_COUNT=0
+
+# 0th case: help sanity under preload
+run_case "0-help" "${REPORT_0}" --help || true
+if grep -E "Usage: meminsight|Options:" "${REPORT_0}" >/dev/null 2>&1; then
+  printf "%s\n\n" "Case 0 validation passed (help text detected)"
 else
-    printf "%s\n" "${YELLOW}================================================${NC}"
-    printf "%s\n" "${YELLOW}  ! Leak detection completed with exit code ${EXIT_CODE}${NC}"
-    printf "%s\n" "${YELLOW}================================================${NC}"
-    exit ${EXIT_CODE}
+  printf "%s\n\n" "Case 0 validation failed (expected help text missing)"
+  FAIL_COUNT=$((FAIL_COUNT + 1))
 fi
+
+# 1st case: CSV output run
+run_case "1-csv" "${REPORT_1}" --interval 2 --iterations 5 --output /tmp/meminsight/leak || FAIL_COUNT=$((FAIL_COUNT + 1))
+
+# 2nd case: JSON output run
+run_case "2-json" "${REPORT_2}" --interval 2 --iterations 5 --output /tmp/meminsight/leak2 --fmt json --json-pretty || FAIL_COUNT=$((FAIL_COUNT + 1))
+
+printf "%s\n" "Leak Detection Reports:"
+echo "  0th case: ${REPORT_0}"
+echo "  1st case: ${REPORT_1}"
+echo "  2nd case: ${REPORT_2}"
+printf "\n"
+
+printf "%s\n" "--- Case 1 (CSV) full report ---"
+cat "${REPORT_1}" || true
+printf "\n"
+
+printf "%s\n" "--- Case 2 (JSON) full report ---"
+cat "${REPORT_2}" || true
+printf "\n"
+
+printf "%s\n" "Cleaning meminsight leak output directories..."
+rm -rf /tmp/meminsight/leak /tmp/meminsight/leak2
+printf "%s\n\n" "Cleanup complete"
+
+if [ "${FAIL_COUNT}" -eq 0 ]; then
+  printf "%s\n" "================================================"
+  printf "%s\n" "  + Leak detection test matrix SUCCESSFUL"
+  printf "%s\n" "================================================"
+  exit 0
+fi
+
+printf "%s\n" "================================================"
+printf "%s\n" "  ! Leak detection test matrix completed with ${FAIL_COUNT} failing case(s)"
+printf "%s\n" "================================================"
+exit 1

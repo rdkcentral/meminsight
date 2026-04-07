@@ -214,7 +214,7 @@ void writeProcessInfo(unsigned noOfpids, FILE *output);
 void addProcessInfo(Process_Info *addPInfo);
 int getProcessInfos(unsigned pid);
 void printHelp(char *argv[]);
-void printHelpAndUsage(char *argv[], bool moreInfo);
+void printHelpAndUsage(char *argv[], bool moreInfo, int returnCode);
 void saveMeminfo(FILE *out);
 void saveFragmentationInfo(FILE *out);
 void collectBandwidthData(FILE *out);

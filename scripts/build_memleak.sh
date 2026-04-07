@@ -44,29 +44,22 @@ MEMLEAK_INSTALL_DIR="${MEMLEAK_INSTALL_DIR:-/tmp/memleakutil-install}"
 MEMLEAK_JOBS="${MEMLEAK_JOBS:-4}"
 MEMLEAK_GIT_URL="${MEMLEAK_GIT_URL:-https://github.com/JagadheesanD/memleakutil.git}"
 
-# Colors for output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m' # No Color
-
-printf "%s\n" "${BLUE}================================================${NC}"
-printf "%s\n" "${BLUE}  MemLeakUtil Build Script${NC}"
-printf "%s\n\n" "${BLUE}================================================${NC}"
+printf "%s\n" "================================================"
+printf "%s\n" "  MemLeakUtil Build Script"
+printf "%s\n\n" "================================================"
 
 # Validate environment
 if ! command -v git >/dev/null 2>&1; then
-    printf "%s\n" "${RED}ERROR: git not found. Please install git.${NC}"
+    printf "%s\n" "ERROR: git not found. Please install git."
     exit 1
 fi
 
 if ! command -v autoconf >/dev/null 2>&1; then
-    printf "%s\n" "${YELLOW}WARNING: autoconf not found. Installing build dependencies...${NC}"
+    printf "%s\n" "WARNING: autoconf not found. Installing build dependencies..."
     apt-get update && apt-get install -y autotools-dev autoconf automake pkg-config libtool m4
 fi
 
-printf "%s\n" "${BLUE}Configuration:${NC}"
+printf "%s\n" "Configuration:"
 echo "  Work Directory:    ${MEMLEAK_WORK_DIR}"
 echo "  Git Branch:        ${MEMLEAK_GIT_BRANCH}"
 echo "  Install Prefix:    ${MEMLEAK_INSTALL_DIR}"
@@ -75,63 +68,103 @@ echo "  GitHub URL:        ${MEMLEAK_GIT_URL}"
 printf "\n"
 
 # Step 1: Clone repository
-printf "%s\n" "${BLUE}[1/4] Cloning memleakutil repository...${NC}"
+printf "%s\n" "[1/5] Cloning memleakutil repository..."
 MEMLEAK_SRC_DIR="${MEMLEAK_WORK_DIR}/memleakutil"
 
 if [ -d "${MEMLEAK_SRC_DIR}" ]; then
-    printf "%s\n" "${YELLOW}  - Updating existing clone${NC}"
+    printf "%s\n" "  - Updating existing clone"
     cd "${MEMLEAK_SRC_DIR}"
     git fetch origin
     git checkout "${MEMLEAK_GIT_BRANCH}"
     git pull origin "${MEMLEAK_GIT_BRANCH}"
 else
-    printf "%s\n" "${YELLOW}  - Fresh clone${NC}"
+    printf "%s\n" "  - Fresh clone"
     cd "${MEMLEAK_WORK_DIR}"
     git clone --depth 1 --branch "${MEMLEAK_GIT_BRANCH}" "${MEMLEAK_GIT_URL}" memleakutil
     cd "${MEMLEAK_SRC_DIR}"
 fi
 
-printf "%s\n" "${GREEN}  + Repository ready${NC}"
+printf "%s\n" "  + Repository ready"
 MEMLEAK_COMMIT=$(git rev-parse --short HEAD)
 echo "    Commit: ${MEMLEAK_COMMIT}"
 printf "\n"
 
-# Step 2: Configure build
-printf "%s\n" "${BLUE}[2/4] Configuring memleakutil build...${NC}"
-if [ ! -f configure ]; then
-    printf "%s\n" "${YELLOW}  - Running autoreconf${NC}"
-    autoreconf -i
+# Step 2: Cleanup previous artifacts
+printf "%s\n" "[2/5] Cleaning previous build artifacts..."
+if [ -f Makefile ]; then
+    make distclean >/dev/null 2>&1 || make clean >/dev/null 2>&1 || true
+fi
+rm -rf "${MEMLEAK_INSTALL_DIR}"
+printf "%s\n\n" "  + Cleanup complete"
+
+# Step 3: Configure build
+printf "%s\n" "[3/5] Configuring memleakutil build..."
+printf "%s\n" "  - Regenerating autotools files"
+
+BUILD_MODE="autotools"
+mkdir -p m4
+if command -v libtoolize >/dev/null 2>&1; then
+    libtoolize --force --copy >/dev/null 2>&1 || true
 fi
 
-CONFIGURE_OPTS="--prefix=${MEMLEAK_INSTALL_DIR} --enable-shared --disable-static"
-printf "%s\n" "${YELLOW}  - Configure options: ${CONFIGURE_OPTS}${NC}"
-./configure ${CONFIGURE_OPTS}
-printf "%s\n\n" "${GREEN}  + Configuration complete${NC}"
+if ! autoreconf -fiv; then
+    printf "%s\n" "  - Autotools regeneration failed; falling back to Makefile.raw"
+    BUILD_MODE="raw"
+fi
 
-# Step 3: Build
-printf "%s\n" "${BLUE}[3/4] Building memleakutil library...${NC}"
-make clean
-make -j"${MEMLEAK_JOBS}"
-printf "%s\n\n" "${GREEN}  + Build complete${NC}"
+if [ "${BUILD_MODE}" = "raw" ] && [ ! -f Makefile.raw ]; then
+    printf "%s\n" "ERROR: Makefile.raw not found; cannot continue fallback build"
+    exit 1
+fi
 
-# Step 4: Install
-printf "%s\n" "${BLUE}[4/4] Installing memleakutil to ${MEMLEAK_INSTALL_DIR}...${NC}"
-make install
+if [ "${BUILD_MODE}" = "autotools" ]; then
+    CONFIGURE_OPTS="--prefix=${MEMLEAK_INSTALL_DIR}"
+    printf "%s\n" "  - Configure options: ${CONFIGURE_OPTS}"
+    if ! ./configure ${CONFIGURE_OPTS}; then
+        printf "%s\n" "  - configure failed; falling back to Makefile.raw"
+        BUILD_MODE="raw"
+    fi
+fi
+
+printf "%s\n\n" "  + Configuration complete (mode: ${BUILD_MODE})"
+
+# Step 4: Build
+printf "%s\n" "[4/5] Building memleakutil library..."
+if [ "${BUILD_MODE}" = "autotools" ]; then
+    make clean
+    make -j"${MEMLEAK_JOBS}"
+else
+    make -f Makefile.raw clean || true
+    make -f Makefile.raw -j"${MEMLEAK_JOBS}"
+fi
+printf "%s\n\n" "  + Build complete"
+
+# Step 5: Install
+printf "%s\n" "[5/5] Installing memleakutil to ${MEMLEAK_INSTALL_DIR}..."
+if [ "${BUILD_MODE}" = "autotools" ]; then
+    make install
+else
+    mkdir -p "${MEMLEAK_INSTALL_DIR}/lib" "${MEMLEAK_INSTALL_DIR}/bin"
+    cp -af libmemfnswrap.so* "${MEMLEAK_INSTALL_DIR}/lib/"
+    if [ -f memleakutil ]; then
+        cp -f memleakutil "${MEMLEAK_INSTALL_DIR}/bin/"
+    fi
+fi
 
 # Verify installation
 if [ -f "${MEMLEAK_INSTALL_DIR}/lib/libmemfnswrap.so" ]; then
-    printf "%s\n\n" "${GREEN}  + Installation successful${NC}"
-    printf "%s\n" "${BLUE}Installation Summary:${NC}"
+    printf "%s\n\n" "  + Installation successful"
+    printf "%s\n" "Installation Summary:"
     ls -lh "${MEMLEAK_INSTALL_DIR}/lib/libmemfnswrap.so"
     printf "\n"
-    printf "%s\n" "${GREEN}================================================${NC}"
-    printf "%s\n" "${GREEN}  memleakutil build SUCCESSFUL${NC}"
-    printf "%s\n\n" "${GREEN}================================================${NC}"
-    printf "%s\n" "${BLUE}To use in leak detection:${NC}"
+    printf "%s\n" "================================================"
+    printf "%s\n" "  memleakutil build SUCCESSFUL"
+    printf "%s\n\n" "================================================"
+    printf "%s\n" "To use in leak detection:"
     echo "  export LD_PRELOAD=${MEMLEAK_INSTALL_DIR}/lib/libmemfnswrap.so"
     echo "  export LD_LIBRARY_PATH=${MEMLEAK_INSTALL_DIR}/lib:\$LD_LIBRARY_PATH"
     printf "\n"
-    printf "%s\n\n" "${BLUE}Then run meminsight or any application to detect leaks.${NC}"
+    printf "%s\n\n" "Then run meminsight or any application to detect leaks."
     
     # Save environment for detect_leak.sh
     echo "export MEMLEAK_INSTALL_DIR=${MEMLEAK_INSTALL_DIR}" > "${MEMLEAK_WORK_DIR}/.memleak_env"
@@ -140,7 +173,7 @@ if [ -f "${MEMLEAK_INSTALL_DIR}/lib/libmemfnswrap.so" ]; then
     
     exit 0
 else
-    printf "%s\n" "${RED}  x Installation FAILED${NC}"
+    printf "%s\n" "  x Installation FAILED"
     echo "    libmemfnswrap.so not found at ${MEMLEAK_INSTALL_DIR}/lib/"
     exit 1
 fi
