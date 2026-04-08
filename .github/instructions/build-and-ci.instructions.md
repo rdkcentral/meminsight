@@ -1,5 +1,5 @@
 ---
-applyTo: "configure.ac,Makefile.am,cov_build.sh,scripts/run_ut.sh,.github/workflows/**/*.yml,deploy/**/*"
+applyTo: "configure.ac,Makefile.am,cov_build.sh,test/run_ut.sh,.github/workflows/**/*.yml,deploy/**/*"
 description: "Use when changing build scripts, test runners, CI workflows, or deployment samples for meminsight."
 ---
 
@@ -17,7 +17,7 @@ description: "Use when changing build scripts, test runners, CI workflows, or de
   - build-only workflow
   - unit-test workflow
 - Install only required dependencies.
-- Use repository scripts (`cov_build.sh`, `scripts/run_ut.sh`) as single source of truth.
+- Use repository scripts (`cov_build.sh`, `test/run_ut.sh`) as single source of truth.
 
 ## Deployment sample expectations
 

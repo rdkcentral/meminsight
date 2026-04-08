@@ -18,7 +18,7 @@
 
 ## Testing rules
 
-- For parser changes, add or update fixture-based tests in `tst/` and `scripts/run_ut.sh`.
+- For parser changes, add or update fixture-based tests in `test/` and `test/run_ut.sh`.
 - Validate both positive and negative paths.
 - For optional features (`--enable-cjson`, fragmentation inputs), include fallback-path checks.
 

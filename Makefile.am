@@ -21,9 +21,9 @@ AUTOMAKE_OPTIONS = subdir-objects
 
 bin_PROGRAMS = meminsight
 
-meminsight_SOURCES = src/memstatus.c
+meminsight_SOURCES = src/meminsight.c
 meminsightdir = $(includedir)
-meminsight_HEADERS = src/memstatus.h
+meminsight_HEADERS = src/meminsight.h
 
 AM_CPPFLAGS = @CPPFLAGS@
 

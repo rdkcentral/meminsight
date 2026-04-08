@@ -22,7 +22,7 @@ AC_INIT([meminsight], [1.0])
 AM_INIT_AUTOMAKE([foreign subdir-objects])
 
 # Config Source files.
-AC_CONFIG_SRCDIR([src/memstatus.c])
+AC_CONFIG_SRCDIR([src/meminsight.c])
 AC_CONFIG_HEADERS([config.h])
 
 # Checks for programs.

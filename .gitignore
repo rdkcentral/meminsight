@@ -13,5 +13,5 @@ meminsight
 missing
 src/.deps/
 src/.dirstamp
-src/memstatus.o
+src/meminsight.o
 stamp-h1

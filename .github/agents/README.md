@@ -6,7 +6,7 @@ This directory contains custom agent modes for meminsight.
 
 - `meminsight-implementer.agent.md`
   - Purpose: implementation-focused agent for C feature work, parser resilience, report compatibility, and test updates.
-  - Use when: adding/fixing functionality in `src/`, `scripts/run_ut.sh`, build scripts, and workflows.
+  - Use when: adding/fixing functionality in `src/`, `test/run_ut.sh`, build scripts, and workflows.
 
 ## Design notes
 

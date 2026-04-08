@@ -6,7 +6,7 @@ permissions:
 on:
   pull_request:
     branches: [ develop ]
-    paths: ['**/*.c', '**/*.cpp', '**/*.cc', '**/*.cxx', '**/*.h', '**/*.hpp', '**/*.sh', 'configure.ac', 'Makefile.am', 'tst/**', '.github/workflows/**/*.yml']
+    paths: ['**/*.c', '**/*.cpp', '**/*.cc', '**/*.cxx', '**/*.h', '**/*.hpp', '**/*.sh', 'configure.ac', 'Makefile.am', 'test/**', '.github/workflows/**/*.yml']
 
 jobs:
   meminsight-unit-tests:
@@ -34,6 +34,6 @@ jobs:
 
       - name: Run fixture tests
         run: |
-          chmod +x scripts/run_ut.sh
-          sh scripts/run_ut.sh
+          chmod +x test/run_ut.sh
+          sh test/run_ut.sh
         shell: bash

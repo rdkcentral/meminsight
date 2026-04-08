@@ -53,8 +53,8 @@ i=1
 while [ "$i" -le "$NUM_TESTS" ]; do
     DESC=$(printf '%s' "$TEST_DESCRIPTIONS" | cut -d'|' -f"$i")
     DIR=$(printf '%s' "$TEST_DIRS" | cut -d'|' -f"$i")
-    SMAP_FILE="tst/$DIR/meminsight_testSmap.txt"
-    MEMINFO_FILE="tst/$DIR/meminsight_testMeminfo.txt"
+    SMAP_FILE="test/$DIR/meminsight_testSmap.txt"
+    MEMINFO_FILE="test/$DIR/meminsight_testMeminfo.txt"
 
     echo "------------------------------------------"
     echo "Test $i: $DESC"
@@ -88,10 +88,10 @@ done
 
 # Fragmentation parsing test 1: pagetypeinfo preferred when both files are provided
 FRAG_DESC1="Test 6: Fragmentation pagetypeinfo preferred"
-FRAG_SMAP_FILE="tst/1-non-zero-swap-entry/meminsight_testSmap.txt"
-FRAG_MEMINFO_FILE="tst/1-non-zero-swap-entry/meminsight_testMeminfo.txt"
-FRAG_BUDDY_FILE="tst/6-buddyinfo-sample/meminsight_testBuddyinfo.txt"
-FRAG_PGT_FILE="tst/7-pagetypeinfo-sample/meminsight_testPagetypeinfo.txt"
+FRAG_SMAP_FILE="test/1-non-zero-swap-entry/meminsight_testSmap.txt"
+FRAG_MEMINFO_FILE="test/1-non-zero-swap-entry/meminsight_testMeminfo.txt"
+FRAG_BUDDY_FILE="test/6-buddyinfo-sample/meminsight_testBuddyinfo.txt"
+FRAG_PGT_FILE="test/7-pagetypeinfo-sample/meminsight_testPagetypeinfo.txt"
 
 echo "------------------------------------------"
 echo "$FRAG_DESC1"
@@ -140,10 +140,89 @@ else
 fi
 echo ""
 
+# Fragmentation parsing test 3: buddyinfo kernel-format variant
+FRAG_DESC3="Test 10: Fragmentation buddyinfo variant format"
+FRAG_BUDDY_VARIANT_FILE="test/8-buddyinfo-variant-kernel/meminsight_testBuddyinfo.txt"
+
+echo "------------------------------------------"
+echo "$FRAG_DESC3"
+echo "------------------------------------------"
+echo "Command: $MEM_BIN -o /tmp/meminsight -t $FRAG_SMAP_FILE $FRAG_MEMINFO_FILE $FRAG_BUDDY_VARIANT_FILE"
+
+rm -rf /tmp/meminsight/*.csv
+
+if $MEM_BIN -o /tmp/meminsight -t "$FRAG_SMAP_FILE" "$FRAG_MEMINFO_FILE" "$FRAG_BUDDY_VARIANT_FILE"; then
+    CSV_FILE=$(ls /tmp/meminsight/*.csv 2>/dev/null | head -n 1)
+    if [ -n "$CSV_FILE" ] && grep -F "Fragmentation_BuddyInfo:" "$CSV_FILE" >/dev/null 2>&1; then
+        echo "✓ $FRAG_DESC3 PASSED"
+    else
+        echo "✗ $FRAG_DESC3 FAILED (buddyinfo section missing)"
+        [ -n "$CSV_FILE" ] && cat "$CSV_FILE"
+        TEST_FAILED=$((TEST_FAILED + 1))
+    fi
+else
+    echo "✗ $FRAG_DESC3 FAILED (command execution failed)"
+    TEST_FAILED=$((TEST_FAILED + 1))
+fi
+echo ""
+
+# Fragmentation parsing test 4: pagetypeinfo migration-layout variant
+FRAG_DESC4="Test 11: Fragmentation pagetypeinfo variant format"
+FRAG_PGT_VARIANT_FILE="test/9-pagetypeinfo-variant-layout/meminsight_testPagetypeinfo.txt"
+
+echo "------------------------------------------"
+echo "$FRAG_DESC4"
+echo "------------------------------------------"
+echo "Command: $MEM_BIN -o /tmp/meminsight -t $FRAG_SMAP_FILE $FRAG_MEMINFO_FILE $FRAG_BUDDY_FILE $FRAG_PGT_VARIANT_FILE"
+
+rm -rf /tmp/meminsight/*.csv
+
+if $MEM_BIN -o /tmp/meminsight -t "$FRAG_SMAP_FILE" "$FRAG_MEMINFO_FILE" "$FRAG_BUDDY_FILE" "$FRAG_PGT_VARIANT_FILE"; then
+    CSV_FILE=$(ls /tmp/meminsight/*.csv 2>/dev/null | head -n 1)
+    if [ -n "$CSV_FILE" ] && grep -F "Fragmentation_PagetypeInfo:" "$CSV_FILE" >/dev/null 2>&1; then
+        echo "✓ $FRAG_DESC4 PASSED"
+    else
+        echo "✗ $FRAG_DESC4 FAILED (pagetypeinfo section missing)"
+        [ -n "$CSV_FILE" ] && cat "$CSV_FILE"
+        TEST_FAILED=$((TEST_FAILED + 1))
+    fi
+else
+    echo "✗ $FRAG_DESC4 FAILED (command execution failed)"
+    TEST_FAILED=$((TEST_FAILED + 1))
+fi
+echo ""
+
+# Fault-injection test: both optional fragmentation sources missing in TESTME
+FRAG_DESC5="Test 12 (Fault Injection): Missing buddyinfo and pagetypeinfo fixtures"
+
+echo "------------------------------------------"
+echo "$FRAG_DESC5"
+echo "------------------------------------------"
+echo "Command: $MEM_BIN -o /tmp/meminsight -t $FRAG_SMAP_FILE $FRAG_MEMINFO_FILE"
+
+rm -rf /tmp/meminsight/*.csv
+
+if $MEM_BIN -o /tmp/meminsight -t "$FRAG_SMAP_FILE" "$FRAG_MEMINFO_FILE"; then
+    CSV_FILE=$(ls /tmp/meminsight/*.csv 2>/dev/null | head -n 1)
+    if [ -n "$CSV_FILE" ] && \
+       ! grep -F "Fragmentation_PagetypeInfo:" "$CSV_FILE" >/dev/null 2>&1 && \
+       ! grep -F "Fragmentation_BuddyInfo:" "$CSV_FILE" >/dev/null 2>&1; then
+        echo "✓ $FRAG_DESC5 PASSED"
+    else
+        echo "✗ $FRAG_DESC5 FAILED (unexpected fragmentation section present)"
+        [ -n "$CSV_FILE" ] && cat "$CSV_FILE"
+        TEST_FAILED=$((TEST_FAILED + 1))
+    fi
+else
+    echo "✗ $FRAG_DESC5 FAILED (command execution failed)"
+    TEST_FAILED=$((TEST_FAILED + 1))
+fi
+echo ""
+
 # Negative test 1: intentionally malformed meminfo fixture (duplicate needed field)
 NEG_DESC="Test 8 (Negative): meminfo data failure"
-NEG_SMAP_FILE="tst/1-non-zero-swap-entry/meminsight_testSmap.txt"
-NEG_MEMINFO_FILE="tst/4-negative-duplicate-meminfo-field/meminsight_testMeminfo.txt"
+NEG_SMAP_FILE="test/1-non-zero-swap-entry/meminsight_testSmap.txt"
+NEG_MEMINFO_FILE="test/4-negative-duplicate-meminfo-field/meminsight_testMeminfo.txt"
 NEG_LOG_FILE="/tmp/meminsight/negative_test.log"
 
 echo "------------------------------------------"
@@ -176,8 +255,8 @@ echo ""
 
 # Negative test 2: duplicate smap field triggers failure
 NEG_DESC2="Test 9 (Negative): smap data failure"
-NEG_SMAP_FILE2="tst/5-negative-duplicate-smaps-field/meminsight_testSmap.txt"
-NEG_MEMINFO_FILE2="tst/1-non-zero-swap-entry/meminsight_testMeminfo.txt"
+NEG_SMAP_FILE2="test/5-negative-duplicate-smaps-field/meminsight_testSmap.txt"
+NEG_MEMINFO_FILE2="test/1-non-zero-swap-entry/meminsight_testMeminfo.txt"
 NEG_LOG_FILE2="/tmp/meminsight/negative_test2.log"
 
 echo "------------------------------------------"

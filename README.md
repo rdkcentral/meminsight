@@ -77,7 +77,7 @@ MemInsight includes organized build and testing infrastructure in the `scripts/`
 # Full build pipeline: compile, test, memory leak detection
 sh cov_build.sh --clean && \
 sh cov_build.sh --enable-cjson --test && \
-sh scripts/run_ut.sh && \
+sh test/run_ut.sh && \
 sh scripts/build_memleak.sh && \
 sh scripts/detect_leak.sh -o /tmp/output -i 1 -I 0
 ```
@@ -106,7 +106,7 @@ cat /tmp/meminsight-leak-reports/leak_report_*.txt
 | `scripts/detect_leak.sh` | Run meminsight with LD_PRELOAD instrumentation for leak detection |
 | `scripts/README.md` | Complete documentation and troubleshooting guide |
 | `cov_build.sh` | Main autotools build wrapper (root-level for compatibility) |
-| `scripts/run_ut.sh` | Unit test runner for all test fixtures |
+| `test/run_ut.sh` | Unit test runner for all test fixtures |
 
 **See [scripts/README.md](scripts/README.md) for complete documentation and environment variables.**
 
@@ -136,7 +136,7 @@ make
 
 # Run test fixtures (requires TESTME build)
 make clean && make CFLAGS="-DTESTME"
-sh scripts/run_ut.sh
+sh test/run_ut.sh
 ```
 
 ## 🔨 Installation
@@ -286,25 +286,25 @@ echo "process_whitelist=systemd,NetworkManager,sshd" > services.conf
 make clean && make CFLAGS="-DTESTME"
 
 # Run using sample fixtures (smaps + meminfo)
-./meminsight --test tst/1-non-zero-swap-entry/meminsight_testSmap.txt tst/1-non-zero-swap-entry/meminsight_testMeminfo.txt
+./meminsight --test test/1-non-zero-swap-entry/meminsight_testSmap.txt test/1-non-zero-swap-entry/meminsight_testMeminfo.txt
 
 # Run using sample fixtures including fragmentation (buddyinfo + pagetypeinfo)
-./meminsight --test tst/1-non-zero-swap-entry/meminsight_testSmap.txt tst/1-non-zero-swap-entry/meminsight_testMeminfo.txt tst/6-buddyinfo-sample/meminsight_testBuddyinfo.txt tst/7-pagetypeinfo-sample/meminsight_testPagetypeinfo.txt
+./meminsight --test test/1-non-zero-swap-entry/meminsight_testSmap.txt test/1-non-zero-swap-entry/meminsight_testMeminfo.txt test/6-buddyinfo-sample/meminsight_testBuddyinfo.txt test/7-pagetypeinfo-sample/meminsight_testPagetypeinfo.txt
 
 # Run the repository unit-test runner (executes all fixtures and a negative test)
-sh scripts/run_ut.sh
+sh test/run_ut.sh
 ```
 
-The `tst/` directory contains per-test subdirectories (e.g. `tst/1-non-zero-swap-entry/`) holding:
+The `test/` directory contains per-test subdirectories (e.g. `test/1-non-zero-swap-entry/`) holding:
 - `meminsight_testSmap.txt`
 - `meminsight_testMeminfo.txt`
 
-There is also a negative fixture in `tst/4-negative-duplicate-meminfo-field/` that is expected to fail in test mode and emit:
+There is also a negative fixture in `test/4-negative-duplicate-meminfo-field/` that is expected to fail in test mode and emit:
 `Test Failed..meminfoHeader vs tstmeminfoHeader ...`
 
 Fragmentation fixture coverage is also included via:
-- `tst/6-buddyinfo-sample/meminsight_testBuddyinfo.txt`
-- `tst/7-pagetypeinfo-sample/meminsight_testPagetypeinfo.txt`
+- `test/6-buddyinfo-sample/meminsight_testBuddyinfo.txt`
+- `test/7-pagetypeinfo-sample/meminsight_testPagetypeinfo.txt`
 
 ## 🏗️ Build System
 
@@ -355,12 +355,12 @@ make install
 
 | Function | Purpose | Location |
 |----------|---------|----------|
-| `collectSystemMemoryStats()` | Main collection orchestrator | memstatus.c |
-| `getProcessInfos()` | Parse per-process smaps data | memstatus.c |
-| `fillProcessStatFields()` | Extract stat file information | memstatus.c |
-| `addProcessInfo()` | Maintain sorted process list | memstatus.c |
-| `getMacAddress()` | Network interface detection | memstatus.c |
-| `parseConfig()` | Configuration file processing | memstatus.c |
+| `collectSystemMemoryStats()` | Main collection orchestrator | meminsight.c |
+| `getProcessInfos()` | Parse per-process smaps data | meminsight.c |
+| `fillProcessStatFields()` | Extract stat file information | meminsight.c |
+| `addProcessInfo()` | Maintain sorted process list | meminsight.c |
+| `getMacAddress()` | Network interface detection | meminsight.c |
+| `parseConfig()` | Configuration file processing | meminsight.c |
 
 ---
 
@@ -421,7 +421,7 @@ Workflows are intentionally split by responsibility:
 - `.github/workflows/native_full_build.yml`
    - Build-only workflow using `cov_build.sh --clean` then `cov_build.sh --enable-cjson --test`
 - `.github/workflows/unit-test.yml`
-   - Builds with the same flags and runs fixture tests through `scripts/run_ut.sh`
+   - Builds with the same flags and runs fixture tests through `test/run_ut.sh`
 
 ## 🔧 Troubleshooting
 

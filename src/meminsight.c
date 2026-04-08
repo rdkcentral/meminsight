@@ -17,7 +17,7 @@
  */
 
 #include "config.h"
-#include "memstatus.h"
+#include "meminsight.h"
 
 #ifdef ENABLE_CJSON
 #include <dlfcn.h>
@@ -153,8 +153,8 @@ static int unitTestFailed = 0;
 #endif
 
 static const char deviceIdentifierName[] = DEVICE_IDENTIFIER;
-static const char memInsightVersion[] = "" MEMINSIGHT_MAJOR_VERSION "." MEMINSIGHT_MINOR_VERSION "";
-static const char reportVersion[] =  "" REPORT_MAJOR_VERSION "." REPORT_MINOR_VERSION "";
+static const char memInsightVersion[] = "" MEMINSIGHT_MAJOR_VERSION "." MEMINSIGHT_MINOR_VERSION "." MEMINSIGHT_PATCH_VERSION "";
+static const char reportVersion[] =  "" REPORT_MAJOR_VERSION "." REPORT_MINOR_VERSION "." REPORT_PATCH_VERSION "";
 
 int (*getProcessInfos_ptr)(FILE*);
 
@@ -1143,6 +1143,22 @@ static void freeProcessInfoList(void)
         free(tofree);
     }
     headProcessInfo = NULL;
+}
+
+/*
+    * Safely adds a value to a total, preventing unsigned long overflow. If an
+    * overflow would occur, it saturates the total at ULONG_MAX and logs a warning.
+*/
+static void addULSaturating(unsigned long *total, unsigned long value, const char *field, unsigned int pid)
+{
+    if (ULONG_MAX - *total < value)
+    {
+        PRINT_ERROR("Overflow prevented while accumulating %s for PID %u (current=%lu, add=%lu). Saturating to ULONG_MAX.\n",
+                    field, pid, *total, value);
+        *total = ULONG_MAX;
+        return;
+    }
+    *total += value;
 }
 
 /**
@@ -2203,8 +2219,8 @@ void printHelpAndUsage(char *argv[], bool moreInfo, int returnCode)
         printf("  %s -c myconfig%s -a --interval 10 --iterations 5\n", argv[0], CONFIG_EXTN);
         printf("  %s --output /var/log/ --iterations 3\n", argv[0]);
 #ifdef TESTME
-    printf("  %s --test ../tst/smaps.txt ../tst/meminfo.txt\n", argv[0]);
-    printf("  %s --test ../tst/smaps.txt ../tst/meminfo.txt ../tst/buddyinfo.txt ../tst/pagetypeinfo.txt\n\n", argv[0]);
+    printf("  %s --test ../test/smaps.txt ../test/meminfo.txt\n", argv[0]);
+    printf("  %s --test ../test/smaps.txt ../test/meminfo.txt ../test/buddyinfo.txt ../test/pagetypeinfo.txt\n\n", argv[0]);
 #endif
 
         printf("Sample config file:\n");
@@ -2320,12 +2336,12 @@ int collectSystemMemoryStats(bool enableKThreads, const char *outDir, int iterat
                             getProcessInfo.pid = pid;
                             // name, majFaults, cputime already filled by
                             // fillProcessStatFields
-                            rssTotal += getProcessInfo.rssTotal;
-                            pssTotal += getProcessInfo.pssTotal;
-                            shared_clean_total += getProcessInfo.shared_clean_total;
-                            private_clean_total += getProcessInfo.private_clean_total;
-                            private_dirty_total += getProcessInfo.private_dirty_total;
-                            swap_pss_total += getProcessInfo.swap_pss_total;
+                            addULSaturating(&rssTotal, getProcessInfo.rssTotal, "rss_total", pid);
+                            addULSaturating(&pssTotal, getProcessInfo.pssTotal, "pss_total", pid);
+                            addULSaturating(&shared_clean_total, getProcessInfo.shared_clean_total, "shared_clean_total", pid);
+                            addULSaturating(&private_clean_total, getProcessInfo.private_clean_total, "private_clean_total", pid);
+                            addULSaturating(&private_dirty_total, getProcessInfo.private_dirty_total, "private_dirty_total", pid);
+                            addULSaturating(&swap_pss_total, getProcessInfo.swap_pss_total, "swap_pss_total", pid);
                             addProcessInfo(&getProcessInfo);
                             noOfPids++;
                         }
@@ -2567,12 +2583,12 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, bool cli_out
                     getProcessInfo.pid = pid;
                     // name, majFaults, cputime already filled by
                     // fillProcessStatFields
-                    rssTotal += getProcessInfo.rssTotal;
-                    pssTotal += getProcessInfo.pssTotal;
-                    shared_clean_total += getProcessInfo.shared_clean_total;
-                    private_clean_total += getProcessInfo.private_clean_total;
-                    private_dirty_total += getProcessInfo.private_dirty_total;
-                    swap_pss_total += getProcessInfo.swap_pss_total;
+                    addULSaturating(&rssTotal, getProcessInfo.rssTotal, "rss_total", pid);
+                    addULSaturating(&pssTotal, getProcessInfo.pssTotal, "pss_total", pid);
+                    addULSaturating(&shared_clean_total, getProcessInfo.shared_clean_total, "shared_clean_total", pid);
+                    addULSaturating(&private_clean_total, getProcessInfo.private_clean_total, "private_clean_total", pid);
+                    addULSaturating(&private_dirty_total, getProcessInfo.private_dirty_total, "private_dirty_total", pid);
+                    addULSaturating(&swap_pss_total, getProcessInfo.swap_pss_total, "swap_pss_total", pid);
                     addProcessInfo(&getProcessInfo);
                     actualCount++;
                 }

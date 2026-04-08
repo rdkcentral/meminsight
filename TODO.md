@@ -36,12 +36,11 @@
 - [x] Add `freeProcessInfoList()` cleanup helper to ensure the process linked list is freed on non-CSV and failure paths.
 
 ### CRITICAL Fixes Still Open (from CODE_AUDIT_AND_HARDENING.md)
-- [ ] Fix file handle leak in `parseConfig()` — ensure `fclose()` on all error return paths.
-- [ ] Fix directory handle leak in `getPIDByProcessName()` — `closedir()` before `break`.
+- [x] Fix file handle leak in `parseConfig()` — ensure `fclose()` on all error return paths.
+- [x] Fix directory handle leak in `getPIDByProcessName()` — `closedir()` before `break`.
 
 ### HIGH Fixes Still Open
-- [ ] Add bounds check for PSS/RSS accumulation to prevent integer overflow on long-running captures.
-- [ ] Add division-by-zero guard in bandwidth calculations.
+- [x] Add bounds check for PSS/RSS accumulation to prevent integer overflow on long-running captures.
 
 ### Code Modularity (LOW — carry forward if refactor scope widens)
 - [ ] Reorganize code and introduce centralized macros/constants for modular configuration. `[FR-025]`
@@ -103,7 +102,7 @@
 - [x] Create organized `scripts/` directory with modular build and detection tools. `[FR-080]`
   - [x] `scripts/build_memleak.sh` — Clone and build memleakutil library.
   - [x] `scripts/detect_leak.sh` — Run MemInsight with leak detection instrumentation.
-  - [x] `scripts/run_ut.sh` — Fixture-based unit test runner.
+  - [x] `test/run_ut.sh` — Fixture-based unit test runner.
   - [x] `scripts/README.md` — Script organization documentation.
 - [x] Perform comprehensive code audit and generate hardening recommendations (`docs/CODE_AUDIT_AND_HARDENING.md`). `[FR-080]`
 - [x] Integrate memleakutil into CI/CD workflow (`native_full_build.yml`). `[FR-082]`
@@ -120,9 +119,9 @@
 - [x] Tests 6 and 7: fragmentation fixture tests (pagetypeinfo and buddyinfo paths). `[TST-010, TST-011]`
 - [x] Deterministic fixture-only behavior in TESTME mode (no host `/proc` interference). `[TST-001]`
 - [x] Negative tests: duplicate meminfo field, duplicate smaps field.
-- [ ] Add fixture coverage for `/proc/buddyinfo` format variants across kernel versions. `[TST-010]`
-- [ ] Add fixture coverage for `/proc/pagetypeinfo` migration-type layout variants. `[TST-011]`
-- [ ] Add fault-injection fixtures: missing buddyinfo, missing pagetypeinfo. `[TST-030, TST-031]`
+- [x] Add fixture coverage for `/proc/buddyinfo` format variants across kernel versions. `[TST-010]`
+- [x] Add fixture coverage for `/proc/pagetypeinfo` migration-type layout variants. `[TST-011]`
+- [x] Add fault-injection fixtures: missing buddyinfo, missing pagetypeinfo. `[TST-030, TST-031]`
 - [ ] Add static analysis tooling (clang-tidy, cppcheck) to CI pipeline.
 - [ ] Generate coverage reports and upload to codecov.
 - [ ] Improve test organization and coverage reporting.

@@ -27,10 +27,10 @@ This directory contains organized, modular build and test scripts for meminsight
   - Supports feature flags (`--enable-cjson`, `--test`)
   - **Usage**: `sh cov_build.sh --enable-cjson --test`
 
-- **`scripts/run_ut.sh`** - Unit test runner
+- **`test/run_ut.sh`** - Unit test runner
   - Executes fragmentation, memory, and negative tests
-  - Uses test fixtures from `tst/` directory
-  - **Usage**: `sh scripts/run_ut.sh`
+  - Uses test fixtures from `test/` directory
+  - **Usage**: `sh test/run_ut.sh`
 
 ## Complete Build Workflow
 
@@ -53,7 +53,7 @@ sh scripts/build_memleak.sh
 
 ```bash
 # Execute all meminsight unit tests
-sh scripts/run_ut.sh
+sh test/run_ut.sh
 ```
 
 ### 4. Run Leak Detection Analysis
@@ -69,7 +69,7 @@ sh scripts/detect_leak.sh -o /tmp/meminsight-output -i 1 -I 0
 # Complete pipeline: build, test, leak detection
 sh cov_build.sh --clean && \
 sh cov_build.sh --enable-cjson --test && \
-sh scripts/run_ut.sh && \
+sh test/run_ut.sh && \
 sh scripts/build_memleak.sh && \
 sh scripts/detect_leak.sh -o /tmp/output -i 1 -I 0
 ```
@@ -213,7 +213,7 @@ When updating tool versions:
 - **build_memleak.sh**: git, autoconf, automake, make, Python
 - **detect_leak.sh**: bash, memleakutil (built via build_memleak.sh), libdl
 - **cov_build.sh**: autoconf, automake, gcc, make
-- **scripts/run_ut.sh**: standard POSIX utilities
+- **test/run_ut.sh**: standard POSIX utilities
 
 ---
 

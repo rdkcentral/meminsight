@@ -13,7 +13,7 @@ Use this agent for implementation tasks in meminsight:
 - feature additions in `src/`
 - parser updates for `/proc` sources
 - CSV/JSON report changes
-- TESTME fixture and `scripts/run_ut.sh` updates
+- TESTME fixture and `test/run_ut.sh` updates
 - build and workflow alignment
 
 ## Non-negotiables
