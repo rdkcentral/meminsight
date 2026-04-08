@@ -4,7 +4,7 @@
 MemInsight Enhancement for RDK Devices: Memory Fragmentation Collection, Structured Reporting, and Near Real-Time Log Analytics Integration
 
 ## Version
-]- Document version: 1.1-working
+- Document version: 1.1-working
 - Date: 2026-04-07
 - Status: Working draft with implementation status annotations
 

@@ -487,8 +487,11 @@ static int writePagetypeInfoCSV(FILE *out)
         rowCount++;
     }
 
-    if (!headerWritten)
+    if (!headerWritten) {
         fprintf(out, "parse_status,no_rows_parsed\n");
+        fclose(fp);
+        return -1;
+    }
 
     fclose(fp);
     return rowCount;
@@ -641,6 +644,11 @@ static int addPagetypeInfoJSON(cJSON_t *fragRoot)
     }
 
     fclose(fp);
+
+    if (rowCount <= 0) {
+        g_cjson.Delete(rows);
+        return -1;
+    }
 
     if (pageBlockOrder >= 0)
         g_cjson.AddNumberToObject(fragRoot, "page_block_order", (double)pageBlockOrder);
