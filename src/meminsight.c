@@ -2117,42 +2117,15 @@ int getProcessInfos(unsigned pid)
     else
 #endif
     {
-        if (force_smaps)
-        {
-            smaps_rollup = 0;
-            strcpy(gSMAPS_OR_ROLLUP, "smaps");
-            getProcessInfos_ptr = getProcessInfos_initial;
-            snprintf(tmp, sizeof(tmp), "/proc/%u/smaps", pid);
-            smap = fopen(tmp, "r");
-        }
-        else
-        {
-            smaps_rollup = 1;
-            strcpy(gSMAPS_OR_ROLLUP, "smaps_rollup");
-            getProcessInfos_ptr = getProcessInfos_rollup;
-            snprintf(tmp, sizeof(tmp), "/proc/%u/smaps_rollup", pid);
-            smap = fopen(tmp, "r");
-
-            if (!smap)
-            {
-                int rollupErr = errno;
-                if (rollupErr != ENOENT)
-                {
-                    PRINT_ERROR("%s: failed to open /proc/%u/smaps_rollup: %s (errno=%d). Falling back to smaps.\n", __FUNCTION__, pid, strerror(rollupErr), rollupErr);
-                }
-                smaps_rollup = 0;
-                strcpy(gSMAPS_OR_ROLLUP, "smaps");
-                getProcessInfos_ptr = getProcessInfos_initial;
-                snprintf(tmp, sizeof(tmp), "/proc/%u/smaps", pid);
-                smap = fopen(tmp, "r");
-            }
-        }
+        snprintf(tmp, sizeof(tmp), "/proc/%u/%s", pid, gSMAPS_OR_ROLLUP);
+        smap = fopen(tmp, "r");
     }
 
     if (smap)
     {
         ret = getProcessInfos_ptr(smap);
         fclose(smap);
+
 #ifdef TESTME
         if ((getProcessInfo.rssTotal != processInfoTest.rssTotal) || (getProcessInfo.pssTotal != processInfoTest.pssTotal) ||
             (getProcessInfo.shared_clean_total != processInfoTest.shared_clean_total) || 
