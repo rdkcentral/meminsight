@@ -17,7 +17,7 @@ This directory contains organized, modular build and test scripts for meminsight
 - **`detect_leak.sh`** - Run meminsight with memory leak detection
   - Instruments meminsight via `LD_PRELOAD` with libmemfnswrap.so
   - Generates leak detection reports and heap walk summaries
-  - **Usage**: `sh scripts/detect_leak.sh -o /tmp/out -i 1 -I 0`
+  - **Usage**: `sh scripts/detect_leak.sh -o /tmp/out -i 1 -I 2 [--json-pretty]`
   - **Output**: Leak reports to `/tmp/meminsight-leak-reports` (configurable)
 
 ### Root-Level Scripts (Retained for compatibility)
@@ -60,7 +60,7 @@ sh test/run_ut.sh
 
 ```bash
 # Run meminsight with memory leak instrumentation
-sh scripts/detect_leak.sh -o /tmp/meminsight-output -i 1 -I 0
+sh scripts/detect_leak.sh -o /tmp/meminsight-output -i 1 -I 2 --json-pretty
 ```
 
 ### 5. Full CI/CD Pipeline
@@ -71,8 +71,15 @@ sh cov_build.sh --clean && \
 sh cov_build.sh --enable-cjson --test && \
 sh test/run_ut.sh && \
 sh scripts/build_memleak.sh && \
-sh scripts/detect_leak.sh -o /tmp/output -i 1 -I 0
+sh scripts/detect_leak.sh -o /tmp/output -i 1 -I 2 --json-pretty
 ```
+
+### Note on Local Dependency Installation
+
+`build_memleak.sh` no longer runs `apt-get` implicitly.
+
+- Default behavior: fail fast with a clear dependency list when autotools are missing.
+- Optional auto-install: set `MEMLEAK_INSTALL_DEPS=1` to allow dependency installation via `apt-get`.
 
 ## Environment Variables
 

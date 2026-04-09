@@ -18,8 +18,8 @@
 
 [Unit]
 Description=MemInsight memory profiling service
-After=network-online.target
-Wants=network-online.target
+After=network-online.target systemd-timesyncd.service
+Wants=network-online.target systemd-timesyncd.service
 
 [Service]
 Type=simple

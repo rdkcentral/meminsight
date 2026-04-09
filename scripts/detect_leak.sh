@@ -25,6 +25,7 @@
 #
 # Usage:
 #   sh scripts/detect_leak.sh
+#   sh scripts/detect_leak.sh -o /tmp/out -i 2 -I 5 [--json-pretty]
 #   sh scripts/detect_leak.sh --help
 #
 # Environment Variables:
@@ -49,9 +50,13 @@ MEMLEAK_INSTALL_DIR="${MEMLEAK_INSTALL_DIR:-/tmp/memleakutil-install}"
 MEMINSIGHT_BIN="${MEMINSIGHT_BIN:-${PROJECT_ROOT}/meminsight}"
 LEAK_REPORT_DIR="${LEAK_REPORT_DIR:-/tmp/meminsight-leak-reports}"
 
-# Parse --help
-case " $* " in
-  *" --help "*|*" -h "*)
+# Defaults for runtime cases
+CASE_OUT_BASE="/tmp/meminsight/leak"
+CASE_INTERVAL="2"
+CASE_ITERATIONS="5"
+CASE_JSON_PRETTY="0"
+
+print_help() {
     cat << 'EOF'
 detect_leak.sh - Memory leak detection for meminsight
 
@@ -61,6 +66,20 @@ USAGE:
 EXAMPLES:
   # Run all default leak test cases
   sh scripts/detect_leak.sh
+
+  # Override output/interval/iterations for runtime cases
+  sh scripts/detect_leak.sh -o /tmp/out -i 1 -I 3
+
+  # Also enable pretty JSON in the JSON runtime case
+  sh scripts/detect_leak.sh -o /tmp/out -i 1 -I 3 --json-pretty
+
+OPTIONS:
+  -o, --output <dir>      Base output directory for runtime cases
+                          (case 1 uses <dir>, case 2 uses <dir>_json)
+  -i, --interval <sec>    Interval forwarded to meminsight runtime cases
+  -I, --iterations <n>    Iterations forwarded to meminsight runtime cases
+      --json-pretty       Forward --json-pretty to JSON runtime case
+  -h, --help              Show this help
 
 ENVIRONMENT VARIABLES:
   MEMLEAK_INSTALL_DIR   Path to memleakutil installation
@@ -78,15 +97,56 @@ OUTPUT FILES:
 NOTES:
   - Requires memleakutil to be built first via sh scripts/build_memleak.sh
   - Uses LD_PRELOAD to instrument meminsight process
-  - Runs these built-in cases:
+  - Runs these cases:
       0) --help
-      1) --interval 2 --iterations 5 --output /tmp/meminsight/leak
-      2) --interval 2 --iterations 5 --output /tmp/meminsight/leak2 --fmt json --json-pretty
+      1) --interval <interval> --iterations <iterations> --output <output>
+      2) --interval <interval> --iterations <iterations> --output <output>_json --fmt json [--json-pretty]
 
 EOF
-    exit 0
-    ;;
-esac
+}
+
+# Parse CLI options
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -h|--help)
+      print_help
+      exit 0
+      ;;
+    -o|--output)
+      shift
+      if [ -z "${1:-}" ]; then
+        printf "%s\n" "ERROR: Missing value for --output"
+        exit 1
+      fi
+      CASE_OUT_BASE="$1"
+      ;;
+    -i|--interval)
+      shift
+      if [ -z "${1:-}" ]; then
+        printf "%s\n" "ERROR: Missing value for --interval"
+        exit 1
+      fi
+      CASE_INTERVAL="$1"
+      ;;
+    -I|--iterations)
+      shift
+      if [ -z "${1:-}" ]; then
+        printf "%s\n" "ERROR: Missing value for --iterations"
+        exit 1
+      fi
+      CASE_ITERATIONS="$1"
+      ;;
+    --json-pretty)
+      CASE_JSON_PRETTY="1"
+      ;;
+    *)
+      printf "%s\n" "ERROR: Unknown option: $1"
+      print_help
+      exit 1
+      ;;
+  esac
+  shift
+done
 
 printf "%s\n" "================================================"
 printf "%s\n" "  MemInsight Leak Detection Runner"
@@ -129,6 +189,10 @@ echo "  Memleakutil:       ${MEMLEAK_INSTALL_DIR}"
 echo "  Meminsight Binary: ${MEMINSIGHT_BIN}"
 echo "  Report Directory:  ${LEAK_REPORT_DIR}"
 echo "  Timestamp:         ${TIMESTAMP}"
+echo "  Case Output Base:  ${CASE_OUT_BASE}"
+echo "  Case Interval:     ${CASE_INTERVAL}"
+echo "  Case Iterations:   ${CASE_ITERATIONS}"
+echo "  Case JSON Pretty:  ${CASE_JSON_PRETTY}"
 printf "\n"
 
 # Setup library paths for leak detection (applied per meminsight invocation only)
@@ -231,10 +295,14 @@ else
 fi
 
 # 1st case: CSV output run
-run_case "1-csv" "${REPORT_1}" --interval 2 --iterations 5 --output /tmp/meminsight/leak || FAIL_COUNT=$((FAIL_COUNT + 1))
+run_case "1-csv" "${REPORT_1}" --interval "${CASE_INTERVAL}" --iterations "${CASE_ITERATIONS}" --output "${CASE_OUT_BASE}" || FAIL_COUNT=$((FAIL_COUNT + 1))
 
 # 2nd case: JSON output run
-run_case "2-json" "${REPORT_2}" --interval 2 --iterations 5 --output /tmp/meminsight/leak2 --fmt json --json-pretty || FAIL_COUNT=$((FAIL_COUNT + 1))
+if [ "${CASE_JSON_PRETTY}" = "1" ]; then
+  run_case "2-json" "${REPORT_2}" --interval "${CASE_INTERVAL}" --iterations "${CASE_ITERATIONS}" --output "${CASE_OUT_BASE}_json" --fmt json --json-pretty || FAIL_COUNT=$((FAIL_COUNT + 1))
+else
+  run_case "2-json" "${REPORT_2}" --interval "${CASE_INTERVAL}" --iterations "${CASE_ITERATIONS}" --output "${CASE_OUT_BASE}_json" --fmt json || FAIL_COUNT=$((FAIL_COUNT + 1))
+fi
 
 printf "%s\n" "Leak Detection Reports:"
 echo "  0th case: ${REPORT_0}"
@@ -251,7 +319,7 @@ cat "${REPORT_2}" || true
 printf "\n"
 
 printf "%s\n" "Cleaning meminsight leak output directories..."
-rm -rf /tmp/meminsight/leak /tmp/meminsight/leak2
+rm -rf "${CASE_OUT_BASE}" "${CASE_OUT_BASE}_json"
 printf "%s\n\n" "Cleanup complete"
 
 if [ "${FAIL_COUNT}" -eq 0 ]; then

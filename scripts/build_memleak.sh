@@ -55,8 +55,14 @@ if ! command -v git >/dev/null 2>&1; then
 fi
 
 if ! command -v autoconf >/dev/null 2>&1; then
-    printf "%s\n" "WARNING: autoconf not found. Installing build dependencies..."
-    apt-get update && apt-get install -y autotools-dev autoconf automake pkg-config libtool m4
+    if [ "${MEMLEAK_INSTALL_DEPS:-0}" = "1" ]; then
+        printf "%s\n" "WARNING: autoconf not found. MEMLEAK_INSTALL_DEPS=1, attempting dependency install..."
+        apt-get update && apt-get install -y autotools-dev autoconf automake pkg-config libtool m4
+    else
+        printf "%s\n" "ERROR: autoconf not found. Install build dependencies first: autotools-dev autoconf automake pkg-config libtool m4"
+        printf "%s\n" "Set MEMLEAK_INSTALL_DEPS=1 to allow this script to run apt-get automatically."
+        exit 1
+    fi
 fi
 
 printf "%s\n" "Configuration:"

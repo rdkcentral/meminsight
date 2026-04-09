@@ -79,7 +79,7 @@ sh cov_build.sh --clean && \
 sh cov_build.sh --enable-cjson --test && \
 sh test/run_ut.sh && \
 sh scripts/build_memleak.sh && \
-sh scripts/detect_leak.sh -o /tmp/output -i 1 -I 0
+sh scripts/detect_leak.sh -o /tmp/output -i 1 -I 2 --json-pretty
 ```
 
 ### Build & Memory Leak Detection
@@ -92,7 +92,7 @@ sh cov_build.sh --enable-cjson --test
 sh scripts/build_memleak.sh
 
 # 3. Run meminsight with leak detection instrumentation
-sh scripts/detect_leak.sh -o /tmp/output -i 1 --json-pretty
+sh scripts/detect_leak.sh -o /tmp/output -i 1 -I 2 --json-pretty
 
 # 4. View leak detection report
 cat /tmp/meminsight-leak-reports/leak_report_*.txt

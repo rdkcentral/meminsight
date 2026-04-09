@@ -95,6 +95,23 @@ static int loadCjson(void)
         } \
     } while (0)
 
+/*
+ * Use this when the struct member name and exported symbol differ
+ * (for example: member Free -> symbol cJSON_free).
+ */
+#define LOAD_SYM_NAMED(member, symbol) \
+    do { \
+        g_cjson.member = (void *)dlsym(g_cjson.handle, symbol); \
+        if (!g_cjson.member) { \
+            PRINT_MUST("JSON: Failed to resolve %s: %s\n", symbol, dlerror()); \
+            dlclose(g_cjson.handle); \
+            memset(&g_cjson, 0, sizeof(g_cjson)); \
+            PRINT_MUST("JSON: Symbol resolution failed. Falling back to CSV.\n"); \
+            g_reportFormat = REPORT_CSV; \
+            return -1; \
+        } \
+    } while (0)
+
     LOAD_SYM(CreateObject);
     LOAD_SYM(CreateArray);
     LOAD_SYM(AddStringToObject);
@@ -105,18 +122,10 @@ static int loadCjson(void)
     LOAD_SYM(PrintUnformatted);
     LOAD_SYM(Delete);
 
-    g_cjson.Free = (void (*)(void *))dlsym(g_cjson.handle, "cJSON_free");
-    if (!g_cjson.Free) {
-        PRINT_MUST("JSON: Failed to resolve cJSON_free: %s\n", dlerror());
-        dlclose(g_cjson.handle);
-        memset(&g_cjson, 0, sizeof(g_cjson));
-        PRINT_MUST("JSON: Missing allocator hook. Falling back to CSV.\n");
-        g_reportFormat = REPORT_CSV;
-        return -1;
-    }
+    LOAD_SYM_NAMED(Free, "cJSON_free");
 
+#undef LOAD_SYM_NAMED
 #undef LOAD_SYM
-
     PRINT_INFO("JSON: libcjson loaded successfully.\n");
     return 0;
 }
@@ -305,15 +314,10 @@ int getPropertyFromFile(const char *filename, const char *property, char *proper
  *   uptime_seconds  - total wall-clock seconds since boot (fractional).
  *   idle_seconds    - sum of per-CPU idle time (fractional, not used here).
  *
- * Example:  "10658.36 37479.52"
- *   10658 s  →  2 h  57 m  38 s  (matches `uptime` output: "up  2:57")
+ * Example: "10658.36 37479.52" -> returns "10658.36".
  *
- * double is used for uptime_seconds so that precision is preserved for
- * devices running longer than ~194 days (where float would lose sub-second
- * accuracy and eventually whole seconds).
- *
- * Returns a pointer to a static buffer in "DDd HH:MM:SS" format, or
- * "unknown" if /proc/uptime cannot be read.
+ * Returns a pointer to a static buffer containing raw uptime seconds
+ * (the first /proc/uptime field), or "unknown" if the file cannot be read.
  */
 const char *getSystemUptime(void)
 {
@@ -326,27 +330,27 @@ const char *getSystemUptime(void)
         return uptimeStr;
     }
 
-    double uptimeSeconds = 0.0;
-    int parsed = fscanf(fp, "%lf", &uptimeSeconds);
+    char line[64] = {0};
+    if (!fgets(line, sizeof(line), fp))
+    {
+        fclose(fp);
+        strncpy(uptimeStr, "unknown", sizeof(uptimeStr) - 1);
+        uptimeStr[sizeof(uptimeStr) - 1] = '\0';
+        return uptimeStr;
+    }
     fclose(fp);
 
-    if (parsed != 1 || uptimeSeconds < 0.0)
+    char *sep = strchr(line, ' ');
+    if (!sep)
     {
         strncpy(uptimeStr, "unknown", sizeof(uptimeStr) - 1);
         uptimeStr[sizeof(uptimeStr) - 1] = '\0';
         return uptimeStr;
     }
+    *sep = '\0';
 
-    unsigned long totalSec = (unsigned long)uptimeSeconds;
-    unsigned int days    = (unsigned int)(totalSec / 86400);
-    unsigned int hours   = (unsigned int)((totalSec % 86400) / 3600);
-    unsigned int minutes = (unsigned int)((totalSec % 3600) / 60);
-    unsigned int seconds = (unsigned int)(totalSec % 60);
-
-    if (days > 0)
-        snprintf(uptimeStr, sizeof(uptimeStr), "%ud %02u:%02u:%02u", days, hours, minutes, seconds);
-    else
-        snprintf(uptimeStr, sizeof(uptimeStr), "%02u:%02u:%02u", hours, minutes, seconds);
+    strncpy(uptimeStr, line, sizeof(uptimeStr) - 1);
+    uptimeStr[sizeof(uptimeStr) - 1] = '\0';
 
     return uptimeStr;
 }
@@ -2131,6 +2135,11 @@ int getProcessInfos(unsigned pid)
 
             if (!smap)
             {
+                int rollupErr = errno;
+                if (rollupErr != ENOENT)
+                {
+                    PRINT_ERROR("%s: failed to open /proc/%u/smaps_rollup: %s (errno=%d). Falling back to smaps.\n", __FUNCTION__, pid, strerror(rollupErr), rollupErr);
+                }
                 smaps_rollup = 0;
                 strcpy(gSMAPS_OR_ROLLUP, "smaps");
                 getProcessInfos_ptr = getProcessInfos_initial;
@@ -3224,9 +3233,15 @@ int main(int argc, char *argv[])
     }
     else
     {
-        smaps_rollup = 1;
-        strcpy(gSMAPS_OR_ROLLUP, "smaps_rollup");
-        getProcessInfos_ptr = getProcessInfos_rollup;
+        if (access("/proc/self/smaps_rollup", R_OK) == 0) {
+            smaps_rollup = 1;
+            strcpy(gSMAPS_OR_ROLLUP, "smaps_rollup");
+            getProcessInfos_ptr = getProcessInfos_rollup;
+        } else {
+            smaps_rollup = 0;
+            strcpy(gSMAPS_OR_ROLLUP, "smaps");
+            getProcessInfos_ptr = getProcessInfos_initial;
+        }
     }
 
 #ifdef ENABLE_CJSON
