@@ -151,6 +151,14 @@ unsigned smaps_rollup;                // Effective source for current parse: 1=s
 unsigned force_smaps = 0;             // CLI override: force reading /proc/<pid>/smaps
 char gSMAPS_OR_ROLLUP[] = "smaps_rollup";
 
+typedef enum {
+    FRAG_SRC_NONE = 0,
+    FRAG_SRC_PAGETYPEINFO,
+    FRAG_SRC_BUDDYINFO
+} FragmentationSource;
+
+static FragmentationSource g_fragSource = FRAG_SRC_NONE;
+
 #ifdef TESTME
 unsigned isTestMode = 0;
 char testSmap[128];
@@ -242,6 +250,34 @@ static void updateBandwidthAvailability(void)
     bool modeAccessible = (access(BW_DDR_MODE_FILE, R_OK | W_OK) == 0);
     bool bwReadable = (access(BW_DDR_FILE, R_OK) == 0);
     g_bwDataAvailable = (modeAccessible && bwReadable);
+}
+
+/*
+ * Select fragmentation source once at startup for consistent per-iteration output:
+ * prefer pagetypeinfo, otherwise buddyinfo, otherwise none.
+ */
+static void selectFragmentationSource(void)
+{
+#ifdef TESTME
+    if (isTestMode) {
+        if (testPagetypeinfo[0]) {
+            g_fragSource = FRAG_SRC_PAGETYPEINFO;
+        } else if (testBuddyinfo[0]) {
+            g_fragSource = FRAG_SRC_BUDDYINFO;
+        } else {
+            g_fragSource = FRAG_SRC_NONE;
+        }
+        return;
+    }
+#endif
+
+    if (access(PGT_FILE, R_OK) == 0) {
+        g_fragSource = FRAG_SRC_PAGETYPEINFO;
+    } else if (access(BUDDYINFO_FILE, R_OK) == 0) {
+        g_fragSource = FRAG_SRC_BUDDYINFO;
+    } else {
+        g_fragSource = FRAG_SRC_NONE;
+    }
 }
 
 /**
@@ -572,10 +608,21 @@ void saveFragmentationInfo(FILE *out)
     if (!out)
         return;
 
-    if (writePagetypeInfoCSV(out) >= 0)
+    if (g_fragSource == FRAG_SRC_PAGETYPEINFO) {
+        if (writePagetypeInfoCSV(out) >= 0)
+            return;
+        fprintf(out, "\n\nFragmentation_PagetypeInfo:\nparse_status,source_unavailable_or_parse_error\n");
         return;
+    }
 
-    (void)writeBuddyinfoCSV(out);
+    if (g_fragSource == FRAG_SRC_BUDDYINFO) {
+        if (writeBuddyinfoCSV(out) >= 0)
+            return;
+        fprintf(out, "\n\nFragmentation_BuddyInfo:\nparse_status,source_unavailable_or_parse_error\n");
+        return;
+    }
+
+    fprintf(out, "\n\nFragmentation:\nparse_status,source_unavailable\n");
 }
 
 #ifdef ENABLE_CJSON
@@ -735,14 +782,19 @@ void saveFragmentationInfo_JSON(cJSON_t *root)
     if (!frag)
         return;
 
-    if (addPagetypeInfoJSON(frag) == 0) {
+    if (g_fragSource == FRAG_SRC_PAGETYPEINFO) {
         g_cjson.AddStringToObject(frag, "source", "pagetypeinfo");
         g_cjson.AddStringToObject(frag, "path", PGT_FILE);
-    } else if (addBuddyinfoJSON(frag) == 0) {
+        if (addPagetypeInfoJSON(frag) != 0)
+            g_cjson.AddStringToObject(frag, "parse_status", "source_unavailable_or_parse_error");
+    } else if (g_fragSource == FRAG_SRC_BUDDYINFO) {
         g_cjson.AddStringToObject(frag, "source", "buddyinfo");
         g_cjson.AddStringToObject(frag, "path", BUDDYINFO_FILE);
+        if (addBuddyinfoJSON(frag) != 0)
+            g_cjson.AddStringToObject(frag, "parse_status", "source_unavailable_or_parse_error");
     } else {
         g_cjson.AddStringToObject(frag, "source", "none");
+        g_cjson.AddStringToObject(frag, "parse_status", "source_unavailable");
     }
 
     g_cjson.AddItemToObject(root, "fragmentation", frag);
@@ -2192,7 +2244,8 @@ void printHelpAndUsage(char *argv[], bool moreInfo, int returnCode)
 
         printf("Default behavior (no flags):\n");
         printf("  - Runs indefinite number of iterations, with an interval of 15 minutes, monitors all processes with log level INFO\n");
-        printf("  - Output: /tmp/<MAC>_<timestamp>_iter<iteration>_%s\n\n", CSV_FILE_NAME);
+        printf("  - Output: /tmp/<MAC>_<timestamp>_iter<iteration>_%s (CSV format)\n", CSV_FILE_NAME);
+        printf("  - Output: /tmp/<MAC>_<timestamp>_iter<iteration>_%s (JSON format, with --fmt json)\n\n", JSON_FILE_NAME);
 
         printf("Example:\n");
         printf("  %s\n", argv[0]);
@@ -2212,7 +2265,8 @@ void printHelpAndUsage(char *argv[], bool moreInfo, int returnCode)
         printf("  - Supported config file extensions: %s\n", CONFIG_EXTN);
         printf("  - If both interval and iterations are set via CLI, both are used.\n");
         printf("  - If only one is set, the other uses its default or config value.\n");
-        printf("  - Output file name format: <MAC>_<TIMESTAMP>_iter<iteration>_%s\n", CSV_FILE_NAME);
+        printf("  - Output file name format (CSV): <MAC>_<TIMESTAMP>_iter<iteration>_%s\n", CSV_FILE_NAME);
+        printf("  - Output file name format (JSON): <MAC>_<TIMESTAMP>_iter<iteration>_%s (use with --fmt json)\n", JSON_FILE_NAME);
     }
     exit(returnCode);
 }
@@ -3197,6 +3251,7 @@ int main(int argc, char *argv[])
     printf("\n");
 
     updateBandwidthAvailability();
+    selectFragmentationSource();
 
     if (force_smaps)
     {
