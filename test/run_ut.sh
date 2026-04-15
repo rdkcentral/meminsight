@@ -96,11 +96,11 @@ FRAG_PGT_FILE="test/7-pagetypeinfo-sample/meminsight_testPagetypeinfo.txt"
 echo "------------------------------------------"
 echo "$FRAG_DESC1"
 echo "------------------------------------------"
-echo "Command: $MEM_BIN -o /tmp/meminsight -t $FRAG_SMAP_FILE $FRAG_MEMINFO_FILE $FRAG_BUDDY_FILE $FRAG_PGT_FILE"
+echo "Command: $MEM_BIN --frag -o /tmp/meminsight -t $FRAG_SMAP_FILE $FRAG_MEMINFO_FILE $FRAG_BUDDY_FILE $FRAG_PGT_FILE"
 
 rm -rf /tmp/meminsight/*.csv
 
-if $MEM_BIN -o /tmp/meminsight -t "$FRAG_SMAP_FILE" "$FRAG_MEMINFO_FILE" "$FRAG_BUDDY_FILE" "$FRAG_PGT_FILE"; then
+if $MEM_BIN --frag -o /tmp/meminsight -t "$FRAG_SMAP_FILE" "$FRAG_MEMINFO_FILE" "$FRAG_BUDDY_FILE" "$FRAG_PGT_FILE"; then
     CSV_FILE=$(ls /tmp/meminsight/*.csv 2>/dev/null | head -n 1)
     if [ -n "$CSV_FILE" ] && grep -F "Fragmentation_PagetypeInfo:" "$CSV_FILE" >/dev/null 2>&1; then
         echo "✓ $FRAG_DESC1 PASSED"
@@ -121,11 +121,11 @@ FRAG_DESC2="Test 7: Fragmentation buddyinfo fallback"
 echo "------------------------------------------"
 echo "$FRAG_DESC2"
 echo "------------------------------------------"
-echo "Command: $MEM_BIN -o /tmp/meminsight -t $FRAG_SMAP_FILE $FRAG_MEMINFO_FILE $FRAG_BUDDY_FILE"
+echo "Command: $MEM_BIN --frag -o /tmp/meminsight -t $FRAG_SMAP_FILE $FRAG_MEMINFO_FILE $FRAG_BUDDY_FILE"
 
 rm -rf /tmp/meminsight/*.csv
 
-if $MEM_BIN -o /tmp/meminsight -t "$FRAG_SMAP_FILE" "$FRAG_MEMINFO_FILE" "$FRAG_BUDDY_FILE"; then
+if $MEM_BIN --frag -o /tmp/meminsight -t "$FRAG_SMAP_FILE" "$FRAG_MEMINFO_FILE" "$FRAG_BUDDY_FILE"; then
     CSV_FILE=$(ls /tmp/meminsight/*.csv 2>/dev/null | head -n 1)
     if [ -n "$CSV_FILE" ] && grep -F "Fragmentation_BuddyInfo:" "$CSV_FILE" >/dev/null 2>&1; then
         echo "✓ $FRAG_DESC2 PASSED"
@@ -147,11 +147,11 @@ FRAG_BUDDY_VARIANT_FILE="test/8-buddyinfo-variant-kernel/meminsight_testBuddyinf
 echo "------------------------------------------"
 echo "$FRAG_DESC3"
 echo "------------------------------------------"
-echo "Command: $MEM_BIN -o /tmp/meminsight -t $FRAG_SMAP_FILE $FRAG_MEMINFO_FILE $FRAG_BUDDY_VARIANT_FILE"
+echo "Command: $MEM_BIN --frag -o /tmp/meminsight -t $FRAG_SMAP_FILE $FRAG_MEMINFO_FILE $FRAG_BUDDY_VARIANT_FILE"
 
 rm -rf /tmp/meminsight/*.csv
 
-if $MEM_BIN -o /tmp/meminsight -t "$FRAG_SMAP_FILE" "$FRAG_MEMINFO_FILE" "$FRAG_BUDDY_VARIANT_FILE"; then
+if $MEM_BIN --frag -o /tmp/meminsight -t "$FRAG_SMAP_FILE" "$FRAG_MEMINFO_FILE" "$FRAG_BUDDY_VARIANT_FILE"; then
     CSV_FILE=$(ls /tmp/meminsight/*.csv 2>/dev/null | head -n 1)
     if [ -n "$CSV_FILE" ] && grep -F "Fragmentation_BuddyInfo:" "$CSV_FILE" >/dev/null 2>&1; then
         echo "✓ $FRAG_DESC3 PASSED"
@@ -173,11 +173,11 @@ FRAG_PGT_VARIANT_FILE="test/9-pagetypeinfo-variant-layout/meminsight_testPagetyp
 echo "------------------------------------------"
 echo "$FRAG_DESC4"
 echo "------------------------------------------"
-echo "Command: $MEM_BIN -o /tmp/meminsight -t $FRAG_SMAP_FILE $FRAG_MEMINFO_FILE $FRAG_BUDDY_FILE $FRAG_PGT_VARIANT_FILE"
+echo "Command: $MEM_BIN --frag -o /tmp/meminsight -t $FRAG_SMAP_FILE $FRAG_MEMINFO_FILE $FRAG_BUDDY_FILE $FRAG_PGT_VARIANT_FILE"
 
 rm -rf /tmp/meminsight/*.csv
 
-if $MEM_BIN -o /tmp/meminsight -t "$FRAG_SMAP_FILE" "$FRAG_MEMINFO_FILE" "$FRAG_BUDDY_FILE" "$FRAG_PGT_VARIANT_FILE"; then
+if $MEM_BIN --frag -o /tmp/meminsight -t "$FRAG_SMAP_FILE" "$FRAG_MEMINFO_FILE" "$FRAG_BUDDY_FILE" "$FRAG_PGT_VARIANT_FILE"; then
     CSV_FILE=$(ls /tmp/meminsight/*.csv 2>/dev/null | head -n 1)
     if [ -n "$CSV_FILE" ] && grep -F "Fragmentation_PagetypeInfo:" "$CSV_FILE" >/dev/null 2>&1; then
         echo "✓ $FRAG_DESC4 PASSED"
@@ -198,24 +198,62 @@ FRAG_DESC5="Test 12 (Fault Injection): Missing buddyinfo and pagetypeinfo fixtur
 echo "------------------------------------------"
 echo "$FRAG_DESC5"
 echo "------------------------------------------"
-echo "Command: $MEM_BIN -o /tmp/meminsight -t $FRAG_SMAP_FILE $FRAG_MEMINFO_FILE"
+echo "Command: $MEM_BIN --frag -o /tmp/meminsight -t $FRAG_SMAP_FILE $FRAG_MEMINFO_FILE"
 
 rm -rf /tmp/meminsight/*.csv
 
-if $MEM_BIN -o /tmp/meminsight -t "$FRAG_SMAP_FILE" "$FRAG_MEMINFO_FILE"; then
+if $MEM_BIN --frag -o /tmp/meminsight -t "$FRAG_SMAP_FILE" "$FRAG_MEMINFO_FILE"; then
     CSV_FILE=$(ls /tmp/meminsight/*.csv 2>/dev/null | head -n 1)
     if [ -n "$CSV_FILE" ] && \
+       grep -F "Fragmentation:" "$CSV_FILE" >/dev/null 2>&1 && \
+       grep -F "parse_status,source_unavailable" "$CSV_FILE" >/dev/null 2>&1 && \
        ! grep -F "Fragmentation_PagetypeInfo:" "$CSV_FILE" >/dev/null 2>&1 && \
        ! grep -F "Fragmentation_BuddyInfo:" "$CSV_FILE" >/dev/null 2>&1; then
         echo "✓ $FRAG_DESC5 PASSED"
     else
-        echo "✗ $FRAG_DESC5 FAILED (unexpected fragmentation section present)"
+        echo "✗ $FRAG_DESC5 FAILED (expected source_unavailable fragmentation section missing/invalid)"
         [ -n "$CSV_FILE" ] && cat "$CSV_FILE"
         TEST_FAILED=$((TEST_FAILED + 1))
     fi
 else
     echo "✗ $FRAG_DESC5 FAILED (command execution failed)"
     TEST_FAILED=$((TEST_FAILED + 1))
+fi
+echo ""
+
+# JSON output test (runs only when JSON support is compiled in)
+JSON_DESC="Test 13: JSON output includes expected top-level keys"
+JSON_SMAP_FILE="test/1-non-zero-swap-entry/meminsight_testSmap.txt"
+JSON_MEMINFO_FILE="test/1-non-zero-swap-entry/meminsight_testMeminfo.txt"
+JSON_BUDDY_FILE="test/6-buddyinfo-sample/meminsight_testBuddyinfo.txt"
+JSON_PGT_FILE="test/7-pagetypeinfo-sample/meminsight_testPagetypeinfo.txt"
+
+echo "------------------------------------------"
+echo "$JSON_DESC"
+echo "------------------------------------------"
+
+if $MEM_BIN --help 2>&1 | grep -F -- "--fmt" >/dev/null 2>&1; then
+    echo "Command: $MEM_BIN --fmt json --frag -o /tmp/meminsight -t $JSON_SMAP_FILE $JSON_MEMINFO_FILE $JSON_BUDDY_FILE $JSON_PGT_FILE"
+    rm -rf /tmp/meminsight/*.json
+
+    if $MEM_BIN --fmt json --frag -o /tmp/meminsight -t "$JSON_SMAP_FILE" "$JSON_MEMINFO_FILE" "$JSON_BUDDY_FILE" "$JSON_PGT_FILE"; then
+        JSON_FILE=$(ls /tmp/meminsight/*.json 2>/dev/null | head -n 1)
+        if [ -n "$JSON_FILE" ] && [ -f "$JSON_FILE" ] && \
+           grep -F '"meminfo"' "$JSON_FILE" >/dev/null 2>&1 && \
+           grep -F '"processes"' "$JSON_FILE" >/dev/null 2>&1 && \
+           grep -F '"fragmentation"' "$JSON_FILE" >/dev/null 2>&1; then
+            echo "✓ $JSON_DESC PASSED"
+        else
+            echo "✗ $JSON_DESC FAILED (missing json file or expected keys)"
+            [ -n "$JSON_FILE" ] && cat "$JSON_FILE"
+            TEST_FAILED=$((TEST_FAILED + 1))
+        fi
+    else
+        echo "✗ $JSON_DESC FAILED (command execution failed)"
+        TEST_FAILED=$((TEST_FAILED + 1))
+    fi
+else
+    echo "- $JSON_DESC SKIPPED (JSON support not compiled in this binary)"
 fi
 echo ""
 
