@@ -28,6 +28,7 @@
 #include <linux/sched.h> // For PF_KTHREAD (Linux only)
 #include <net/if.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <limits.h>
@@ -78,8 +79,8 @@ This is used to ensure compatibility with older versions of the binary. */
 
 /* REPORT_MAJOR_VERSION, REPORT_MINOR_VERSION, and REPORT_PATCH_VERSION are to track the report format, any changes in the report format should increment this version.
 This is used to ensure compatibility with older versions of the report parser. */
-#define REPORT_MAJOR_VERSION "2"
-#define REPORT_MINOR_VERSION "0"
+#define REPORT_MAJOR_VERSION "1"
+#define REPORT_MINOR_VERSION "1"
 #define REPORT_PATCH_VERSION "0"
 
 #ifndef DEVICE_IDENTIFIER
@@ -125,8 +126,18 @@ This is used to ensure compatibility with older versions of the report parser. *
 #define JSON_FILE_NAME "meminsight.json"
 #define LONG_RUN_INTERVAL 900 // 900 is Default interval for long runs in seconds
 #define LONG_RUN_ITERATIONS 48 // 12-hour capture at 15-minute interval; caller may override via CLI/config
+#define DEFAULT_UPLOAD_INTERVAL 900 // 15 minutes in seconds
 
-#define CSV_META_HEADER "FIRMWARE_NAME,MAC_ADDRESS,TIMESTAMP,UPTIME,KERNEL_VERSION,REPORT_VERSION"
+#define CSV_META_HEADER "FIRMWARE_NAME,MAC_ADDRESS,TIMESTAMP,UPTIME,KERNEL_VERSION,REPORT_VERSION,ITERATION,RUN_ITERATIONS,RUN_INTERVAL,RUN_ID"
+
+#define CSV_PROCESSES_SECTION_HEADER "\n\nProcesses:\n"
+#define CSV_PROCESS_HEADER "PID,EXE,RSS,PSS,SHARED_CLEAN,PRIVATE_CLEAN,PRIVATE_DIRTY,SWAP_PSS,MIN_FAULTS,MAJ_FAULTS,CPU_TIME"
+
+#define CSV_FRAGMENTATION_SECTION_HEADER "\n\nFragmentation"
+#define CSV_STAT_VALUE_HEADER "STAT,VALUE"
+
+#define CSV_BANDWIDTH_HEADER "TotalBandwidth,UsagePercentage"
+#define CSV_BANDWIDTH_SECTION_HEADER "\n\nBandwidth:\n"
 
 // -----------------------------
 // Data Structures
@@ -174,6 +185,7 @@ typedef struct {
     char mac[MAC_LEN];
     char fwName[FW_LEN];
     char kernelVersion[KERNEL_LEN];
+    char runHash[17];
     const char *outputDir;
     const char *reportFileName;
     bool dirCreated;
@@ -194,6 +206,7 @@ typedef enum
 extern Process_Info getProcessInfo;   // Temporary struct for collecting process info
 extern Process_Info *headProcessInfo; // Head of linked list
 extern bool g_bwDataAvailable;
+extern bool g_CollectFragData;        // Collect fragmentation data only when --frag is passed
 extern Report_Format g_reportFormat;  // Active output format (default: REPORT_CSV)
 extern bool g_jsonPrettyPrint;        // Pretty-print JSON when true
 

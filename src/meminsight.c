@@ -147,6 +147,7 @@ Process_Info *headProcessInfo = NULL; // Head of linked list
 Report_Format g_reportFormat  = REPORT_CSV; // Active output format (default: REPORT_CSV)
 bool g_jsonPrettyPrint         = false;
 bool g_bwDataAvailable = false;
+bool g_CollectFragData = false;
 unsigned smaps_rollup;                // Effective source for current parse: 1=smaps_rollup, 0=smaps
 unsigned force_smaps = 0;             // CLI override: force reading /proc/<pid>/smaps
 char gSMAPS_OR_ROLLUP[] = "smaps_rollup";
@@ -241,6 +242,8 @@ SetupInfo initializeSetupInfo(const char *outDir, Report_Format format)
     const char *kv = getKernelVersion();
     strncpy(info.kernelVersion, kv, sizeof(info.kernelVersion) - 1);
     info.kernelVersion[sizeof(info.kernelVersion) - 1] = '\0';
+    uint64_t id = ((uint64_t)time(NULL)) ^ ((uint64_t)getpid());
+    snprintf(info.runHash, sizeof(info.runHash), "%llx", (unsigned long long)id);
 
     return info;
 }
@@ -478,8 +481,8 @@ static int writePagetypeInfoCSV(FILE *out)
     int headerCols = 0;
     bool headerWritten = false;
 
-    fprintf(out, "\n\nFragmentation_PagetypeInfo:\n");
-    fprintf(out, "STAT,VALUE\n");
+    fprintf(out, "%s_PagetypeInfo:\n", CSV_FRAGMENTATION_SECTION_HEADER);
+    fprintf(out, "%s\n", CSV_STAT_VALUE_HEADER);
 
     while (fgets(line, sizeof(line), fp)) {
         if (pageBlockOrder < 0 && sscanf(line, "Page block order: %d", &pageBlockOrder) == 1)
@@ -561,7 +564,7 @@ static int writeBuddyinfoCSV(FILE *out)
     int headerCols = 0;
     bool headerWritten = false;
 
-    fprintf(out, "\n\nFragmentation_BuddyInfo:\n");
+    fprintf(out, "%s_BuddyInfo:\n", CSV_FRAGMENTATION_SECTION_HEADER);
 
     while (fgets(line, sizeof(line), fp)) {
         unsigned node = 0;
@@ -611,18 +614,18 @@ void saveFragmentationInfo(FILE *out)
     if (g_fragSource == FRAG_SRC_PAGETYPEINFO) {
         if (writePagetypeInfoCSV(out) >= 0)
             return;
-        fprintf(out, "\n\nFragmentation_PagetypeInfo:\nparse_status,source_unavailable_or_parse_error\n");
+        fprintf(out, "%s_PagetypeInfo:\nparse_status,source_unavailable_or_parse_error\n", CSV_FRAGMENTATION_SECTION_HEADER);
         return;
     }
 
     if (g_fragSource == FRAG_SRC_BUDDYINFO) {
         if (writeBuddyinfoCSV(out) >= 0)
             return;
-        fprintf(out, "\n\nFragmentation_BuddyInfo:\nparse_status,source_unavailable_or_parse_error\n");
+        fprintf(out, "%s_BuddyInfo:\nparse_status,source_unavailable_or_parse_error\n", CSV_FRAGMENTATION_SECTION_HEADER);
         return;
     }
 
-    fprintf(out, "\n\nFragmentation:\nparse_status,source_unavailable\n");
+    fprintf(out, "%s:\nparse_status,source_unavailable\n", CSV_FRAGMENTATION_SECTION_HEADER);
 }
 
 #ifdef ENABLE_CJSON
@@ -848,7 +851,7 @@ void collectBandwidthData(FILE *out)
     if (fgets(buffer, sizeof(buffer), fp) &&
         sscanf(buffer, "Total bandwidth: %lu KB/s, usage: %f%%", &totalBandwidth, &usagePercentage) == 2)
     {
-        fprintf(out, "\n\nBandwidth:\nTotalBandwidth,UsagePercentage\n%lu,%.2f\n", totalBandwidth, usagePercentage);
+        fprintf(out, "%s%s\n%lu,%.2f\n", CSV_BANDWIDTH_SECTION_HEADER, CSV_BANDWIDTH_HEADER, totalBandwidth, usagePercentage);
     }
     else
     {
@@ -2225,6 +2228,7 @@ void printHelpAndUsage(char *argv[], bool moreInfo, int returnCode)
     printf("  -o, --output <directory>              Output directory for generated report files (default: %s)\n", DEFAULT_OUT_DIR);
     printf("      --interval <seconds>              Interval in seconds between iterations (overrides config)\n");
     printf("      --iterations <count>              Number of iterations to run (overrides config)\n");
+    printf("      --frag                            Enable fragmentation data collection (default: disabled)\n");
     printf("  -s, --smaps               Force /proc/<pid>/smaps (disable auto smaps_rollup detection)\n");
     printf("  -h, --help                            Show this help message and exit\n");
 #ifdef TESTME
@@ -2320,6 +2324,9 @@ int collectSystemMemoryStats(bool enableKThreads, const char *outDir, int iterat
             g_cjson.AddStringToObject(g_rootObject, "uptime",        uptime);
             g_cjson.AddStringToObject(g_rootObject, "kernel_version", setup.kernelVersion);
             g_cjson.AddStringToObject(g_rootObject, "report_version", reportVersion);
+            g_cjson.AddNumberToObject(g_rootObject, "iterations", (double)iterations);
+            g_cjson.AddNumberToObject(g_rootObject, "interval", (double)interval);
+            g_cjson.AddStringToObject(g_rootObject, "run_hash", setup.runHash);
         }
 #endif
 
@@ -2331,7 +2338,7 @@ int collectSystemMemoryStats(bool enableKThreads, const char *outDir, int iterat
                 return -1;
             }
             fprintf(output, "%s\n", CSV_META_HEADER);
-            fprintf(output, "%s,%s,%s,%s,%s,%s\n\n", setup.fwName, setup.mac, ts, uptime, setup.kernelVersion, reportVersion);
+            fprintf(output, "%s,%s,%s,%s,%s,%s,%d,%d,%d,%s\n\n", setup.fwName, setup.mac, ts, uptime, setup.kernelVersion, reportVersion, iter + 1, iterations, interval, setup.runHash);
         }
 
         unsigned long rssTotal = 0, pssTotal = 0, shared_clean_total = 0, private_clean_total = 0, private_dirty_total = 0, swap_pss_total = 0;
@@ -2405,15 +2412,16 @@ int collectSystemMemoryStats(bool enableKThreads, const char *outDir, int iterat
 
         if (g_reportFormat == REPORT_CSV) {
             saveMeminfo(output);
-            saveFragmentationInfo(output);
+            if (g_CollectFragData) {
+                saveFragmentationInfo(output);
+            }
     #ifdef TESTME
             if (isTestMode && unitTestFailed) {
                 fclose(output);
                 return -1;
             }
     #endif
-            fprintf(output, "\n\nProcesses:\nPID,EXE,RSS,PSS,SHARED_CLEAN,PRIVATE_CLEAN,PRIVATE_"
-                            "DIRTY,SWAP_PSS,MIN_FAULTS,MAJ_FAULTS,CPU_TIME\n");
+            fprintf(output, "%s%s\n", CSV_PROCESSES_SECTION_HEADER, CSV_PROCESS_HEADER);
             writeProcessInfo(noOfPids, output);
             fprintf(output, "0,Total,%lu,%lu,%lu,%lu,%lu,%lu,0,0,0\n", rssTotal, pssTotal, shared_clean_total,
                     private_clean_total, private_dirty_total, swap_pss_total);
@@ -2424,7 +2432,9 @@ int collectSystemMemoryStats(bool enableKThreads, const char *outDir, int iterat
 #ifdef ENABLE_CJSON
         else if (g_reportFormat == REPORT_JSON) {
             saveMeminfo_JSON(g_rootObject);
-            saveFragmentationInfo_JSON(g_rootObject);
+            if (g_CollectFragData) {
+                saveFragmentationInfo_JSON(g_rootObject);
+            }
             cJSON_t *processesArray = g_cjson.CreateArray();
             if (!processesArray) {
                 PRINT_ERROR("Failed to create JSON processes array\n");
@@ -2562,6 +2572,9 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, bool cli_out
             g_cjson.AddStringToObject(g_rootObject, "uptime",         uptime);
             g_cjson.AddStringToObject(g_rootObject, "kernel_version", setup.kernelVersion);
             g_cjson.AddStringToObject(g_rootObject, "report_version", reportVersion);
+            g_cjson.AddNumberToObject(g_rootObject, "iterations", (double)final_iterations);
+            g_cjson.AddNumberToObject(g_rootObject, "interval", (double)final_interval);
+            g_cjson.AddStringToObject(g_rootObject, "run_hash", setup.runHash);
         }
 #endif
 
@@ -2576,11 +2589,12 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, bool cli_out
                 return -1;
             }
             fprintf(output, "%s\n", CSV_META_HEADER);
-            fprintf(output, "%s,%s,%s,%s,%s,%s\n\n", setup.fwName, setup.mac, ts, uptime, setup.kernelVersion, reportVersion);
+            fprintf(output, "%s,%s,%s,%s,%s,%s,%d,%d,%d,%s\n\n", setup.fwName, setup.mac, ts, uptime, setup.kernelVersion, reportVersion, iter + 1, final_iterations, final_interval, setup.runHash);
             saveMeminfo(output);
-            saveFragmentationInfo(output);
-            fprintf(output, "\nPID,EXE,RSS,PSS,SHARED_CLEAN,PRIVATE_CLEAN,PRIVATE_DIRTY,SWAP_PSS,"
-                            "MIN_FAULTS,MAJ_FAULTS,CPU_TIME\n");
+            if (g_CollectFragData) {
+                saveFragmentationInfo(output);
+            }
+            fprintf(output, "\n%s\n", CSV_PROCESS_HEADER);
         }
 
         unsigned long rssTotal = 0, pssTotal = 0, shared_clean_total = 0, private_clean_total = 0, private_dirty_total = 0, swap_pss_total = 0;
@@ -2683,7 +2697,9 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, bool cli_out
 #ifdef ENABLE_CJSON
         else if (g_reportFormat == REPORT_JSON) {
             saveMeminfo_JSON(g_rootObject);
-            saveFragmentationInfo_JSON(g_rootObject);
+            if (g_CollectFragData) {
+                saveFragmentationInfo_JSON(g_rootObject);
+            }
             if (writeJSONToFile(outputFilePath, &setup) != 0) {
                 PRINT_ERROR("Failed to write JSON output file: %s\n", outputFilePath);
                 for (unsigned j = 0; j < config.whiteListCount; j++)
@@ -3197,6 +3213,10 @@ int main(int argc, char *argv[])
         {
             force_smaps = 1;
         }
+        else if (!strncmp(argv[i], "--frag", 6))
+        {
+            g_CollectFragData = true;
+        }
         else if (!strncmp(argv[i], "--fmt", 5))
         { // output format: csv or json
             if (i + 1 < argc)
@@ -3251,7 +3271,9 @@ int main(int argc, char *argv[])
     printf("\n");
 
     updateBandwidthAvailability();
-    selectFragmentationSource();
+    if (g_CollectFragData) {
+        selectFragmentationSource();
+    }
 
     if (force_smaps)
     {
