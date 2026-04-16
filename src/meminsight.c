@@ -340,8 +340,9 @@ SetupInfo initializeSetupInfo(const char *outDir, Report_Format format)
     const char *kv = getKernelVersion();
     strncpy(info.kernelVersion, kv, sizeof(info.kernelVersion) - 1);
     info.kernelVersion[sizeof(info.kernelVersion) - 1] = '\0';
-    uint64_t id = ((uint64_t)time(NULL)) ^ ((uint64_t)getpid());
-    snprintf(info.runHash, sizeof(info.runHash), "%016llx", (unsigned long long)id);
+    unsigned long long epoch = (unsigned long long)time(NULL);
+    unsigned long long pid = (unsigned long long)getpid();
+    snprintf(info.runHash, sizeof(info.runHash), "%llu%llu", epoch, pid);
 
     return info;
 }
@@ -2416,15 +2417,16 @@ int collectSystemMemoryStats(bool enableKThreads, const char *outDir, int iterat
                 PRINT_ERROR("Failed to create JSON root object\n");
                 return -1;
             }
-            g_cjson.AddStringToObject(g_rootObject, "firmware_name", setup.fwName);
-            g_cjson.AddStringToObject(g_rootObject, "mac_address",   setup.mac);
-            g_cjson.AddStringToObject(g_rootObject, "timestamp",     ts);
-            g_cjson.AddStringToObject(g_rootObject, "uptime",        uptime);
-            g_cjson.AddStringToObject(g_rootObject, "kernel_version", setup.kernelVersion);
-            g_cjson.AddStringToObject(g_rootObject, "report_version", reportVersion);
-            g_cjson.AddNumberToObject(g_rootObject, "iterations", (double)iterations);
-            g_cjson.AddNumberToObject(g_rootObject, "interval", (double)interval);
-            g_cjson.AddStringToObject(g_rootObject, "run_hash", setup.runHash);
+            g_cjson.AddStringToObject(g_rootObject, "FIRMWARE_NAME", setup.fwName);
+            g_cjson.AddStringToObject(g_rootObject, "MAC_ADDRESS",   setup.mac);
+            g_cjson.AddStringToObject(g_rootObject, "TIMESTAMP",     ts);
+            g_cjson.AddStringToObject(g_rootObject, "UPTIME",        uptime);
+            g_cjson.AddStringToObject(g_rootObject, "KERNEL_VERSION", setup.kernelVersion);
+            g_cjson.AddStringToObject(g_rootObject, "REPORT_VERSION", reportVersion);
+            g_cjson.AddNumberToObject(g_rootObject, "ITERATION", (double)(iter + 1));
+            g_cjson.AddNumberToObject(g_rootObject, "RUN_ITERATIONS", (double)iterations);
+            g_cjson.AddNumberToObject(g_rootObject, "RUN_INTERVAL", (double)interval);
+            g_cjson.AddStringToObject(g_rootObject, "RUN_ID", setup.runHash);
         }
 #endif
 
@@ -2664,15 +2666,16 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, bool cli_out
                 if (config.whitelist) free(config.whitelist);
                 return -1;
             }
-            g_cjson.AddStringToObject(g_rootObject, "firmware_name",  setup.fwName);
-            g_cjson.AddStringToObject(g_rootObject, "mac_address",    setup.mac);
-            g_cjson.AddStringToObject(g_rootObject, "timestamp",      ts);
-            g_cjson.AddStringToObject(g_rootObject, "uptime",         uptime);
-            g_cjson.AddStringToObject(g_rootObject, "kernel_version", setup.kernelVersion);
-            g_cjson.AddStringToObject(g_rootObject, "report_version", reportVersion);
-            g_cjson.AddNumberToObject(g_rootObject, "iterations", (double)final_iterations);
-            g_cjson.AddNumberToObject(g_rootObject, "interval", (double)final_interval);
-            g_cjson.AddStringToObject(g_rootObject, "run_hash", setup.runHash);
+            g_cjson.AddStringToObject(g_rootObject, "FIRMWARE_NAME",  setup.fwName);
+            g_cjson.AddStringToObject(g_rootObject, "MAC_ADDRESS",    setup.mac);
+            g_cjson.AddStringToObject(g_rootObject, "TIMESTAMP",      ts);
+            g_cjson.AddStringToObject(g_rootObject, "UPTIME",         uptime);
+            g_cjson.AddStringToObject(g_rootObject, "KERNEL_VERSION", setup.kernelVersion);
+            g_cjson.AddStringToObject(g_rootObject, "REPORT_VERSION", reportVersion);
+            g_cjson.AddNumberToObject(g_rootObject, "ITERATION", (double)(iter + 1));
+            g_cjson.AddNumberToObject(g_rootObject, "RUN_ITERATIONS", (double)final_iterations);
+            g_cjson.AddNumberToObject(g_rootObject, "RUN_INTERVAL", (double)final_interval);
+            g_cjson.AddStringToObject(g_rootObject, "RUN_ID", setup.runHash);
         }
 #endif
 

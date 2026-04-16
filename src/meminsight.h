@@ -186,7 +186,7 @@ typedef struct {
     char mac[MAC_LEN];
     char fwName[FW_LEN];
     char kernelVersion[KERNEL_LEN];
-    char runHash[17];
+    char runHash[32];
     const char *outputDir;
     const char *reportFileName;
     bool dirCreated;
