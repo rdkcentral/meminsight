@@ -27,15 +27,9 @@ Feature: Memory fragmentation profiling
 - Status: Implemented in collector and report paths (CSV and JSON).
 
 Feature: Scheduled Report Upload and Lifecycle Management
-- Given memory capture reports exist on the device
-- And a report upload cadence is configured
-- When the scheduled upload window is reached
-- Then reports MUST be uploaded to the configured endpoint
-- And upload success or failure MUST be logged
-- And upon successful upload confirmation
-- Then local copies of the uploaded reports MUST be deleted
-- And storage used by uploaded reports MUST be freed
-- Status: Pending in product path. Current code logs cadence plan and keeps collection resilient, but does not perform endpoint upload/delete lifecycle yet.
+- Upload responsibility is fully delegated to an external sidecar component.
+- MemInsight writes reports to the output directory; it does not upload, buffer for network, or manage endpoint connectivity.
+- Status: MemInsight obligation complete (clean output directory on startup, structured reports written). Sidecar uploader implementation is out of scope for this SRS.
 
 Feature: Pre-capture cleanup
 - Given previous memory capture reports exist locally
@@ -81,15 +75,16 @@ Feature: AI-Powered Analysis of Memory Reports
 In scope:
 - Fragmentation telemetry ingestion from procfs.
 - Structured output in CSV (existing) and JSON (new).
-- Local buffering and resilience when network or endpoint is unavailable.
-- Upload integration design using a separate uploader component.
+- Pre-capture output directory sanitization.
+- Storage and retention management on device.
 - Service/runtime integration constraints for RDK platforms.
 - Security, performance, test, logging, and release automation requirements.
 - Documentation updates.
 
 Out of scope:
+- Upload, network transport, and endpoint lifecycle management (delegated to external sidecar).
 - Backend Log Analytics schema changes.
-- Fleet policy management implementation details outside MemInsight/uploader.
+- Fleet policy management implementation details outside MemInsight.
 - Exact Yocto layer organization (captured as integration requirement only).
 
 ## 3. Stakeholders
@@ -168,13 +163,10 @@ MemInsight remains lightweight: collection and serialization in MemInsight; uplo
 - FR-031 (MUST): If DDR bandwidth source is present and readable, corresponding fields shall be captured.
 - FR-032 (MUST): If absent, MemInsight shall skip DDR fields without failure and indicate capability absence in metadata.
 
-### 8.5 Upload and Buffering Model
-- FR-040 (MUST): MemInsight shall not directly upload to endpoint in the default architecture.
-- FR-041 (MUST): A separate uploader component shall be defined to push buffered reports to logupload endpoint.
-- FR-042 (MUST): Upload schedule shall support configurable near real-time interval.
-- FR-043 (MUST): If endpoint/network is unavailable, data collection shall continue and reports shall be buffered locally.
-- FR-044 (MUST): Buffered data shall be retried by uploader with backoff policy and failure telemetry.
-- FR-045 (SHOULD): Upload batching may be enabled to reduce network overhead.
+### 8.5 Upload Delegation
+- FR-040 (MUST): MemInsight shall not upload to any endpoint. Upload is the sole responsibility of an external sidecar component.
+- FR-040a (MUST): MemInsight's only obligation toward the upload pipeline is writing complete, isolated report sets to the configured output directory.
+- Note: All upload scheduling, buffering, retry, batching, and endpoint lifecycle requirements are captured in the sidecar component specification, not this document.
 
 ### 8.6 Storage and Retention
 - FR-050 (MUST): Default persistent output directory for video platforms shall be `/opt/meminsight`.
@@ -234,7 +226,6 @@ Note: Exact numeric thresholds for "measurable" and "negligible" are TBD and mus
 - `--retention-max-age <hours>`
 - `--retention-max-size <MB>`
 - `--retention-max-files <count>`
-- `--uploader-trigger <none|signal|dropbox>`
 
 ### 11.2 Output Schema Requirements
 - CSV schema version field required.
@@ -244,9 +235,9 @@ Note: Exact numeric thresholds for "measurable" and "negligible" are TBD and mus
 ## 12. Error Handling and Resilience
 - ERR-001 (MUST): Missing procfs source file shall not crash collector.
 - ERR-002 (MUST): Parse errors shall be isolated per sample and reported in metadata.
-- ERR-003 (MUST): Endpoint outages shall not drop fresh collection by default.
-- ERR-004 (MUST): Buffer saturation behavior shall be deterministic and configurable (for example, drop-oldest or stop-upload-only mode).
-- ERR-005 (SHOULD): Component health counters should be exposed in report metadata.
+- ERR-003 (SHOULD): Component health counters should be exposed in report metadata.
+
+Note: Endpoint outage resilience, buffer saturation policy, and retry behavior are uploader-sidecar concerns and are not tracked here.
 
 ## 13. Test Requirements and Validation Matrix
 
@@ -269,20 +260,17 @@ Note: Exact numeric thresholds for "measurable" and "negligible" are TBD and mus
 ### 13.4 Fault Injection
 - TST-030 (SHOULD): `/proc/buddyinfo` unavailable.
 - TST-031 (SHOULD): `/proc/pagetypeinfo` unavailable.
-- TST-032 (SHOULD): network upload failures and endpoint unavailability.
-- TST-033 (MUST): buffer directory full/permission errors.
+- TST-033 (MUST): output directory full/permission errors.
 - TST-034 (SHOULD): NTP unsynchronized startup conditions.
 
 ### 13.5 Performance Tests
 - TST-040 (MUST): Ensure collection overhead remains within agreed limits.
 - TST-041 (SHOULD): Compare CPU/memory overhead with and without fragmentation collection.
-- TST-042 (SHOULD): Validate uploader batching tradeoffs.
 
 ## 14. Operational and Deployment Requirements
 - OPS-001 (MUST): Service units/scripts shall include dependency ordering for network and NTP readiness.
-- OPS-002 (MUST): Output and buffer directories shall be configurable per platform profile.
+- OPS-002 (MUST): Output directory shall be configurable per platform profile.
 - OPS-003 (MUST): Rotation/retention configuration shall be externally tunable.
-- OPS-004 (SHOULD): Installer/recipe shall support enabling/disabling uploader component independently.
 
 ## 15. Decision Log (Open/TBD)
 1. D-001: Final policy for buddyinfo vs pagetypeinfo default mode.
@@ -290,21 +278,21 @@ Note: Exact numeric thresholds for "measurable" and "negligible" are TBD and mus
    - Chosen default: pagetype preferred with buddyinfo fallback.
    - Options considered: buddyinfo-only (minimal), pagetype preferred (richer), collect-both (maximum visibility).
 2. D-002: Final fragmentation index formulas and thresholds.
-3. D-003: Exact near real-time upload interval defaults by device class.
-4. D-004: Buffer saturation policy default (drop oldest vs halt upload attempts).
-5. D-005: Rotation cadence details (startup-only, periodic, and reboot interaction).
-6. D-006: Archive format selection (`tar.gz` recommended) and max archive size.
-7. D-007: Uploader implementation form (native binary vs shell script).
-8. D-008: Final CI release approval UX (Slack interactive action, mail-based approval, or both).
-9. D-009: Exact definition of acceptable overhead thresholds.
+3. D-003: Rotation cadence details (startup-only, periodic, and reboot interaction).
+4. D-004: Archive format selection (`tar.gz` recommended) and max archive size.
+5. D-005: Final CI release approval UX (Slack interactive action, mail-based approval, or both).
+6. D-006: Exact definition of acceptable overhead thresholds.
+
+Note: Upload interval defaults, buffer saturation policy, and uploader implementation form are decisions for the sidecar component specification.
 
 ## 16. Acceptance Criteria Traceability
 1. Collect fragmentation from `/proc/buddyinfo`: FR-001, FR-002, TST-010.
 2. Structured report generation (CSV/JSON): FR-020 through FR-024, TST-013.
-3. Configurable upload to Log Analytics endpoint: FR-041, FR-042, OPS-004.
-4. Near real-time upload interval: FR-042, D-003.
-5. Low overhead: PERF-001 through PERF-004, TST-040.
-6. Continue collection during endpoint outage with buffering: FR-043, FR-044, ERR-003.
+3. Pre-capture output directory sanitization: FR-052, TST-033.
+4. Low overhead: PERF-001 through PERF-004, TST-040.
+5. Upload delegation to sidecar: FR-040.
+
+Note: Upload pipeline acceptance criteria (endpoint delivery, retry, batching) are tracked in the sidecar component specification.
 
 ## 17. Proposed Implementation Phases
 1. Phase 1: Parser and metrics foundation
@@ -314,17 +302,17 @@ Note: Exact numeric thresholds for "measurable" and "negligible" are TBD and mus
 2. Phase 2: Report schema and JSON runtime loading
    - macro-based CSV headers
    - JSON output and pretty mode
-3. Phase 3: Resilience and storage management
+3. Phase 3: Storage management and pre-capture sanitization
    - persistent output path defaults
-   - buffering, rotation, compression
-4. Phase 4: Uploader component and secure transport
-   - logupload integration
-   - TLS and auth mechanisms
-5. Phase 5: Platform polish and release automation
+   - pre-capture directory wipe on startup
+   - rotation and compression
+4. Phase 4: Platform polish and release automation
    - Amlogic DDR optional metrics
    - debug build gating
    - README/wiki updates
    - automated release workflow
+
+Note: Sidecar uploader implementation phases are tracked separately.
 
 ## 18. Non-Goals and Risk Notes
 - This SRS does not force upload implementation inside MemInsight.
@@ -334,8 +322,9 @@ Note: Exact numeric thresholds for "measurable" and "negligible" are TBD and mus
 ## 19. Required Documentation Deliverables
 1. Developer design note for parser/source policy and metric formulas.
 2. Operator guide for new flags, output locations, and retention.
-3. Security guide for TLS/auth configuration and secret handling.
-4. Release engineering runbook for automated release approval flow.
+3. Release engineering runbook for automated release approval flow.
+
+Note: TLS/auth and secret-handling documentation belongs in the sidecar uploader specification.
 
 ## 20. Approval Checklist
 - Performance Engineering approved overhead thresholds.

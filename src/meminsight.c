@@ -185,6 +185,73 @@ int (*getProcessInfos_ptr)(FILE*);
  * If it doesn't exist, it attempts to create it.
  * Returns true if directory exists or was successfully created.
  */
+
+/**
+ * @brief Recursively delete all contents within a directory (but not the directory itself).
+ *
+ * Uses lstat() to avoid following symlinks during traversal, which prevents
+ * accidental deletion of files outside the target directory tree.
+ *
+ * @param[in] dir_path  Absolute path of directory to clear.
+ * @return 0 on success, -1 if any removal failed (continues on partial failure).
+ */
+static int clear_dir_contents(const char *dir_path)
+{
+    DIR *d = opendir(dir_path);
+    if (!d)
+    {
+        PRINT_MUST("Failed to open output dir for clearing '%s': %s\n", dir_path, strerror(errno));
+        return -1;
+    }
+
+    int ret = 0;
+    struct dirent *entry;
+    char child_path[PATH_MAX];
+
+    while ((entry = readdir(d)) != NULL)
+    {
+        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0)
+            continue;
+
+        if (snprintf(child_path, sizeof(child_path), "%s/%s", dir_path, entry->d_name) >= (int)sizeof(child_path))
+        {
+            PRINT_MUST("Path too long, skipping: %s/%s\n", dir_path, entry->d_name);
+            ret = -1;
+            continue;
+        }
+
+        struct stat st;
+        if (lstat(child_path, &st) == -1)
+        {
+            PRINT_MUST("Failed to stat '%s': %s\n", child_path, strerror(errno));
+            ret = -1;
+            continue;
+        }
+
+        if (S_ISDIR(st.st_mode))
+        {
+            if (clear_dir_contents(child_path) != 0)
+                ret = -1;
+            if (rmdir(child_path) == -1)
+            {
+                PRINT_MUST("Failed to remove dir '%s': %s\n", child_path, strerror(errno));
+                ret = -1;
+            }
+        }
+        else
+        {
+            if (unlink(child_path) == -1)
+            {
+                PRINT_MUST("Failed to remove file '%s': %s\n", child_path, strerror(errno));
+                ret = -1;
+            }
+        }
+    }
+
+    closedir(d);
+    return ret;
+}
+
 static bool ensure_output_dir(const char *dir)
 {
     struct stat st = {0};
@@ -192,6 +259,10 @@ static bool ensure_output_dir(const char *dir)
     {
         if (S_ISDIR(st.st_mode)) // Is a directory
         {
+            if (clear_dir_contents(dir) == 0)
+                PRINT_INFO("Output directory '%s' cleared for new run.\n", dir);
+            else
+                PRINT_MUST("Warning: some stale files in '%s' could not be removed.\n", dir);
             return true;
         }
         PRINT_MUST("Path '%s' exists but is not a directory\n", dir);

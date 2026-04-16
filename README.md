@@ -15,6 +15,7 @@
 - [Advanced Features](#-advanced-features)
 - [Build System](#-build-system)
 - [Architecture](#-architecture)
+- [Report Metadata](#-report-metadata)
 - [Examples](#-examples)
 - [Troubleshooting](#-troubleshooting)
 - [Contributing](#-contributing)
@@ -36,7 +37,7 @@
 - **Multiple Output Formats** - CSV and JSON export with timestamps and metadata
 - **Kernel Thread Support** - Optional inclusion of kernel threads
 - **Long-running Mode** - Extended monitoring with automatic intervals
-- **Fragmentation Data Capture** - `/proc/pagetypeinfo` preferred with `/proc/buddyinfo` fallback
+- **Fragmentation Data Capture** - Optional via `--frag`; `/proc/pagetypeinfo` preferred with `/proc/buddyinfo` fallback
 
 ### 🔧 **Advanced Capabilities**
 - **Network Interface Detection** - Automatic MAC address retrieval
@@ -65,6 +66,9 @@
 
 # Write reports to a custom directory
 ./meminsight --output /tmp/memreports --iterations 3
+
+# Enable fragmentation data collection (disabled by default)
+./meminsight --frag --iterations 5 --interval 60
 ```
 
 ## 📊 Build & Testing Scripts
@@ -181,6 +185,7 @@ OPTIONS:
          --interval SECONDS      Seconds between iterations (overrides config)
       --fmt FORMAT            Report format: csv (default) or json
       --json-pretty           Pretty-print JSON output (only with --fmt json)
+      --frag                  Enable fragmentation data collection (default: disabled)
    -t, --test SMAPS MEMINFO [BUDDYINFO] [PAGETYPEINFO]
                                Run in test mode using supplied sample files (requires TESTME build)
    -h, --help                  Show help message and exit
@@ -245,10 +250,18 @@ make
 ./meminsight --fmt json --json-pretty --iterations 2 --interval 30
 ```
 
-- Fragmentation collection behavior (both CSV and JSON):
+- Fragmentation collection is **disabled by default** and must be explicitly enabled with `--frag`:
+
+```bash
+./meminsight --frag --iterations 5 --interval 60
+```
+
+  When `--frag` is active, collection behavior is:
    - If `/proc/pagetypeinfo` is readable, collect and emit pagetype data.
    - Else if `/proc/buddyinfo` is readable, collect and emit buddyinfo data.
-   - Else, skip fragmentation section for that iteration.
+   - Else, skip fragmentation section for that iteration without failure.
+
+  When `--frag` is **not** passed, the fragmentation section is omitted from all reports and no `/proc` fragmentation files are read.
 
 ### Network Interface Configuration
 
@@ -347,9 +360,15 @@ make install
 
 ### Execution Flow (Manual and Automatic)
 
-1. Manual run (CLI): Parse CLI/config, initialize setup metadata, then iterate capture/write loop.
-2. Per iteration: capture timestamp/uptime, collect meminfo + fragmentation + process stats, then emit CSV/JSON.
-3. Automatic run (systemd): service starts `meminsight` with desired flags/config at boot; restart policy keeps collection resilient.
+1. **Argument parsing** — Resolve output directory from `-o`/`--output` or default `/opt/meminsight`.
+2. **Startup sanitization** — `ensure_output_dir()` recursively wipes all contents of the output directory so each run starts with a clean, isolated report set. The directory itself is preserved (or created if absent).
+3. **Setup initialization** — Cache MAC address, firmware name, kernel version, and generate a per-run `RUN_ID` hash (derived from time XOR PID, formatted as a 16-char hex string).
+4. **Iteration loop** — For each iteration:
+   - Capture fresh timestamp and uptime.
+   - Collect system meminfo, process smaps stats.
+   - If `--frag` is active, collect fragmentation data.
+   - Write CSV/JSON report with full metadata row: `FIRMWARE_NAME, MAC_ADDRESS, TIMESTAMP, UPTIME, KERNEL_VERSION, REPORT_VERSION, ITERATION, RUN_ITERATIONS, RUN_INTERVAL, RUN_ID`.
+5. **Automatic run (systemd)** — Service starts meminsight with desired flags/config at boot; restart policy keeps collection resilient.
 
 ### Key Functions
 
@@ -361,6 +380,8 @@ make install
 | `addProcessInfo()` | Maintain sorted process list | meminsight.c |
 | `getMacAddress()` | Network interface detection | meminsight.c |
 | `parseConfig()` | Configuration file processing | meminsight.c |
+| `ensure_output_dir()` | Create output dir and wipe stale contents on startup | meminsight.c |
+| `initializeSetupInfo()` | Cache device metadata and generate run hash | meminsight.c |
 
 ---
 
@@ -398,10 +419,31 @@ CPPFLAGS="-DDEVICE_IDENTIFIER=\"eth0\"" make clean && make
 ./meminsight --iterations 24 --interval 3600 --output /mnt/logs/
 ```
 
+## � Report Metadata
+
+Every report file (CSV and JSON) begins with a metadata row containing the following fields:
+
+| Field | Description |
+|-------|-------------|
+| `FIRMWARE_NAME` | Firmware/image name of the device |
+| `MAC_ADDRESS` | MAC address of the primary network interface |
+| `TIMESTAMP` | UTC timestamp at time of report generation |
+| `UPTIME` | System uptime in seconds at report time |
+| `KERNEL_VERSION` | Kernel version string (captured once at startup) |
+| `REPORT_VERSION` | MemInsight report schema version |
+| `ITERATION` | Current iteration number (1-based) within this run |
+| `RUN_ITERATIONS` | Total iterations configured for this run |
+| `RUN_INTERVAL` | Interval in seconds between iterations |
+| `RUN_ID` | Per-run unique hex identifier (time XOR PID, 16 chars) |
+
+The `RUN_ID` groups all report files from the same invocation together, making it possible to correlate data across iterations without relying on timestamps alone.
+
 ## 📦 Integration Samples
 
 - Sample systemd unit file: `deploy/systemd/meminsight.service`
 - Sample Yocto recipe: `deploy/yocto/meminsight.bb`
+
+
 
 ## 🤖 Agent Customization Layout
 

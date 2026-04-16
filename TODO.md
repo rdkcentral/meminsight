@@ -48,17 +48,17 @@
 
 ---
 
-## Phase 3 — Upload & Lifecycle Management `[FR-040 to FR-045]`
+## Phase 3 — Upload & Lifecycle Management (Sidecar Component — Out of MemInsight Scope)
 
-> SRS Feature: Scheduled Report Upload and Lifecycle Management — **Pending**
+> Upload responsibility is fully delegated to an external sidecar script/service.
+> MemInsight's only obligation is writing clean, isolated reports to the output directory.
+> The items below track the **sidecar component**, not MemInsight itself.
 
-- [ ] Define and implement a separate uploader script/binary; MemInsight must not upload directly. `[FR-040, FR-041]`
-- [ ] Implement upload trigger mechanism: MemInsight logs cadence plan; uploader polls or is signaled on schedule. `[FR-042]`
-- [ ] Implement upload success/failure logging in uploader. `[FR-041]`
-- [ ] Delete local report copies after confirmed successful upload. `[FR-041]`
-- [ ] Implement retry-with-backoff policy in uploader when endpoint is unavailable. `[FR-044]`
-- [ ] Ensure data collection continues uninterrupted when network/endpoint is unavailable. `[FR-043]`
-- [ ] (SHOULD) Implement upload batching to reduce network overhead. `[FR-045]`
+- [ ] Define and implement a separate uploader sidecar script/binary. `[FR-040]`
+- [ ] Implement upload success/failure logging in sidecar. `[FR-041]`
+- [ ] Delete local report copies after confirmed successful upload in sidecar. `[FR-041]`
+- [ ] Implement retry-with-backoff policy in sidecar when endpoint is unavailable. `[FR-044]`
+- [ ] (SHOULD) Implement upload batching to reduce network overhead in sidecar. `[FR-045]`
 
 ---
 
@@ -67,7 +67,7 @@
 > SRS Feature: Pre-capture cleanup — **Partial** (implemented in `scripts/detect_leak.sh` for CI; not in product path)
 
 - [ ] Implement rotation/cleanup policy that runs on startup and by configurable retention cadence. `[FR-052]`
-- [ ] Add pre-capture cleanup in the MemInsight product path (clear old reports before new capture). `[FR-052]`
+- [x] Add pre-capture cleanup in the MemInsight product path: `ensure_output_dir()` calls `clear_dir_contents()` on startup to recursively wipe stale reports before any new data is written. `[FR-052]`
 - [ ] Implement archive compression (tar/gzip) before deletion. `[FR-053]`
 - [ ] Add configurable retention limits: max age (hours), max size (MB), max file count. `[FR-054]`
 - [ ] Expose retention config via CLI flags: `--retention-max-age`, `--retention-max-size`, `--retention-max-files`. `[FR-054, §11.1]`
@@ -137,10 +137,8 @@
 
 ## Missing But Recommended
 
-- [ ] Define performance budgets and acceptance thresholds (CPU/memory overhead, sample latency, upload latency). `[PERF-001 to PERF-006, D-009]`
-- [ ] Add security hardening for uploader path: TLS validation, token/cert handling, secret redaction in logs. `[SEC-001 to SEC-005]`
-- [ ] Implement offline buffering and retry policy: queue limits, backoff, drop policy, corruption handling. `[FR-044, ERR-004]`
+- [ ] Define performance budgets and acceptance thresholds (CPU/memory overhead, sample latency). `[PERF-001 to PERF-006, D-009]`
 - [ ] Add report schema versioning and migration plan (CSV/JSON fields, backward compatibility contract). `[§11.2]`
-- [ ] Add observability counters in report metadata: samples collected, parser failures, upload failures, queue depth. `[ERR-005]`
+- [ ] Add observability counters in report metadata: samples collected, parser failures. `[ERR-005]`
 - [ ] Add rollback/feature-flag plan for staged deployment on mixed RDK device classes.
 - [ ] Add parser compatibility fixtures for multiple kernel variants (`pagetypeinfo`/`buddyinfo` format drift). `[FR-002, TST-010, TST-011]`
