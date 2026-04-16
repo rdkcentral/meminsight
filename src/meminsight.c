@@ -341,7 +341,7 @@ SetupInfo initializeSetupInfo(const char *outDir, Report_Format format)
     strncpy(info.kernelVersion, kv, sizeof(info.kernelVersion) - 1);
     info.kernelVersion[sizeof(info.kernelVersion) - 1] = '\0';
     uint64_t id = ((uint64_t)time(NULL)) ^ ((uint64_t)getpid());
-    snprintf(info.runHash, sizeof(info.runHash), "%llx", (unsigned long long)id);
+    snprintf(info.runHash, sizeof(info.runHash), "%016llx", (unsigned long long)id);
 
     return info;
 }
