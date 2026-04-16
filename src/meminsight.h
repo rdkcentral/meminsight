@@ -127,7 +127,6 @@ This is used to ensure compatibility with older versions of the report parser. *
 #define JSON_FILE_NAME "meminsight.json"
 #define LONG_RUN_INTERVAL 900 // 900 is Default interval for long runs in seconds
 #define LONG_RUN_ITERATIONS 48 // 12-hour capture at 15-minute interval; caller may override via CLI/config
-#define DEFAULT_UPLOAD_INTERVAL 900 // 15 minutes in seconds
 
 #define CSV_META_HEADER "FIRMWARE_NAME,MAC_ADDRESS,TIMESTAMP,UPTIME,KERNEL_VERSION,REPORT_VERSION,ITERATION,RUN_ITERATIONS,RUN_INTERVAL,RUN_ID"
 

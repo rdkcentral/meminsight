@@ -2327,6 +2327,8 @@ void printHelpAndUsage(char *argv[], bool moreInfo, int returnCode)
     printf("  -o, --output <directory>              Output directory for generated report files (default: %s)\n", DEFAULT_OUT_DIR);
     printf("      --interval <seconds>              Interval in seconds between iterations (overrides config)\n");
     printf("      --iterations <count>              Number of iterations to run (overrides config)\n");
+    printf("      --upload-enable                   Enable Cadence based upload\n");
+    printf("      --upload-interval <seconds>       Report Upload Frequency\n");
     printf("      --frag                            Enable fragmentation data collection (default: disabled)\n");
     printf("  -s, --smaps               Force /proc/<pid>/smaps (disable auto smaps_rollup detection)\n");
     printf("  -h, --help                            Show this help message and exit\n");
@@ -3307,6 +3309,23 @@ int main(int argc, char *argv[])
             else
             {
                 PRINT_ERROR("Error: Missing iterations value after %s\n", argv[i]);
+                printHelpAndUsage(argv, false, 1);
+            }
+        }
+        else if (!strncmp(argv[i], "--upload-enable", 16))
+        {
+            /* Compatibility flag: Handled via RFC handlers. */
+        }
+        else if (!strncmp(argv[i], "--upload-interval", 18))
+        {
+            /* Compatibility flag: Handled via RFC handlers. */
+            if (i + 1 < argc)
+            {
+                i++; // skip next arg (upload interval)
+            }
+            else
+            {
+                PRINT_ERROR("Error: Missing upload interval value after %s\n", argv[i]);
                 printHelpAndUsage(argv, false, 1);
             }
         }
