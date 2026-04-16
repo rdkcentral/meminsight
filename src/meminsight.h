@@ -25,6 +25,7 @@
 
 #include <dirent.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <linux/sched.h> // For PF_KTHREAD (Linux only)
 #include <net/if.h>
 #include <stdbool.h>

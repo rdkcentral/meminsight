@@ -187,69 +187,96 @@ int (*getProcessInfos_ptr)(FILE*);
  */
 
 /**
- * @brief Recursively delete all contents within a directory (but not the directory itself).
+ * @brief Internal fd-based recursive directory content removal.
  *
- * Uses lstat() to avoid following symlinks during traversal, which prevents
- * accidental deletion of files outside the target directory tree.
+ * All stat and removal operations are performed relative to the directory fd,
+ * eliminating TOCTOU races: the inode checked and the inode acted upon are
+ * always the same object.
  *
- * @param[in] dir_path  Absolute path of directory to clear.
+ * Ownership of @p d is transferred to this function; it is always closed
+ * (via closedir) before returning, whether or not an error occurred.
+ *
+ * @param[in] d         Open DIR* for the directory to clear (closed on return).
+ * @param[in] dir_path  Used only for diagnostic log messages.
  * @return 0 on success, -1 if any removal failed (continues on partial failure).
  */
-static int clear_dir_contents(const char *dir_path)
+static int clear_dir_fd(DIR *d, const char *dir_path)
 {
-    DIR *d = opendir(dir_path);
-    if (!d)
-    {
-        PRINT_MUST("Failed to open output dir for clearing '%s': %s\n", dir_path, strerror(errno));
-        return -1;
-    }
-
     int ret = 0;
+    int parent_fd = dirfd(d);
     struct dirent *entry;
-    char child_path[PATH_MAX];
 
     while ((entry = readdir(d)) != NULL)
     {
         if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0)
             continue;
 
-        if (snprintf(child_path, sizeof(child_path), "%s/%s", dir_path, entry->d_name) >= (int)sizeof(child_path))
-        {
-            PRINT_MUST("Path too long, skipping: %s/%s\n", dir_path, entry->d_name);
-            ret = -1;
-            continue;
-        }
-
         struct stat st;
-        if (lstat(child_path, &st) == -1)
+        if (fstatat(parent_fd, entry->d_name, &st, AT_SYMLINK_NOFOLLOW) == -1)
         {
-            PRINT_MUST("Failed to stat '%s': %s\n", child_path, strerror(errno));
+            PRINT_MUST("Failed to stat '%s/%s': %s\n", dir_path, entry->d_name, strerror(errno));
             ret = -1;
             continue;
         }
 
         if (S_ISDIR(st.st_mode))
         {
-            if (clear_dir_contents(child_path) != 0)
-                ret = -1;
-            if (rmdir(child_path) == -1)
+            int child_fd = openat(parent_fd, entry->d_name,
+                                  O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
+            if (child_fd == -1)
             {
-                PRINT_MUST("Failed to remove dir '%s': %s\n", child_path, strerror(errno));
+                PRINT_MUST("Failed to open dir '%s/%s': %s\n", dir_path, entry->d_name, strerror(errno));
+                ret = -1;
+                continue;
+            }
+            DIR *child_dir = fdopendir(child_fd);
+            if (!child_dir)
+            {
+                PRINT_MUST("Failed to open dir stream '%s/%s': %s\n", dir_path, entry->d_name, strerror(errno));
+                close(child_fd);
+                ret = -1;
+                continue;
+            }
+            char child_path[PATH_MAX];
+            snprintf(child_path, sizeof(child_path), "%s/%s", dir_path, entry->d_name);
+            if (clear_dir_fd(child_dir, child_path) != 0) /* child_dir closed by callee */
+                ret = -1;
+            if (unlinkat(parent_fd, entry->d_name, AT_REMOVEDIR) == -1)
+            {
+                PRINT_MUST("Failed to remove dir '%s/%s': %s\n", dir_path, entry->d_name, strerror(errno));
                 ret = -1;
             }
         }
         else
         {
-            if (unlink(child_path) == -1)
+            if (unlinkat(parent_fd, entry->d_name, 0) == -1)
             {
-                PRINT_MUST("Failed to remove file '%s': %s\n", child_path, strerror(errno));
+                PRINT_MUST("Failed to remove file '%s/%s': %s\n", dir_path, entry->d_name, strerror(errno));
                 ret = -1;
             }
         }
     }
 
-    closedir(d);
+    closedir(d); /* also closes the underlying fd obtained via fdopendir */
     return ret;
+}
+
+static int clear_dir_contents(const char *dir_path)
+{
+    int dfd = open(dir_path, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    if (dfd == -1)
+    {
+        PRINT_MUST("Failed to open output dir for clearing '%s': %s\n", dir_path, strerror(errno));
+        return -1;
+    }
+    DIR *d = fdopendir(dfd);
+    if (!d)
+    {
+        PRINT_MUST("Failed to open dir stream for clearing '%s': %s\n", dir_path, strerror(errno));
+        close(dfd);
+        return -1;
+    }
+    return clear_dir_fd(d, dir_path); /* d closed by clear_dir_fd */
 }
 
 static bool ensure_output_dir(const char *dir)
