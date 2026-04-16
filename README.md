@@ -419,7 +419,7 @@ CPPFLAGS="-DDEVICE_IDENTIFIER=\"eth0\"" make clean && make
 ./meminsight --iterations 24 --interval 3600 --output /mnt/logs/
 ```
 
-## � Report Metadata
+## 📊 Report Metadata
 
 Every report file (CSV and JSON) begins with a metadata row containing the following fields:
 
@@ -434,7 +434,7 @@ Every report file (CSV and JSON) begins with a metadata row containing the follo
 | `ITERATION` | Current iteration number (1-based) within this run |
 | `RUN_ITERATIONS` | Total iterations configured for this run |
 | `RUN_INTERVAL` | Interval in seconds between iterations |
-| `RUN_ID` | Per-run unique hex identifier (time XOR PID, 16 chars) |
+| `RUN_ID` | Per-run unique 16-char zero-padded hex identifier (time XOR PID) |
 
 The `RUN_ID` groups all report files from the same invocation together, making it possible to correlate data across iterations without relying on timestamps alone.
 
