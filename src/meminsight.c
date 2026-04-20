@@ -369,8 +369,7 @@ static void removeFileIfPresent(const char *filePath)
 {
     if (!filePath || !*filePath)
         return;
-    if (access(filePath, F_OK) == 0)
-        (void)unlink(filePath);
+    (void)unlink(filePath);  /* Silently ignore all errors; file may not exist */
 }
 
 /**
