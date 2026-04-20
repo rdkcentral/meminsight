@@ -127,7 +127,7 @@ A comprehensive code audit has been performed identifying memory safety, resourc
 
 **Status**: 
 - ✅ Code audit and findings complete
-- ⏳ CRITICAL fixes in progress (incremental, regression-safe)
+- ✅ CRITICAL resource leak fixes completed
 - ℹ️ Integrated memleakutil for runtime leak detection in CI/CD
 
 ## Development Setup
@@ -135,11 +135,14 @@ A comprehensive code audit has been performed identifying memory safety, resourc
 ```bash
 # Setup development environment
 autoreconf -fiv
-./configure --enable-debug
+./configure --enable-test
 make
 
-# Run test fixtures (requires TESTME build)
-make clean && make CFLAGS="-DTESTME"
+# Run test fixtures (requires --enable-test / TESTME build)
+sh test/run_ut.sh
+
+# Equivalent wrapper flow
+sh cov_build.sh --test
 sh test/run_ut.sh
 ```
 

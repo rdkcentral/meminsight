@@ -218,7 +218,7 @@ When updating tool versions:
 ### Script Dependencies
 
 - **build_memleak.sh**: git, autoconf, automake, make, Python
-- **detect_leak.sh**: bash, memleakutil (built via build_memleak.sh), libdl
+- **detect_leak.sh**: sh (POSIX shell), memleakutil (built via build_memleak.sh), libdl
 - **cov_build.sh**: autoconf, automake, gcc, make
 - **test/run_ut.sh**: standard POSIX utilities
 

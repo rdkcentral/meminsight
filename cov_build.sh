@@ -26,7 +26,7 @@ ENABLE_TEST="no"
 show_help() {
     echo "Usage: $0 [OPTIONS]"
     echo ""
-    echo "Build script for xMemInsight."
+    echo "Build script for memInsight."
     echo ""
     echo "OPTIONS:"
     echo "  --help, -h           Show this help message"
