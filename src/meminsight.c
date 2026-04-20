@@ -130,6 +130,13 @@ static int loadCjson(void)
     return 0;
 }
 
+/**
+ * @brief Release the cJSON shared library loaded by loadCjson().
+ *
+ * Calls dlclose() on the library handle and zeroes the function-pointer
+ * table so any accidental post-unload calls produce a NULL-dereference
+ * rather than a stale function call.
+ */
 static void unloadCjson(void)
 {
     if (g_cjson.handle) {
@@ -261,6 +268,16 @@ static int clear_dir_fd(DIR *d, const char *dir_path)
     return ret;
 }
 
+/**
+ * @brief Remove all entries inside @p dir_path without deleting the directory itself.
+ *
+ * Opens the directory with O_DIRECTORY and delegates to clear_dir_fd() which
+ * performs all stat/unlink operations relative to the directory file descriptor,
+ * eliminating TOCTOU races.
+ *
+ * @param[in] dir_path  Path to the directory whose contents are to be cleared.
+ * @return 0 on success, -1 if any entry could not be removed.
+ */
 static int clear_dir_contents(const char *dir_path)
 {
     int dfd = open(dir_path, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
@@ -279,6 +296,16 @@ static int clear_dir_contents(const char *dir_path)
     return clear_dir_fd(d, dir_path); /* d closed by clear_dir_fd */
 }
 
+/**
+ * @brief Ensure the output directory exists, creating it if necessary.
+ *
+ * If the directory already exists its contents are cleared via
+ * clear_dir_contents() so each run starts with a clean slate.
+ * If @p dir does not exist a single-level mkdir(2) is attempted.
+ *
+ * @param[in] dir  Path to the desired output directory.
+ * @return true if the directory exists or was successfully created, false otherwise.
+ */
 static bool ensure_output_dir(const char *dir)
 {
     struct stat st = {0};
@@ -301,6 +328,143 @@ static bool ensure_output_dir(const char *dir)
         return false;
     }
     return true;
+}
+
+/**
+ * @brief Create or truncate a file, updating its modification time.
+ *
+ * Equivalent to the shell `touch` command. Used to create marker files
+ * (e.g. the upload trigger and the in-progress sentinel) without writing
+ * any content. The file is created with mode 0644 if it does not exist.
+ *
+ * @param[in] filePath  Absolute path to the file to touch.
+ * @return true on success, false if the path is NULL/empty or open(2) fails.
+ */
+static bool touchFile(const char *filePath)
+{
+    if (!filePath || !*filePath)
+        return false;
+
+    int fd = open(filePath, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd == -1)
+    {
+        PRINT_MUST("Failed to touch '%s': %s\n", filePath, strerror(errno));
+        return false;
+    }
+
+    close(fd);
+    return true;
+}
+
+/**
+ * @brief Remove a file only if it currently exists.
+ *
+ * Silently succeeds when the file is absent (e.g. already cleaned up by a
+ * previous call or never created). Used to remove the in-progress sentinel
+ * at every exit path of the two run functions.
+ *
+ * @param[in] filePath  Absolute path of the file to remove.
+ */
+static void removeFileIfPresent(const char *filePath)
+{
+    if (!filePath || !*filePath)
+        return;
+    if (access(filePath, F_OK) == 0)
+        (void)unlink(filePath);
+}
+
+/**
+ * @brief Write (or selectively update) the configstore state file.
+ *
+ * Writes key=value pairs to MEMINSIGHT_CONFIGSTORE_PATH before the capture
+ * run begins so that the upload script can read run parameters without
+ * needing to re-parse the original command line.
+ *
+ * The file is read first; if every key already holds the correct value the
+ * file is left untouched. If any value differs, or the file is absent, the
+ * whole file is rewritten atomically. The file is never removed by meminsight
+ * — it persists across runs and is updated in place.
+ *
+ * @param[in] setup           Populated SetupInfo (runHash, outputDir, kernelVersion).
+ * @param[in] iterations      Resolved iteration count for this run.
+ * @param[in] interval        Resolved interval in seconds between iterations.
+ * @param[in] upload_enabled  true if --upload-enable was passed.
+ * @param[in] upload_interval Upload cadence in seconds (0 if not specified).
+ */
+static void writeConfigStore(const SetupInfo *setup, int iterations, int interval,
+                             bool upload_enabled, int upload_interval)
+{
+    const char * const keys[] = {
+        "UPTIME", "KERNEL_VERSION", "MEMINSIGHT_VERSION", "REPORT_VERSION",
+        "RUN_ITERATIONS", "RUN_INTERVAL", "RUN_ID", "OUTPUT_FORMAT",
+        "UPLOAD_ENABLED", "UPLOAD_INTERVAL", "OUTPUT_DIR"
+    };
+    const int nkeys = (int)(sizeof(keys) / sizeof(keys[0]));
+
+    char v_uptime[64], v_kver[KERNEL_LEN], v_mver[32], v_rver[32];
+    char v_iter[16], v_intv[16], v_runid[32], v_fmt[8];
+    char v_upload[4], v_uintv[16], v_outdir[PATH_MAX];
+
+    snprintf(v_uptime, sizeof(v_uptime), "%s", getSystemUptime());
+    snprintf(v_kver,   sizeof(v_kver),   "%s", setup->kernelVersion);
+    snprintf(v_mver,   sizeof(v_mver),   "%s", memInsightVersion);
+    snprintf(v_rver,   sizeof(v_rver),   "%s", reportVersion);
+    snprintf(v_iter,   sizeof(v_iter),   "%d", iterations);
+    snprintf(v_intv,   sizeof(v_intv),   "%d", interval);
+    snprintf(v_runid,  sizeof(v_runid),  "%s", setup->runHash);
+    snprintf(v_fmt,    sizeof(v_fmt),    "%s", (g_reportFormat == REPORT_JSON) ? "json" : "csv");
+    snprintf(v_upload, sizeof(v_upload), "%d", upload_enabled ? 1 : 0);
+    snprintf(v_uintv,  sizeof(v_uintv),  "%d", upload_interval);
+    snprintf(v_outdir, sizeof(v_outdir), "%s", setup->outputDir);
+
+    const char * const vals[] = {
+        v_uptime, v_kver, v_mver, v_rver,
+        v_iter, v_intv, v_runid, v_fmt,
+        v_upload, v_uintv, v_outdir
+    };
+
+    /* Check if existing file already has all matching values */
+    FILE *fp = fopen(MEMINSIGHT_CONFIGSTORE_PATH, "r");
+    if (fp)
+    {
+        int matched[11] = {0};
+        char line[PATH_MAX + 64];
+        while (fgets(line, sizeof(line), fp))
+        {
+            size_t len = strlen(line);
+            while (len > 0 && (line[len-1] == '\n' || line[len-1] == '\r'))
+                line[--len] = '\0';
+            char *eq = strchr(line, '=');
+            if (!eq) continue;
+            *eq = '\0';
+            for (int k = 0; k < nkeys; k++)
+            {
+                if (strcmp(line, keys[k]) == 0)
+                {
+                    if (strcmp(eq + 1, vals[k]) == 0)
+                        matched[k] = 1;
+                    break;
+                }
+            }
+        }
+        fclose(fp);
+        int total = 0;
+        for (int k = 0; k < nkeys; k++)
+            if (matched[k]) total++;
+        if (total == nkeys)
+            return; /* All values unchanged — skip write */
+    }
+
+    fp = fopen(MEMINSIGHT_CONFIGSTORE_PATH, "w");
+    if (!fp)
+    {
+        PRINT_MUST("Failed to write configstore '%s': %s\n",
+                   MEMINSIGHT_CONFIGSTORE_PATH, strerror(errno));
+        return;
+    }
+    for (int k = 0; k < nkeys; k++)
+        fprintf(fp, "%s=%s\n", keys[k], vals[k]);
+    fclose(fp);
 }
 
 /**
@@ -347,6 +511,13 @@ SetupInfo initializeSetupInfo(const char *outDir, Report_Format format)
     return info;
 }
 
+/**
+ * @brief Probe DDR bandwidth sysfs nodes and update g_bwDataAvailable.
+ *
+ * Checks both the mode control file (BW_DDR_MODE_FILE) for read/write access
+ * and the bandwidth data file (BW_DDR_FILE) for readability. Sets the global
+ * g_bwDataAvailable flag accordingly. Called once at startup.
+ */
 static void updateBandwidthAvailability(void)
 {
     bool modeAccessible = (access(BW_DDR_MODE_FILE, R_OK | W_OK) == 0);
@@ -354,9 +525,13 @@ static void updateBandwidthAvailability(void)
     g_bwDataAvailable = (modeAccessible && bwReadable);
 }
 
-/*
- * Select fragmentation source once at startup for consistent per-iteration output:
- * prefer pagetypeinfo, otherwise buddyinfo, otherwise none.
+/**
+ * @brief Select the fragmentation data source once at startup.
+ *
+ * Sets the module-level g_fragSource flag by probing file accessibility in
+ * priority order: pagetypeinfo > buddyinfo > none. Deciding once at startup
+ * guarantees consistent output format across all iterations of a run.
+ * In TESTME mode the source is inferred from which test fixture path is set.
  */
 static void selectFragmentationSource(void)
 {
@@ -519,6 +694,11 @@ const char *getKernelVersion(void)
     return kernelVer;
 }
 
+/**
+ * @brief Strip trailing newline, carriage-return, space, and tab characters in-place.
+ *
+ * @param[in,out] str  NUL-terminated string to trim; modified in place.
+ */
 static void trimTrailingWhitespace(char *str)
 {
     size_t len = strlen(str);
@@ -528,6 +708,13 @@ static void trimTrailingWhitespace(char *str)
     }
 }
 
+/**
+ * @brief Advance a string pointer past any leading space or tab characters.
+ *
+ * The pointer itself is updated; no copy is made and no memory is freed.
+ *
+ * @param[in,out] str  Pointer to a C-string pointer; advanced past leading whitespace.
+ */
 static void trimLeadingWhitespace(char **str)
 {
     while (**str == ' ' || **str == '\t') {
@@ -535,6 +722,18 @@ static void trimLeadingWhitespace(char **str)
     }
 }
 
+/**
+ * @brief Parse a whitespace-separated series of unsigned long integers.
+ *
+ * Reads from @p start, converting tokens with strtoul until @p maxValues
+ * have been collected or no more tokens are found. Used to decode the
+ * per-order free-pages counts in /proc/buddyinfo and /proc/pagetypeinfo.
+ *
+ * @param[in]  start      Pointer into a line of text to begin parsing.
+ * @param[out] values     Caller-allocated array to receive parsed values.
+ * @param[in]  maxValues  Maximum number of values to store in @p values.
+ * @return Number of values successfully parsed.
+ */
 static int parseUnsignedSeries(const char *start, unsigned long *values, int maxValues)
 {
     int count = 0;
@@ -555,6 +754,16 @@ static int parseUnsignedSeries(const char *start, unsigned long *values, int max
     return count;
 }
 
+/**
+ * @brief Parse /proc/pagetypeinfo and write fragmentation data as CSV rows.
+ *
+ * Reads the kernel's page-type information, emits a section header, then
+ * writes one CSV row per (zone, pageblock-type) combination with per-order
+ * free-page counts. In TESTME mode uses the testPagetypeinfo fixture path.
+ *
+ * @param[in] out  Open file stream to write CSV output to.
+ * @return Number of data rows written on success, -1 if the source is unavailable.
+ */
 static int writePagetypeInfoCSV(FILE *out)
 {
 #define FRAG_MAX_ORDERS 32
@@ -640,6 +849,16 @@ static int writePagetypeInfoCSV(FILE *out)
 #undef FRAG_MAX_ORDERS
 }
 
+/**
+ * @brief Parse /proc/buddyinfo and write fragmentation data as CSV rows.
+ *
+ * Reads the kernel's buddy allocator summary, emits a section header, then
+ * writes one CSV row per (node, zone) combination with per-order free-page
+ * counts. In TESTME mode uses the testBuddyinfo fixture path.
+ *
+ * @param[in] out  Open file stream to write CSV output to.
+ * @return Number of data rows written on success, -1 if the source is unavailable.
+ */
 static int writeBuddyinfoCSV(FILE *out)
 {
 #define FRAG_MAX_ORDERS 32
@@ -705,6 +924,15 @@ static int writeBuddyinfoCSV(FILE *out)
 #undef FRAG_MAX_ORDERS
 }
 
+/**
+ * @brief Write memory fragmentation data to a CSV output stream.
+ *
+ * Dispatches to writePagetypeInfoCSV() or writeBuddyinfoCSV() based on the
+ * source selected by selectFragmentationSource() at startup. Falls back to a
+ * "source_unavailable" sentinel row when neither source can be parsed.
+ *
+ * @param[in] out  Open file stream to write CSV output to.
+ */
 void saveFragmentationInfo(FILE *out)
 {
     if (!out)
@@ -728,6 +956,16 @@ void saveFragmentationInfo(FILE *out)
 }
 
 #ifdef ENABLE_CJSON
+/**
+ * @brief Parse /proc/pagetypeinfo and populate a cJSON fragmentation object.
+ *
+ * Reads the kernel's page-type information and adds structured per-order
+ * free-page-count rows as a JSON array under @p fragRoot. Also records the
+ * page_block_order, pages_per_block, and row_count as numeric members.
+ *
+ * @param[in,out] fragRoot  cJSON object to populate with pagetypeinfo data.
+ * @return 0 on success, -1 if the source is unavailable or parsing fails.
+ */
 static int addPagetypeInfoJSON(cJSON_t *fragRoot)
 {
 #define FRAG_MAX_ORDERS 32
@@ -813,6 +1051,16 @@ static int addPagetypeInfoJSON(cJSON_t *fragRoot)
 #undef FRAG_MAX_ORDERS
 }
 
+/**
+ * @brief Parse /proc/buddyinfo and populate a cJSON fragmentation object.
+ *
+ * Reads the kernel's buddy allocator summary and adds structured per-order
+ * free-page-count rows as a JSON array under @p fragRoot. Also records
+ * row_count as a numeric member.
+ *
+ * @param[in,out] fragRoot  cJSON object to populate with buddyinfo data.
+ * @return 0 on success, -1 if the source is unavailable.
+ */
 static int addBuddyinfoJSON(cJSON_t *fragRoot)
 {
 #define FRAG_MAX_ORDERS 32
@@ -875,6 +1123,16 @@ static int addBuddyinfoJSON(cJSON_t *fragRoot)
 #undef FRAG_MAX_ORDERS
 }
 
+/**
+ * @brief Write memory fragmentation data as JSON into @p root.
+ *
+ * Creates a "fragmentation" child object under @p root and delegates to
+ * addPagetypeInfoJSON() or addBuddyinfoJSON() based on the source selected
+ * at startup. Records a "source_unavailable" string when neither source can
+ * be parsed.
+ *
+ * @param[in,out] root  cJSON root object for the current report iteration.
+ */
 void saveFragmentationInfo_JSON(cJSON_t *root)
 {
     if (!root)
@@ -903,6 +1161,15 @@ void saveFragmentationInfo_JSON(cJSON_t *root)
 }
 #endif
 
+/**
+ * @brief Read DDR bandwidth data from sysfs and write it as a CSV section.
+ *
+ * Activates bandwidth measurement mode via BW_DDR_MODE_FILE, reads the
+ * total bandwidth and usage percentage from BW_DDR_FILE, and appends a
+ * formatted CSV bandwidth section to @p out. Does nothing if @p out is NULL.
+ *
+ * @param[in] out  Open file stream to append the bandwidth CSV section to.
+ */
 void collectBandwidthData(FILE *out)
 {
     if (!out)
@@ -1289,6 +1556,13 @@ void writeProcessInfo(unsigned noOfPids, FILE *output)
     }
 }
 
+/**
+ * @brief Free all nodes in the global process-info linked list.
+ *
+ * Traverses headProcessInfo, frees each node, and sets headProcessInfo to
+ * NULL. Used on error paths where writeProcessInfo() is not called (and
+ * therefore does not consume and free the list itself).
+ */
 static void freeProcessInfoList(void)
 {
     Process_Info *tmp = headProcessInfo;
@@ -1419,6 +1693,15 @@ void testList()
     checkAndFree();
 }
 unsigned prev_test_pss;
+/**
+ * @brief Parse a single smaps line and accumulate values into processInfoTest (TESTME only).
+ *
+ * Called line-by-line from testGetProcessInfos() to replicate the field
+ * accumulation logic for unit-test validation. Updates the global
+ * processInfoTest struct.
+ *
+ * @param[in] tmp  Single line of text read from the smaps fixture.
+ */
 void testGetProcessInfos_Parse(char *tmp)
 {
     unsigned test_rss = 0, test_pss = 0;
@@ -1478,6 +1761,16 @@ void testGetProcessInfos_Parse(char *tmp)
     }
 }
 
+/**
+ * @brief Drive testGetProcessInfos_Parse() over a complete smaps fixture (TESTME only).
+ *
+ * Reads every line from @p smap and passes each to testGetProcessInfos_Parse()
+ * so that processInfoTest is fully populated for assertion in the calling test.
+ *
+ * @param[in]  smap  Open FILE* positioned at the start of a smaps fixture.
+ * @param[out] tmp   Caller-supplied line buffer (minimum 256 bytes).
+ * @return 0 always.
+ */
 int testGetProcessInfos(FILE *smap, char *tmp)
 {
     memset(&processInfoTest, 0, sizeof(processInfoTest));
@@ -1660,6 +1953,17 @@ int getProcessInfos_rollup_learnt(FILE *smap)
     return 0;
 }
 
+/**
+ * @brief Parse /proc/[pid]/smaps_rollup using field-offset discovery.
+ *
+ * First-run variant: scans the rollup file without pre-learned offsets,
+ * recording the line numbers of each field as it goes. On the next call
+ * the module switches to getProcessInfos_rollup_learnt() which uses the
+ * recorded offsets for faster parsing. Returns 0 on success, 1 on failure.
+ *
+ * @param[in] smap  Open FILE* for the process smaps_rollup pseudo-file.
+ * @return 0 on success, 1 if required fields could not be located.
+ */
 int getProcessInfos_rollup(FILE *smap)
 {
     char tmp[256];
@@ -1924,6 +2228,17 @@ int getProcessInfos_learnt(FILE *smap)
     }
     return 0;
 }
+/**
+ * @brief Parse /proc/[pid]/smaps using field-offset discovery.
+ *
+ * First-run variant for the full smaps file: scans without pre-learned
+ * offsets, recording line positions of Rss/Pss/etc. fields as it goes.
+ * On subsequent calls the module switches to getProcessInfos_learnt() for
+ * faster offset-guided parsing. Returns 0 on success, 1 on failure.
+ *
+ * @param[in] smap  Open FILE* for the process smaps pseudo-file.
+ * @return 0 on success, 1 if required fields could not be located.
+ */
 int getProcessInfos_initial(FILE *smap)
 {
     char tmp[256];
@@ -2244,6 +2559,17 @@ int getProcessInfos_initial(FILE *smap)
     return 0;
 }
 
+/**
+ * @brief Open and parse smaps or smaps_rollup for a given PID.
+ *
+ * Selects the appropriate pseudo-file based on the module-level smaps_rollup
+ * flag and dispatches to the function pointer getProcessInfos_ptr (one of
+ * getProcessInfos_rollup, getProcessInfos_rollup_learnt, getProcessInfos_initial,
+ * or getProcessInfos_learnt). In TESTME mode uses the configured test fixture.
+ *
+ * @param[in] pid  Process ID to collect memory statistics for.
+ * @return 0 on success, 1 on failure (file not found, parse error, etc.).
+ */
 int getProcessInfos(unsigned pid)
 {
     int ret = 1;
@@ -2380,7 +2706,7 @@ void printHelpAndUsage(char *argv[], bool moreInfo, int returnCode)
  * Collects system-wide memory statistics and writes to output file.
  * Returns 0 on success, -1 on failure.
  */
-int collectSystemMemoryStats(bool enableKThreads, const char *outDir, int iterations, int interval, bool long_run)
+int collectSystemMemoryStats(bool enableKThreads, const char *outDir, int iterations, int interval, bool long_run, bool upload_enabled, int upload_interval)
 {
     // Initialize setup info (MAC, firmware name, output dir, file extension)
     SetupInfo setup = initializeSetupInfo(outDir, g_reportFormat);
@@ -2388,6 +2714,12 @@ int collectSystemMemoryStats(bool enableKThreads, const char *outDir, int iterat
         PRINT_MUST("Failed to create output directory: %s\n", setup.outputDir);
         return -1;
     }
+
+    writeConfigStore(&setup, iterations, interval, upload_enabled, upload_interval);
+
+    char inprogressPath[PATH_MAX];
+    snprintf(inprogressPath, sizeof(inprogressPath), "%s/" MEMINSIGHT_INPROGRESS_FILE, setup.outputDir);
+    (void)touchFile(inprogressPath);
 
     PRINT_MUST("Capturing System wide stats into directory %s\n", setup.outputDir);
     char outputfile[512];
@@ -2417,6 +2749,7 @@ int collectSystemMemoryStats(bool enableKThreads, const char *outDir, int iterat
             g_rootObject = g_cjson.CreateObject();
             if (!g_rootObject) {
                 PRINT_ERROR("Failed to create JSON root object\n");
+                removeFileIfPresent(inprogressPath);
                 return -1;
             }
             g_cjson.AddStringToObject(g_rootObject, "FIRMWARE_NAME", setup.fwName);
@@ -2437,6 +2770,7 @@ int collectSystemMemoryStats(bool enableKThreads, const char *outDir, int iterat
             output = fopen(outputfile, "w");
             if (NULL == output) {
                 PRINT_MUST("%s: Open failed, %d [%s]\n", outputfile, errno, strerror(errno));
+                removeFileIfPresent(inprogressPath);
                 return -1;
             }
             fprintf(output, "%s\n", CSV_META_HEADER);
@@ -2505,6 +2839,7 @@ int collectSystemMemoryStats(bool enableKThreads, const char *outDir, int iterat
                 g_rootObject = NULL;
             }
 #endif
+            removeFileIfPresent(inprogressPath);
             return -1;
         }
 
@@ -2520,6 +2855,7 @@ int collectSystemMemoryStats(bool enableKThreads, const char *outDir, int iterat
     #ifdef TESTME
             if (isTestMode && unitTestFailed) {
                 fclose(output);
+                removeFileIfPresent(inprogressPath);
                 return -1;
             }
     #endif
@@ -2543,12 +2879,14 @@ int collectSystemMemoryStats(bool enableKThreads, const char *outDir, int iterat
                 freeProcessInfoList();
                 g_cjson.Delete(g_rootObject);
                 g_rootObject = NULL;
+                removeFileIfPresent(inprogressPath);
                 return -1;
             }
             writeProcessInfo_JSON(processesArray);
             g_cjson.AddItemToObject(g_rootObject, "processes", processesArray);
             if (writeJSONToFile(outputfile, &setup) != 0) {
                 PRINT_ERROR("Failed to write JSON output file: %s\n", outputfile);
+                removeFileIfPresent(inprogressPath);
                 return -1;
             }
         }
@@ -2565,10 +2903,32 @@ int collectSystemMemoryStats(bool enableKThreads, const char *outDir, int iterat
         }
     }
     printf("\n---- Completed Data Capture ----\n");
+    removeFileIfPresent(inprogressPath);
     return 0;
 }
 
-int handleConfigMode(const char *confFile, const char *cli_out_dir, bool cli_output_set, int cli_iterations, int cli_interval, bool enableKThreads, bool long_run)
+/**
+ * @brief Run a whitelist-driven capture using a config file.
+ *
+ * Parses @p confFile for a process whitelist, output directory, iterations,
+ * interval, and log level. CLI arguments take precedence over config-file
+ * values where both are supplied. For each iteration the listed PIDs (or
+ * process names resolved to PIDs) are scanned and their memory statistics
+ * written to a timestamped output file. Writes the configstore state file
+ * and creates/removes the in-progress sentinel around the capture loop.
+ *
+ * @param[in] confFile         Path to the .conf configuration file.
+ * @param[in] cli_out_dir      Output directory override from CLI (may be NULL).
+ * @param[in] cli_output_set   true if --output was explicitly passed on the CLI.
+ * @param[in] cli_iterations   Iteration count from CLI (-1 if not set).
+ * @param[in] cli_interval     Interval in seconds from CLI (-1 if not set).
+ * @param[in] enableKThreads   Include kernel threads when true.
+ * @param[in] long_run         Run indefinitely when true (ignores iteration count).
+ * @param[in] upload_enabled   true if --upload-enable was passed.
+ * @param[in] upload_interval  Upload cadence in seconds (0 if not specified).
+ * @return 0 on success, -1 on failure.
+ */
+int handleConfigMode(const char *confFile, const char *cli_out_dir, bool cli_output_set, int cli_iterations, int cli_interval, bool enableKThreads, bool long_run, bool upload_enabled, int upload_interval)
 {
     Config_Data config = {0};
     if (parseConfig(confFile, &config) != 0)
@@ -2629,6 +2989,12 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, bool cli_out
     config.iterations = final_iterations;
     config.interval = final_interval;
 
+    writeConfigStore(&setup, final_iterations, final_interval, upload_enabled, upload_interval);
+
+    char inprogressPath[PATH_MAX];
+    snprintf(inprogressPath, sizeof(inprogressPath), "%s/" MEMINSIGHT_INPROGRESS_FILE, setup.outputDir);
+    (void)touchFile(inprogressPath);
+
     PRINT_INFO("* Config loaded successfully [%s]", confFile);
     //printf("\n whitelist=%p\n count=%u\n outDir=%s\n iterations=%u\n interval=%u\n logLevel=%s\n", config.whitelist, config.whiteListCount, config.outputDir, final_iterations, final_interval, config.logLevel);
 
@@ -2666,6 +3032,7 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, bool cli_out
                 for (unsigned j = 0; j < config.whiteListCount; j++)
                     if (config.whitelist[j]) free(config.whitelist[j]);
                 if (config.whitelist) free(config.whitelist);
+                removeFileIfPresent(inprogressPath);
                 return -1;
             }
             g_cjson.AddStringToObject(g_rootObject, "FIRMWARE_NAME",  setup.fwName);
@@ -2689,6 +3056,7 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, bool cli_out
                 for (unsigned j = 0; j < config.whiteListCount; j++)
                     if (config.whitelist[j]) free(config.whitelist[j]);
                 if (config.whitelist) free(config.whitelist);
+                removeFileIfPresent(inprogressPath);
                 return -1;
             }
             fprintf(output, "%s\n", CSV_META_HEADER);
@@ -2766,6 +3134,7 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, bool cli_out
                     for (unsigned j = 0; j < config.whiteListCount; j++)
                         if (config.whitelist[j]) free(config.whitelist[j]);
                     if (config.whitelist) free(config.whitelist);
+                    removeFileIfPresent(inprogressPath);
                     return -1;
                 }
                 writeProcessInfo_JSON(processesArray);
@@ -2808,6 +3177,7 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, bool cli_out
                 for (unsigned j = 0; j < config.whiteListCount; j++)
                     if (config.whitelist[j]) free(config.whitelist[j]);
                 if (config.whitelist) free(config.whitelist);
+                removeFileIfPresent(inprogressPath);
                 return -1;
             }
         }
@@ -2833,6 +3203,7 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, bool cli_out
         free(config.whitelist);
     }
     PRINT_INFO("\n---- Completed Data Capture ----\n");
+    removeFileIfPresent(inprogressPath);
     return 0;
 }
 
@@ -3182,6 +3553,7 @@ int main(int argc, char *argv[])
     bool cli_fmt_json = false;
     bool cli_upload_enable = false;
     bool cli_upload_interval_set = false;
+    int  cli_upload_interval = 0;
     bool cli_json_pretty_set = false;
 
     // CLI parsing and initialization
@@ -3328,6 +3700,7 @@ int main(int argc, char *argv[])
             if (i + 1 < argc)
             {
                 i++; // skip next arg (upload interval)
+                cli_upload_interval = atoi(argv[i]);
             }
             else
             {
@@ -3444,12 +3817,17 @@ int main(int argc, char *argv[])
     }
 #endif
 
+    if (cli_upload_enable)
+    {
+        (void)touchFile(MEMINSIGHT_UPLOAD_MARKER_PATH);
+    }
+
     if (isConfigPresent)
     {
 #ifdef TESTME
-    return (handleConfigMode(confFile, out_dir, cli_output_set, cli_iterations, cli_interval, enableKThreads, long_run) == 0) ? 0 : 1;
+    return (handleConfigMode(confFile, out_dir, cli_output_set, cli_iterations, cli_interval, enableKThreads, long_run, cli_upload_enable, cli_upload_interval) == 0) ? 0 : 1;
 #else
-    handleConfigMode(confFile, out_dir, cli_output_set, cli_iterations, cli_interval, enableKThreads, long_run);
+    handleConfigMode(confFile, out_dir, cli_output_set, cli_iterations, cli_interval, enableKThreads, long_run, cli_upload_enable, cli_upload_interval);
 #endif
     }
     else if (isSystemWide)
@@ -3466,9 +3844,9 @@ int main(int argc, char *argv[])
         }
         PRINT_MUST("* Running %d iterations with %ds interval (indefinitely?: %s)\n", final_iterations, final_interval, long_run ? "yes" : "no");
 #ifdef TESTME
-        return (collectSystemMemoryStats(enableKThreads, out_dir, final_iterations, final_interval, long_run) == 0) ? 0 : 1;
+        return (collectSystemMemoryStats(enableKThreads, out_dir, final_iterations, final_interval, long_run, cli_upload_enable, cli_upload_interval) == 0) ? 0 : 1;
 #else
-        collectSystemMemoryStats(enableKThreads, out_dir, final_iterations, final_interval, long_run);
+        collectSystemMemoryStats(enableKThreads, out_dir, final_iterations, final_interval, long_run, cli_upload_enable, cli_upload_interval);
 #endif
     }
 

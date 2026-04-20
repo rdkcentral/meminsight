@@ -105,6 +105,10 @@ This is used to ensure compatibility with older versions of the report parser. *
 #define PGT_FILE PROC_DIR "/pagetypeinfo"
 #endif
 
+#define MEMINSIGHT_CONFIGSTORE_PATH "/tmp/.meminsight_configstore"
+#define MEMINSIGHT_UPLOAD_MARKER_PATH "/tmp/.meminsight_upload"
+#define MEMINSIGHT_INPROGRESS_FILE ".meminsight_inprogress"
+
 /* Default Macros */
 #define DEFAULT_FW_NAME "ACTIVEFW123"
 #define FW_LEN 64
@@ -243,8 +247,8 @@ const char *getKernelVersion(void);
 int isPID(const char *str);
 int getPIDByProcessName(const char *procName, unsigned int *pidOut);
 int parseConfig(const char *configFile, Config_Data *config);
-int collectSystemMemoryStats(bool enableKThreads, const char *outDir, int iterations, int interval, bool long_run);
-int handleConfigMode(const char *confFile, const char *cli_out_dir, bool cli_output_set, int cli_iterations, int cli_interval, bool enableKThreads, bool long_run);
+int collectSystemMemoryStats(bool enableKThreads, const char *outDir, int iterations, int interval, bool long_run, bool upload_enabled, int upload_interval);
+int handleConfigMode(const char *confFile, const char *cli_out_dir, bool cli_output_set, int cli_iterations, int cli_interval, bool enableKThreads, bool long_run, bool upload_enabled, int upload_interval);
 int fillProcessStatFields(unsigned pid, Process_Info *info, unsigned *flagsOut);
 
 #ifdef ENABLE_CJSON
