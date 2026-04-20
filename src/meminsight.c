@@ -3179,6 +3179,10 @@ int main(int argc, char *argv[])
     char out_dir[PATH_MAX] = DEFAULT_OUT_DIR;
     int cli_iterations = -1;
     int cli_interval = -1;
+    bool cli_fmt_json = false;
+    bool cli_upload_enable = false;
+    bool cli_upload_interval_set = false;
+    bool cli_json_pretty_set = false;
 
     // CLI parsing and initialization
     if (argc == 1)
@@ -3314,10 +3318,12 @@ int main(int argc, char *argv[])
         }
         else if (!strncmp(argv[i], "--upload-enable", 16))
         {
+            cli_upload_enable = true;
             /* Compatibility flag: Handled via RFC handlers. */
         }
         else if (!strncmp(argv[i], "--upload-interval", 18))
         {
+            cli_upload_interval_set = true;
             /* Compatibility flag: Handled via RFC handlers. */
             if (i + 1 < argc)
             {
@@ -3344,6 +3350,7 @@ int main(int argc, char *argv[])
                 i++;
                 if (!strncmp(argv[i], "json", 5))
                 {
+                    cli_fmt_json = true;
 #ifdef ENABLE_CJSON
                     g_reportFormat = REPORT_JSON;
 #else
@@ -3354,6 +3361,7 @@ int main(int argc, char *argv[])
                 }
                 else if (!strncmp(argv[i], "csv", 4))
                 {
+                    cli_fmt_json = false;
                     g_reportFormat = REPORT_CSV;
                 }
                 else
@@ -3370,6 +3378,7 @@ int main(int argc, char *argv[])
         }
         else if (!strncmp(argv[i], "--json-pretty", 13))
         {
+            cli_json_pretty_set = true;
 #ifdef ENABLE_CJSON
             g_jsonPrettyPrint = true;
 #else
@@ -3381,6 +3390,18 @@ int main(int argc, char *argv[])
             PRINT_ERROR("Error: Unrecognized argument '%s'\n", argv[i]);
             printHelpAndUsage(argv, false, 1);
         }
+    }
+
+    if (cli_json_pretty_set && !cli_fmt_json)
+    {
+        PRINT_ERROR("Error: --json-pretty requires --fmt json\n");
+        printHelpAndUsage(argv, false, 1);
+    }
+
+    if (cli_upload_interval_set && !cli_upload_enable)
+    {
+        PRINT_ERROR("Error: --upload-interval requires --upload-enable\n");
+        printHelpAndUsage(argv, false, 1);
     }
 
     printf("\nExecuting: ");
