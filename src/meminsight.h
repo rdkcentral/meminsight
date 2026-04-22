@@ -107,7 +107,7 @@ This is used to ensure compatibility with older versions of the report parser. *
 
 #define MEMINSIGHT_CONFIGSTORE_PATH "/tmp/.meminsight_configstore"
 #define MEMINSIGHT_UPLOAD_MARKER_PATH "/tmp/.meminsight_upload"
-#define MEMINSIGHT_INPROGRESS_FILE ".meminsight_inprogress"
+#define MEMINSIGHT_INPROGRESS_FILE "/tmp/.meminsight_inprogress"
 
 /* Default Macros */
 #define DEFAULT_FW_NAME "ACTIVEFW123"

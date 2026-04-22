@@ -2716,9 +2716,7 @@ int collectSystemMemoryStats(bool enableKThreads, const char *outDir, int iterat
 
     writeConfigStore(&setup, iterations, interval, upload_enabled, upload_interval);
 
-    char inprogressPath[PATH_MAX];
-    snprintf(inprogressPath, sizeof(inprogressPath), "%s/" MEMINSIGHT_INPROGRESS_FILE, setup.outputDir);
-    (void)touchFile(inprogressPath);
+    (void)touchFile(MEMINSIGHT_INPROGRESS_FILE);
 
     PRINT_MUST("Capturing System wide stats into directory %s\n", setup.outputDir);
     char outputfile[512];
@@ -2748,7 +2746,7 @@ int collectSystemMemoryStats(bool enableKThreads, const char *outDir, int iterat
             g_rootObject = g_cjson.CreateObject();
             if (!g_rootObject) {
                 PRINT_ERROR("Failed to create JSON root object\n");
-                removeFileIfPresent(inprogressPath);
+                removeFileIfPresent(MEMINSIGHT_INPROGRESS_FILE);
                 return -1;
             }
             g_cjson.AddStringToObject(g_rootObject, "FIRMWARE_NAME", setup.fwName);
@@ -2769,7 +2767,7 @@ int collectSystemMemoryStats(bool enableKThreads, const char *outDir, int iterat
             output = fopen(outputfile, "w");
             if (NULL == output) {
                 PRINT_MUST("%s: Open failed, %d [%s]\n", outputfile, errno, strerror(errno));
-                removeFileIfPresent(inprogressPath);
+                removeFileIfPresent(MEMINSIGHT_INPROGRESS_FILE);
                 return -1;
             }
             fprintf(output, "%s\n", CSV_META_HEADER);
@@ -2838,7 +2836,7 @@ int collectSystemMemoryStats(bool enableKThreads, const char *outDir, int iterat
                 g_rootObject = NULL;
             }
 #endif
-            removeFileIfPresent(inprogressPath);
+            removeFileIfPresent(MEMINSIGHT_INPROGRESS_FILE);
             return -1;
         }
 
@@ -2854,7 +2852,7 @@ int collectSystemMemoryStats(bool enableKThreads, const char *outDir, int iterat
     #ifdef TESTME
             if (isTestMode && unitTestFailed) {
                 fclose(output);
-                removeFileIfPresent(inprogressPath);
+                removeFileIfPresent(MEMINSIGHT_INPROGRESS_FILE);
                 return -1;
             }
     #endif
@@ -2878,14 +2876,14 @@ int collectSystemMemoryStats(bool enableKThreads, const char *outDir, int iterat
                 freeProcessInfoList();
                 g_cjson.Delete(g_rootObject);
                 g_rootObject = NULL;
-                removeFileIfPresent(inprogressPath);
+                removeFileIfPresent(MEMINSIGHT_INPROGRESS_FILE);
                 return -1;
             }
             writeProcessInfo_JSON(processesArray);
             g_cjson.AddItemToObject(g_rootObject, "processes", processesArray);
             if (writeJSONToFile(outputfile, &setup) != 0) {
                 PRINT_ERROR("Failed to write JSON output file: %s\n", outputfile);
-                removeFileIfPresent(inprogressPath);
+                removeFileIfPresent(MEMINSIGHT_INPROGRESS_FILE);
                 return -1;
             }
         }
@@ -2902,7 +2900,7 @@ int collectSystemMemoryStats(bool enableKThreads, const char *outDir, int iterat
         }
     }
     printf("\n---- Completed Data Capture ----\n");
-    removeFileIfPresent(inprogressPath);
+    removeFileIfPresent(MEMINSIGHT_INPROGRESS_FILE);
     return 0;
 }
 
@@ -2990,9 +2988,7 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, bool cli_out
 
     writeConfigStore(&setup, final_iterations, final_interval, upload_enabled, upload_interval);
 
-    char inprogressPath[PATH_MAX];
-    snprintf(inprogressPath, sizeof(inprogressPath), "%s/" MEMINSIGHT_INPROGRESS_FILE, setup.outputDir);
-    (void)touchFile(inprogressPath);
+    (void)touchFile(MEMINSIGHT_INPROGRESS_FILE);
 
     PRINT_INFO("* Config loaded successfully [%s]", confFile);
     //printf("\n whitelist=%p\n count=%u\n outDir=%s\n iterations=%u\n interval=%u\n logLevel=%s\n", config.whitelist, config.whiteListCount, config.outputDir, final_iterations, final_interval, config.logLevel);
@@ -3031,7 +3027,7 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, bool cli_out
                 for (unsigned j = 0; j < config.whiteListCount; j++)
                     if (config.whitelist[j]) free(config.whitelist[j]);
                 if (config.whitelist) free(config.whitelist);
-                removeFileIfPresent(inprogressPath);
+                removeFileIfPresent(MEMINSIGHT_INPROGRESS_FILE);
                 return -1;
             }
             g_cjson.AddStringToObject(g_rootObject, "FIRMWARE_NAME",  setup.fwName);
@@ -3055,7 +3051,7 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, bool cli_out
                 for (unsigned j = 0; j < config.whiteListCount; j++)
                     if (config.whitelist[j]) free(config.whitelist[j]);
                 if (config.whitelist) free(config.whitelist);
-                removeFileIfPresent(inprogressPath);
+                removeFileIfPresent(MEMINSIGHT_INPROGRESS_FILE);
                 return -1;
             }
             fprintf(output, "%s\n", CSV_META_HEADER);
@@ -3133,7 +3129,7 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, bool cli_out
                     for (unsigned j = 0; j < config.whiteListCount; j++)
                         if (config.whitelist[j]) free(config.whitelist[j]);
                     if (config.whitelist) free(config.whitelist);
-                    removeFileIfPresent(inprogressPath);
+                    removeFileIfPresent(MEMINSIGHT_INPROGRESS_FILE);
                     return -1;
                 }
                 writeProcessInfo_JSON(processesArray);
@@ -3176,7 +3172,7 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, bool cli_out
                 for (unsigned j = 0; j < config.whiteListCount; j++)
                     if (config.whitelist[j]) free(config.whitelist[j]);
                 if (config.whitelist) free(config.whitelist);
-                removeFileIfPresent(inprogressPath);
+                removeFileIfPresent(MEMINSIGHT_INPROGRESS_FILE);
                 return -1;
             }
         }
@@ -3202,7 +3198,7 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, bool cli_out
         free(config.whitelist);
     }
     PRINT_INFO("\n---- Completed Data Capture ----\n");
-    removeFileIfPresent(inprogressPath);
+    removeFileIfPresent(MEMINSIGHT_INPROGRESS_FILE);
     return 0;
 }
 
