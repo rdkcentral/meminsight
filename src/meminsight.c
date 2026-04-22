@@ -505,7 +505,10 @@ SetupInfo initializeSetupInfo(const char *outDir, Report_Format format)
     info.kernelVersion[sizeof(info.kernelVersion) - 1] = '\0';
     unsigned long long epoch = (unsigned long long)time(NULL);
     unsigned long long pid = (unsigned long long)getpid();
-    snprintf(info.runHash, sizeof(info.runHash), "%llu%llu", epoch, pid);
+    srand((unsigned int)(epoch ^ pid));
+    int random2Digit = rand() % 100;
+    printf("Debug: epoch=%llu |  pid=%llu | random2Digit=%02d\n", epoch, pid, random2Digit);
+    snprintf(info.runHash, sizeof(info.runHash), "%llu%llu%02d", epoch, pid, random2Digit);
 
     return info;
 }
