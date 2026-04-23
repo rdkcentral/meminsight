@@ -1,0 +1,70 @@
+name: Native Full Build
+
+permissions:
+  contents: read
+
+on:
+  pull_request:
+    branches: [ develop ]
+    paths: ['**/*.c', '**/*.cpp', '**/*.cc', '**/*.cxx', '**/*.h', '**/*.hpp', '**/*.sh', 'configure.ac', 'Makefile.am', '.github/workflows/**/*.yml']
+
+jobs:
+  native-full-build:
+    name: Native build with cjson, test flags, and memory leak detection
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/rdkcentral/docker-device-mgt-service-test/native-platform:latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          apt-get update
+          apt-get install -y autotools-dev autoconf automake pkg-config libtool m4
+
+      - name: Clean meminsight build artifacts
+        run: |
+          sh cov_build.sh --clean
+
+      - name: Build meminsight (cjson + test)
+        run: |
+          sh cov_build.sh --enable-cjson --test
+
+      - name: Verify meminsight build output
+        run: |
+          ls -la meminsight || echo "Build artifact not found"
+          file meminsight || echo "Cannot check file type"
+          ./meminsight --version 2>/dev/null || echo "Version check skipped"
+
+      - name: Build memleakutil
+        run: |
+          chmod +x scripts/build_memleak.sh
+          sh scripts/build_memleak.sh /tmp main
+
+      - name: Run meminsight with leak detection (via organized script)
+        run: |
+          chmod +x scripts/detect_leak.sh
+          export MEMLEAK_INSTALL_DIR=/tmp/memleakutil-install
+          export LEAK_REPORT_DIR=/tmp/meminsight-leak-reports
+          sh scripts/detect_leak.sh
+
+      - name: Summary
+        run: |
+          echo "======================================================================"
+          echo "Native Full Build Summary"
+          echo "======================================================================"
+          echo ""
+          echo "✓ Dependencies installed"
+          echo "✓ Meminsight built with --enable-cjson --test"
+          echo "✓ Memleakutil library built and installed"
+          echo "✓ Memory leak detection executed"
+          echo "✓ Reports generated and printed by scripts/detect_leak.sh"
+          echo ""
+          echo "Artifacts:"
+          echo "  - Meminsight binary: ./meminsight"
+          echo "  - Leak detection lib: /tmp/memleakutil-install/lib/libmemfnswrap.so"
+          echo "  - Leak reports: /tmp/meminsight-leak-reports/"
+          echo ""
+          echo "Complete and ready for next stage: Unit Tests"

@@ -19,11 +19,38 @@
 
 set -e
 
-TEST_MODE=0
+ENABLE_CJSON="no"
+ENABLE_TEST="no"
+
+# Display help message
+show_help() {
+    echo "Usage: $0 [OPTIONS]"
+    echo ""
+    echo "Build script for memInsight."
+    echo ""
+    echo "OPTIONS:"
+    echo "  --help, -h           Show this help message"
+    echo "  --clean              Clean build artifacts"
+    echo "  --enable-cjson       Enable JSON output support"
+    echo "                       (cJSON loaded at runtime via dlopen; libcjson NOT linked)"
+    echo "  --test, --enable-test  Build with TESTME flag (enables -t/--test option)"
+    echo ""
+    echo "EXAMPLES:"
+    echo "  $0                          CSV-only build (default)"
+    echo "  $0 --enable-cjson           Build with JSON support (--fmt json)"
+    echo "  $0 --test                   Build with test fixtures support"
+    echo "  $0 --enable-cjson --test    Build with both features"
+    echo "  $0 --clean                  Clean all build artifacts"
+    echo ""
+    exit 0
+}
 
 # Parse command line arguments
 while [ "$#" -gt 0 ]; do
     case "$1" in
+        --help|-h)
+            show_help
+            ;;
         --clean)
             echo "Cleaning build artifacts..."
             make clean 2>/dev/null || true
@@ -41,14 +68,19 @@ while [ "$#" -gt 0 ]; do
             echo "Clean complete."
             exit 0
             ;;
-        --test)
-            TEST_MODE=1
-            echo "Building in TEST mode with TESTME flag..."
+        --enable-cjson)
+            ENABLE_CJSON="yes"
+            echo "Building with JSON support (--fmt json; cJSON via dlopen at runtime)"
+            shift
+            ;;
+        --test|--enable-test)
+            ENABLE_TEST="yes"
+            echo "Building with test mode (TESTME flag)..."
             shift
             ;;
         *)
             echo "Unknown option: $1"
-            echo "Usage: $0 [--clean] [--test]"
+            echo "Usage: $0 [--help] [--clean] [--enable-cjson] [--test]"
             exit 1
             ;;
     esac
@@ -89,14 +121,24 @@ echo "Running autoreconf..."
 autoreconf --install --verbose --force
 
 echo "Running configure..."
-./configure
-
-echo "Running make..."
-if [ "$TEST_MODE" -eq 1 ]; then
-    echo "Building with TESTME flag for test mode..."
-    make CFLAGS="${CFLAGS:+$CFLAGS }-DTESTME"
-else
-    make
+CONFIG_OPTIONS=""
+if [ "$ENABLE_CJSON" = "yes" ]; then
+    CONFIG_OPTIONS="$CONFIG_OPTIONS --enable-cjson"
+fi
+if [ "$ENABLE_TEST" = "yes" ]; then
+    CONFIG_OPTIONS="$CONFIG_OPTIONS --enable-test"
 fi
 
-echo "Build complete."
+if ! ./configure $CONFIG_OPTIONS; then
+    echo "ERROR: configure failed"
+    exit 1
+fi
+
+echo "Running make..."
+if ! make; then
+    echo "ERROR: make failed"
+    exit 1
+fi
+
+echo "Build complete successfully."
+exit 0
