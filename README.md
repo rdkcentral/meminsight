@@ -230,7 +230,7 @@ The tool supports automatic report upload signaling via systemd path-triggered u
 When `--upload-enable` is passed:
 - A marker file `/tmp/.meminsight_upload` is created immediately before the capture run begins
 - A state file `/tmp/.meminsight_configstore` is written with run parameters
-- An in-progress sentinel `{output_dir}/meminsight_inprogress` is created at run start and removed at completion
+- An in-progress sentinel `/tmp/.meminsight_inprogress` is created at run start and removed at completion
 - The systemd `meminsight-upload.path` unit watches for the marker and triggers the upload service
 
 ## 📁 State Files
@@ -251,7 +251,7 @@ MEMINSIGHT_VERSION=1.1.0
 REPORT_VERSION=1.1.0
 RUN_ITERATIONS=10
 RUN_INTERVAL=60
-RUN_ID=170145632712345
+RUN_ID=17014563271234507
 OUTPUT_FORMAT=csv
 UPLOAD_ENABLED=1
 UPLOAD_INTERVAL=3600
@@ -264,7 +264,7 @@ OUTPUT_DIR=/opt/meminsight
 - If any value changes or file is absent, entire file is atomically rewritten
 - Never deleted by meminsight (persists as historical record)
 
-### `{output_dir}/meminsight_inprogress` (Temporary, Per-Run)
+### `/tmp/.meminsight_inprogress` (Temporary, Per-Run)
 
 **Purpose**: Signal that a capture run is actively in progress.
 
@@ -272,6 +272,8 @@ OUTPUT_DIR=/opt/meminsight
 - Created immediately before the capture loop begins
 - Removed when the run completes (success or error path)
 - Allows external tools to detect incomplete or stalled runs
+
+This path is defined in code as `MEMINSIGHT_INPROGRESS_FILE`.
 
 ### `/tmp/.meminsight_upload` (Temporary, Upload Trigger)
 
@@ -468,10 +470,10 @@ make install
 
 1. **Argument parsing** — Parse CLI options including output directory and upload flags.
 2. **Startup sanitization** — `ensure_output_dir()` recursively wipes all contents of the output directory so each run starts clean. The directory itself is preserved or created if absent.
-3. **Setup initialization** — Cache MAC address, firmware name, kernel version, and generate a per-run `RUN_ID` hash (derived from epoch time + PID).
+3. **Setup initialization** — Cache MAC address, firmware name, kernel version, and generate a per-run `RUN_ID` by concatenating epoch seconds + PID + a randomly generated 2-digit suffix.
 4. **State file creation** — Write `/tmp/.meminsight_configstore` with resolved run parameters. This file persists across runs and is selectively updated.
 5. **Upload marker creation** — If `--upload-enable` was passed, create `/tmp/.meminsight_upload` to signal the systemd upload service.
-6. **In-progress sentinel** — Create `{output_dir}/meminsight_inprogress` to mark an active run.
+6. **In-progress sentinel** — Create `/tmp/.meminsight_inprogress` to mark an active run.
 7. **Iteration loop** — For each iteration:
    - Capture fresh timestamp and uptime.
    - Collect system meminfo, process smaps stats.
@@ -544,7 +546,7 @@ CPPFLAGS="-DDEVICE_IDENTIFIER=\"eth0\"" make clean && make
 # What happens:
 # 1. Before any capture, configstore is written with run parameters
 # 2. Upload marker /tmp/.meminsight_upload is created (triggers systemd service)
-# 3. In-progress sentinel created at /opt/meminsight-reports/meminsight_inprogress
+# 3. In-progress sentinel created at /tmp/.meminsight_inprogress
 # 4. Systemd service detects marker and begins monitoring for reports
 # 5. Every 15 minutes a JSON report is written with RUN_ID in the filename
 # 6. Upload service reads configstore, finds UPLOAD_INTERVAL=3600, and uploads accordingly
@@ -589,7 +591,7 @@ Every report file (CSV and JSON) begins with a metadata row containing the follo
 | `ITERATION` | Current iteration number (1-based) within this run |
 | `RUN_ITERATIONS` | Total iterations configured for this run |
 | `RUN_INTERVAL` | Interval in seconds between iterations |
-| `RUN_ID` | Per-run unique 16-char zero-padded hex identifier (time XOR PID) |
+| `RUN_ID` | Per-run identifier built as `<epoch_seconds><pid><2-digit-random-suffix>` |
 
 The `RUN_ID` groups all report files from the same invocation together, making it possible to correlate data across iterations without relying on timestamps alone.
 
@@ -665,10 +667,10 @@ chmod 644 /tmp/.meminsight_configstore
 **Issue**: In-progress sentinel not cleaned up
 ```bash
 # Check for stalled runs
-ls -la /opt/meminsight/meminsight_inprogress
+ls -la /tmp/.meminsight_inprogress
 
 # If meminsight crashed, manually remove:
-rm -f /opt/meminsight/meminsight_inprogress
+rm -f /tmp/.meminsight_inprogress
 
 # Note: New run will recreate the sentinel automatically
 ```
