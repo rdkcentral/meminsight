@@ -117,7 +117,7 @@ This is used to ensure compatibility with older versions of the report parser. *
 #define DEFAULT_ITERATIONS 1
 #define DEFAULT_INTERVAL 5
 #define DEFAULT_LOG_LEVEL "INFO"
-#define DEFAULT_MAC "00:00:00:00:00:00"
+#define DEFAULT_MAC "000000000000"
 
 #ifndef DEFAULT_OUT_DIR
 #define DEFAULT_OUT_DIR "/opt/meminsight"
