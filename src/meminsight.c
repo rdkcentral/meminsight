@@ -1407,10 +1407,10 @@ int fillProcessStatFields(unsigned pid, Process_Info *info, unsigned *flagsOut)
     }
     // Parse other fields: flags (8), minflt (10), majflt (12), utime (14), stime
     // (15)
-    unsigned flags = 0, minflt = 0, majflt = 0;
+    unsigned long flags = 0, minflt = 0, majflt = 0;
     unsigned long utime = 0, stime = 0;
     char *after = close ? close + 2 : line;
-    sscanf(after, "%*c %*d %*d %*d %*d %*d %u %u %*u %u %*u %lu %lu", &flags, &minflt, &majflt, &utime, &stime);
+    sscanf(after, "%*c %*d %*d %*d %*d %*d %lu %lu %*lu %lu %*lu %lu %lu", &flags, &minflt, &majflt, &utime, &stime);
     info->minFaults = minflt;
     info->majFaults = majflt;
     info->cputime = utime + stime;
