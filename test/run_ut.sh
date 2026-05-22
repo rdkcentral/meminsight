@@ -257,6 +257,55 @@ else
 fi
 echo ""
 
+# Device property fallback test: invalid interface in /etc/device.properties should yield DEFAULT_MAC
+DEVPROP_DESC="Test 14: device property invalid interface falls back to DEFAULT_MAC"
+DEVPROP_FILE="/etc/device.properties"
+DEVPROP_BAK="/tmp/meminsight_device_properties.bak"
+DEVPROP_LOG="/tmp/meminsight_deviceprop_test.log"
+DEVPROP_SMAP_FILE="test/1-non-zero-swap-entry/meminsight_testSmap.txt"
+DEVPROP_MEMINFO_FILE="test/1-non-zero-swap-entry/meminsight_testMeminfo.txt"
+
+echo "------------------------------------------"
+echo "$DEVPROP_DESC"
+echo "------------------------------------------"
+
+if [ -w "/etc" ] || [ -w "$DEVPROP_FILE" ] || [ ! -e "$DEVPROP_FILE" ]; then
+    if [ -f "$DEVPROP_FILE" ]; then
+        cp "$DEVPROP_FILE" "$DEVPROP_BAK"
+    else
+        rm -f "$DEVPROP_BAK"
+    fi
+
+    # Force lookup of a non-existent interface so MAC resolution must fallback.
+    printf 'ESTB_INTERFACE=meminsight_invalid_if\n' > "$DEVPROP_FILE"
+
+    rm -rf /tmp/meminsight/*.csv
+    if $MEM_BIN -o /tmp/meminsight -t "$DEVPROP_SMAP_FILE" "$DEVPROP_MEMINFO_FILE" >"$DEVPROP_LOG" 2>&1; then
+        CSV_FILE=$(ls /tmp/meminsight/*.csv 2>/dev/null | head -n 1)
+        if [ -n "$CSV_FILE" ] && grep -E '^[^,]+,000000000000,' "$CSV_FILE" >/dev/null 2>&1; then
+            echo "✓ $DEVPROP_DESC PASSED"
+        else
+            echo "✗ $DEVPROP_DESC FAILED (DEFAULT_MAC not found in metadata row)"
+            [ -n "$CSV_FILE" ] && cat "$CSV_FILE"
+            TEST_FAILED=$((TEST_FAILED + 1))
+        fi
+    else
+        echo "✗ $DEVPROP_DESC FAILED (command execution failed)"
+        cat "$DEVPROP_LOG"
+        TEST_FAILED=$((TEST_FAILED + 1))
+    fi
+
+    # Restore device properties state
+    if [ -f "$DEVPROP_BAK" ]; then
+        mv "$DEVPROP_BAK" "$DEVPROP_FILE"
+    else
+        rm -f "$DEVPROP_FILE"
+    fi
+else
+    echo "- $DEVPROP_DESC SKIPPED (/etc/device.properties not writable in this environment)"
+fi
+echo ""
+
 # Negative test 1: intentionally malformed meminfo fixture (duplicate needed field)
 NEG_DESC="Test 8 (Negative): meminfo data failure"
 NEG_SMAP_FILE="test/1-non-zero-swap-entry/meminsight_testSmap.txt"
