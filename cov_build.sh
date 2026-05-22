@@ -129,6 +129,14 @@ if [ "$ENABLE_TEST" = "yes" ]; then
     CONFIG_OPTIONS="$CONFIG_OPTIONS --enable-test"
 fi
 
+if [ -n "$CFLAGS" ]; then
+    CFLAGS="$CFLAGS -Werror"
+else
+    CFLAGS="-Werror"
+fi
+export CFLAGS
+echo "Using CFLAGS=$CFLAGS"
+
 if ! ./configure $CONFIG_OPTIONS; then
     echo "ERROR: configure failed"
     exit 1
