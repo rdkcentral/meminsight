@@ -1,0 +1,188 @@
+name: Component Auto-Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_version:
+        description: "Release version or hotfix tag (example: 1.0.0)"
+        required: true
+        type: string
+      hotfix:
+        description: "Run hotfix flow"
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  authorize-and-release:
+    name: Authorize Trigger User and Run Git Flow
+    runs-on: ubuntu-latest
+    env:
+      RELEASE_VERSION: ${{ github.event.inputs.release_version }}
+      HOTFIX: ${{ github.event.inputs.hotfix }}
+      REPO: ${{ github.repository }}
+      ACTOR: ${{ github.actor }}
+      GH_TOKEN: ${{ secrets.RELEASE_AUTOMATION_TOKEN }}
+
+    steps:
+      - name: Validate required secret
+        run: |
+          set -euo pipefail
+          if [ -z "${GH_TOKEN}" ]; then
+            echo "RELEASE_AUTOMATION_TOKEN is required."
+            exit 1
+          fi
+
+      - name: Validate version format
+        run: |
+          set -euo pipefail
+          if ! [[ "${RELEASE_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-.][A-Za-z0-9._]+)?$ ]]; then
+            echo "Invalid version/tag format: ${RELEASE_VERSION}"
+            echo "Use semantic style, for example: 1.2.3 or 1.2.3-rc1"
+            exit 1
+          fi
+
+      - name: Authorize actor (maintainer or owner only)
+        run: |
+          set -euo pipefail
+          permission=$(gh api "repos/${REPO}/collaborators/${ACTOR}/permission" -q '.permission' | tr '[:upper:]' '[:lower:]')
+          echo "Actor '${ACTOR}' repository permission: ${permission}"
+          case "${permission}" in
+            admin|maintain)
+              echo "Authorization successful."
+              ;;
+            *)
+              echo "Unauthorized: only maintainers/owners can run release automation."
+              exit 1
+              ;;
+          esac
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.RELEASE_AUTOMATION_TOKEN }}
+
+      - name: Install release tools
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y git-flow jq
+          npm install -g auto-changelog
+
+      - name: Configure git identity
+        run: |
+          set -euo pipefail
+          git config user.name "${ACTOR}"
+          git config user.email "${ACTOR}@users.noreply.github.com"
+
+      - name: Run git-flow release
+        if: ${{ github.event.inputs.hotfix == 'false' }}
+        run: |
+          set -euo pipefail
+          git fetch --prune origin
+          git checkout develop
+          git reset --hard origin/develop
+          git flow init -d
+          git flow release start "${RELEASE_VERSION}"
+
+          auto-changelog -v "${RELEASE_VERSION}"
+          git add CHANGELOG.md
+          if ! git diff --cached --quiet; then
+            git commit -m "${RELEASE_VERSION} release changelog updates"
+          else
+            echo "No CHANGELOG.md updates to commit."
+          fi
+
+          git flow release publish "${RELEASE_VERSION}"
+
+      - name: Create release pull requests
+        if: ${{ github.event.inputs.hotfix == 'false' }}
+        run: |
+          set -euo pipefail
+          release_branch="release/${RELEASE_VERSION}"
+
+          if ! gh pr view --head "${release_branch}" --base main >/dev/null 2>&1; then
+            gh pr create \
+              --base main \
+              --head "${release_branch}" \
+              --title "Release ${RELEASE_VERSION} to main" \
+              --body "Automated release PR for ${RELEASE_VERSION}."
+          else
+            echo "PR from ${release_branch} to main already exists."
+          fi
+
+          if ! gh pr view --head "${release_branch}" --base develop >/dev/null 2>&1; then
+            gh pr create \
+              --base develop \
+              --head "${release_branch}" \
+              --title "Release ${RELEASE_VERSION} sync to develop" \
+              --body "Automated release sync PR for ${RELEASE_VERSION}."
+          else
+            echo "PR from ${release_branch} to develop already exists."
+          fi
+
+      - name: Ensure release PR approvals exist
+        if: ${{ github.event.inputs.hotfix == 'false' }}
+        run: |
+          set -euo pipefail
+          release_branch="release/${RELEASE_VERSION}"
+
+          main_decision=$(gh pr view --head "${release_branch}" --base main --json reviewDecision -q '.reviewDecision')
+          develop_decision=$(gh pr view --head "${release_branch}" --base develop --json reviewDecision -q '.reviewDecision')
+
+          echo "Review status main: ${main_decision}"
+          echo "Review status develop: ${develop_decision}"
+
+          if [ "${main_decision}" != "APPROVED" ] || [ "${develop_decision}" != "APPROVED" ]; then
+            echo "Required approvals not complete. Re-run workflow after PR approvals."
+            exit 1
+          fi
+
+      - name: Finish release and push branches/tags
+        if: ${{ github.event.inputs.hotfix == 'false' }}
+        run: |
+          set -euo pipefail
+          git checkout "release/${RELEASE_VERSION}"
+          git flow release finish -m "Release ${RELEASE_VERSION}" "${RELEASE_VERSION}"
+          git push origin main
+          git push origin --tags
+          git push origin develop
+
+      - name: Run git-flow hotfix
+        if: ${{ github.event.inputs.hotfix == 'true' }}
+        run: |
+          set -euo pipefail
+          git fetch --prune origin
+          git checkout main
+          git reset --hard origin/main
+          git flow init -d
+          git flow hotfix start "${RELEASE_VERSION}"
+
+          auto-changelog -v "${RELEASE_VERSION}"
+          git add CHANGELOG.md
+          if ! git diff --cached --quiet; then
+            git commit -m "${RELEASE_VERSION} hotfix release"
+          else
+            echo "No CHANGELOG.md updates to commit."
+          fi
+
+          git flow hotfix finish -m "Hotfix ${RELEASE_VERSION}" "${RELEASE_VERSION}"
+          git push origin main
+          git push origin --tags
+          git push origin develop
+
+      - name: Workflow summary
+        if: always()
+        run: |
+          {
+            echo "## Component Auto-Release Summary"
+            echo "- Repository: ${REPO}"
+            echo "- Trigger actor: ${ACTOR}"
+            echo "- Version/tag: ${RELEASE_VERSION}"
+            echo "- Hotfix mode: ${HOTFIX}"
+          } >> "$GITHUB_STEP_SUMMARY"
