@@ -15,6 +15,9 @@
 - [Advanced Features](#-advanced-features)
 - [Build System](#-build-system)
 - [Architecture](#-architecture)
+- [OpenSpec Workflow](#-openspec-workflow)
+- [Role-Based Workflow](#-role-based-workflow)
+- [Agents and Skills](#-agents-and-skills)
 - [Report Metadata](#-report-metadata)
 - [Examples](#-examples)
 - [Troubleshooting](#-troubleshooting)
@@ -614,6 +617,60 @@ The repository includes a project-scoped customization layout under `.github/`:
 - Skills: `.github/skills/`
 
 Each directory includes a local README for short usage guidance.
+
+## 📐 OpenSpec Workflow
+
+OpenSpec is the primary behavior source-of-truth for this repository.
+
+- Documentation index: `docs/README.md`
+
+- Directory overview: `openspec/README.md`
+- Configuration reference: `openspec/config.yaml`
+- Capability specs usage: `openspec/specs/README.md`
+- Change delta workflow: `openspec/changes/README.md`
+- Detailed guide: `docs/OPENSPEC_USAGE_GUIDE.md`
+
+Use OpenSpec as follows:
+
+1. Read impacted capabilities in `openspec/specs/` before coding.
+2. For behavior changes, create/update a delta under `openspec/changes/` first.
+3. Keep implementation, tests, and capability docs in parity.
+
+## 👥 Role-Based Workflow
+
+Role-specific operating guidance is documented in:
+
+- `docs/ROLE_BASED_WORKFLOW_GUIDE.md`
+
+The guide defines workflows for:
+
+1. Reviewer
+2. Developer/Contributor
+3. Architect Owner
+4. Tester
+5. Technical Documentation Expert
+
+## 🧭 Agents and Skills
+
+Agent and skill usage is documented in:
+
+- `.github/AGENTS_AND_SKILLS_USAGE.md`
+
+Primary agent modes:
+
+- `.github/agents/meminsight-implementer.agent.md`
+- `.github/agents/meminsight-reviewer.agent.md`
+
+Primary skills:
+
+- `.github/skills/openspec-source-of-truth/`
+- `.github/skills/diagnose/`
+- `.github/skills/tdd/`
+- `.github/skills/to-issues-openspec/`
+- `.github/skills/zoom-out/`
+- `.github/skills/grill-with-docs-openspec/`
+- `.github/skills/proc-fragmentation-compat/`
+- `.github/skills/report-schema-compat/`
 
 ## 🧪 CI Workflows
 
