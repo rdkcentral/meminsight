@@ -345,11 +345,17 @@ make
 The tool automatically detects network interfaces for MAC address collection:
 
 ```bash
-# Default: uses "eth0"
+# Default behavior:
+# - Reads /etc/device.properties using DEVICE_INTERFACE_KEY (default: ESTB_INTERFACE)
+# - Uses the property value as the interface name for MAC lookup
+# - Falls back to DEFAULT_MAC (000000000000) if file/key/value is missing or MAC lookup fails
 ./meminsight
 
-# Custom interface via compile-time flag
-CPPFLAGS="-DDEVICE_IDENTIFIER=\"erouter0\"" make clean && make
+# Custom device-properties key via compile-time flag
+CPPFLAGS="-DDEVICE_INTERFACE_KEY=\"ETH_INTERFACE\"" make clean && make
+
+# Example /etc/device.properties entry when using default key
+echo "ESTB_INTERFACE=erouter0" >> /etc/device.properties
 ```
 
 ## 🔬 Advanced Features
@@ -533,7 +539,8 @@ EOF
 
 ```bash
 # Lightweight monitoring for embedded systems
-CPPFLAGS="-DDEVICE_IDENTIFIER=\"eth0\"" make clean && make
+CPPFLAGS="-DDEVICE_INTERFACE_KEY=\"ESTB_INTERFACE\"" make clean && make
+# Ensure /etc/device.properties contains: ESTB_INTERFACE=eth0
 ./meminsight --iterations 24 --interval 3600 --output /mnt/logs/
 ```
 

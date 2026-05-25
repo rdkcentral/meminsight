@@ -76,7 +76,7 @@
 This is used to ensure compatibility with older versions of the binary. */
 #define MEMINSIGHT_MAJOR_VERSION "1"
 #define MEMINSIGHT_MINOR_VERSION "1"
-#define MEMINSIGHT_PATCH_VERSION "0"
+#define MEMINSIGHT_PATCH_VERSION "1"
 
 /* REPORT_MAJOR_VERSION, REPORT_MINOR_VERSION, and REPORT_PATCH_VERSION are to track the report format, any changes in the report format should increment this version.
 This is used to ensure compatibility with older versions of the report parser. */
@@ -84,8 +84,8 @@ This is used to ensure compatibility with older versions of the report parser. *
 #define REPORT_MINOR_VERSION "1"
 #define REPORT_PATCH_VERSION "0"
 
-#ifndef DEVICE_IDENTIFIER
-#define DEVICE_IDENTIFIER "eth0"
+#ifndef DEVICE_INTERFACE_KEY
+#define DEVICE_INTERFACE_KEY "ESTB_INTERFACE"
 #endif
 
 /* Paths */
@@ -117,7 +117,7 @@ This is used to ensure compatibility with older versions of the report parser. *
 #define DEFAULT_ITERATIONS 1
 #define DEFAULT_INTERVAL 5
 #define DEFAULT_LOG_LEVEL "INFO"
-#define DEFAULT_MAC "00:00:00:00:00:00"
+#define DEFAULT_MAC "000000000000"
 
 #ifndef DEFAULT_OUT_DIR
 #define DEFAULT_OUT_DIR "/opt/meminsight"
@@ -134,14 +134,14 @@ This is used to ensure compatibility with older versions of the report parser. *
 
 #define CSV_META_HEADER "FIRMWARE_NAME,MAC_ADDRESS,TIMESTAMP,UPTIME,KERNEL_VERSION,REPORT_VERSION,ITERATION,RUN_ITERATIONS,RUN_INTERVAL,RUN_ID"
 
-#define CSV_PROCESSES_SECTION_HEADER "\n\nProcesses:\n"
+#define CSV_PROCESSES_SECTION_HEADER "\nProcesses:\n"
 #define CSV_PROCESS_HEADER "PID,EXE,RSS,PSS,SHARED_CLEAN,PRIVATE_CLEAN,PRIVATE_DIRTY,SWAP_PSS,MIN_FAULTS,MAJ_FAULTS,CPU_TIME"
 
-#define CSV_FRAGMENTATION_SECTION_HEADER "\n\nFragmentation"
+#define CSV_FRAGMENTATION_SECTION_HEADER "\nFragmentation"
 #define CSV_STAT_VALUE_HEADER "STAT,VALUE"
 
 #define CSV_BANDWIDTH_HEADER "TotalBandwidth,UsagePercentage"
-#define CSV_BANDWIDTH_SECTION_HEADER "\n\nBandwidth:\n"
+#define CSV_BANDWIDTH_SECTION_HEADER "\nBandwidth:\n"
 
 // -----------------------------
 // Data Structures
@@ -238,7 +238,7 @@ void printHelpAndUsage(char *argv[], bool moreInfo, int returnCode);
 void saveMeminfo(FILE *out);
 void saveFragmentationInfo(FILE *out);
 void collectBandwidthData(FILE *out);
-int getPropertyFromFile(const char *filename, const char *property, char *propertyValue, size_t propertyValueLen);
+int getDeviceProperty(const char *key, char *value, size_t valueLen);
 size_t getMacAddress(const char *iface, char *macAddress, size_t szBufSize);
 int getFirmwareImageName(char *fwName, size_t fwNameLen);
 const char *getSystemUptime(void);

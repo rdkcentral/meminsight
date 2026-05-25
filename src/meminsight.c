@@ -177,11 +177,14 @@ Process_Info processInfoTest;
 static int unitTestFailed = 0;
 #endif
 
-static const char deviceIdentifierName[] = DEVICE_IDENTIFIER;
+static const char deviceInterfaceKey[] = DEVICE_INTERFACE_KEY;
 static const char memInsightVersion[] = "" MEMINSIGHT_MAJOR_VERSION "." MEMINSIGHT_MINOR_VERSION "." MEMINSIGHT_PATCH_VERSION "";
 static const char reportVersion[] =  "" REPORT_MAJOR_VERSION "." REPORT_MINOR_VERSION "." REPORT_PATCH_VERSION "";
 
 int (*getProcessInfos_ptr)(FILE*);
+
+/* Forward declarations for local helpers used before their definitions. */
+static void trimTrailingWhitespace(char *str);
 
 // -----------------------------
 // Utility Functions
@@ -492,7 +495,10 @@ SetupInfo initializeSetupInfo(const char *outDir, Report_Format format)
     info.reportFileName = (format == REPORT_JSON) ? JSON_FILE_NAME : CSV_FILE_NAME;
 
     /* One-time device metadata. */
-    getMacAddress(deviceIdentifierName, info.mac, sizeof(info.mac));
+    char interfaceName[IFNAMSIZ] = {0};
+    if (getDeviceProperty(deviceInterfaceKey, interfaceName, sizeof(interfaceName)) && interfaceName[0] != '\0') {
+        (void)getMacAddress(interfaceName, info.mac, sizeof(info.mac));
+    }
     if (info.mac[0] == '\0') {
         strncpy(info.mac, DEFAULT_MAC, sizeof(info.mac) - 1);
         info.mac[sizeof(info.mac) - 1] = '\0';
@@ -507,7 +513,7 @@ SetupInfo initializeSetupInfo(const char *outDir, Report_Format format)
     unsigned long long pid = (unsigned long long)getpid();
     srand((unsigned int)(epoch ^ pid));
     int random2Digit = rand() % 100;
-    printf("Debug: epoch=%llu |  pid=%llu | random2Digit=%02d\n", epoch, pid, random2Digit);
+    PRINT_INFO("Debug: epoch=%llu |  pid=%llu | random2Digit=%02d\n", epoch, pid, random2Digit);
     snprintf(info.runHash, sizeof(info.runHash), "%llu%llu%02d", epoch, pid, random2Digit);
 
     return info;
@@ -560,67 +566,59 @@ static void selectFragmentationSource(void)
 }
 
 /**
- * Reads a property value from a file in "key=value" format.
- * Returns 1 if found, 0 otherwise.
+ * Reads a property value from DEVICE_PROP_FILE in "key=value" format.
+ * Returns 1 if found and non-empty, 0 otherwise.
  */
-#if 0
-int getPropertyFromFile(const char *filename, const char *property, char *propertyValue, size_t propertyValueLen)
+int getDeviceProperty(const char *key, char *value, size_t valueLen)
 {
-    FILE *fp = fopen(filename, "r");
-    if (!fp)
-    {
-        if (propertyValue && propertyValueLen > 0)
-            propertyValue[0] = '\0';
+    if (!key || !*key || !value || valueLen == 0)
         return 0;
-    }
+
+    value[0] = '\0';
+
+    FILE *fp = fopen(DEVICE_PROP_FILE, "r");
+    if (!fp)
+        return 0;
+
     char line[256];
-    int found = 0;
+
     while (fgets(line, sizeof(line), fp))
     {
         char *trim = line;
         while (*trim == ' ' || *trim == '\t')
-            trim++; // Skip comments and empty lines
+            trim++;
         if (*trim == '#' || *trim == '\0' || *trim == '\n')
-            continue; // Check for property match at start of line
-
-        // Split on '='
-        char *key = strtok(trim, "=");
-        char *val = strtok(NULL, "\n");
-        if (!key || !val)
             continue;
 
-        // Remove trailing spaces from key
-        char *kend = key + strlen(key) - 1;
-        while (kend > key && (*kend == ' ' || *kend == '\t'))
-            *kend-- = '\0';
+        char *eq = strchr(trim, '=');
+        if (!eq)
+            continue;
+        *eq = '\0';
 
-        // Remove leading spaces from val
-        while (*val == ' ' || *val == '\t')
-            val++;
+        char *propKey = trim;
+        char *propVal = eq + 1;
 
-        if (strncmp(key, property, strlen(property) + 1) == 0)
+        trimTrailingWhitespace(propKey);
+        while (*propVal == ' ' || *propVal == '\t')
+            propVal++;
+        trimTrailingWhitespace(propVal);
+
+        if (strcmp(propKey, key) == 0)
         {
-            // Find the length of the value, excluding any trailing newline or
-            // carriage return
-            size_t valueLen = strcspn(val, "\r\n");
-            // Limit the length to fit in the provided buffer
-            if (valueLen >= propertyValueLen)
-            {
-                valueLen = propertyValueLen - 1;
+            if (*propVal == '\0') {
+                fclose(fp);
+                return 0;
             }
-            // Copy the value into the output buffer
-            strncpy(propertyValue, val, valueLen);
-            propertyValue[valueLen] = '\0';
-            found = 1;
-            break;
+            strncpy(value, propVal, valueLen - 1);
+            value[valueLen - 1] = '\0';
+            fclose(fp);
+            return 1;
         }
     }
+
     fclose(fp);
-    if (!found && propertyValue && propertyValueLen > 0)
-        propertyValue[0] = '\0';
-    return found;
+    return 0;
 }
-#endif
 
 /**
  * Retrieves the system uptime from /proc/uptime.
@@ -1407,15 +1405,21 @@ int fillProcessStatFields(unsigned pid, Process_Info *info, unsigned *flagsOut)
     }
     // Parse other fields: flags (8), minflt (10), majflt (12), utime (14), stime
     // (15)
-    unsigned flags = 0, minflt = 0, majflt = 0;
+    unsigned long flags = 0, minflt = 0, cminflt = 0, majflt = 0, cmajflt = 0;
     unsigned long utime = 0, stime = 0;
     char *after = close ? close + 2 : line;
-    sscanf(after, "%*c %*d %*d %*d %*d %*d %u %u %*u %u %*u %lu %lu", &flags, &minflt, &majflt, &utime, &stime);
+    int parsed = sscanf(after,
+                        "%*c %*d %*d %*d %*d %*d %lu %lu %lu %lu %lu %lu %lu",
+                        &flags, &minflt, &cminflt, &majflt, &cmajflt, &utime, &stime);
+    (void)cminflt;
+    (void)cmajflt;
+    if (parsed != 7)
+        return 0;
     info->minFaults = minflt;
     info->majFaults = majflt;
     info->cputime = utime + stime;
     if (flagsOut)
-        *flagsOut = flags;
+        *flagsOut = (unsigned)flags;
     return 1;
 }
 
@@ -3059,11 +3063,6 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, bool cli_out
             }
             fprintf(output, "%s\n", CSV_META_HEADER);
             fprintf(output, "%s,%s,%s,%s,%s,%s,%d,%d,%d,%s\n\n", setup.fwName, setup.mac, ts, uptime, setup.kernelVersion, reportVersion, iter + 1, final_iterations, final_interval, setup.runHash);
-            saveMeminfo(output);
-            if (g_CollectFragData) {
-                saveFragmentationInfo(output);
-            }
-            fprintf(output, "\n%s\n", CSV_PROCESS_HEADER);
         }
 
         unsigned long rssTotal = 0, pssTotal = 0, shared_clean_total = 0, private_clean_total = 0, private_dirty_total = 0, swap_pss_total = 0;
@@ -3116,11 +3115,8 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, bool cli_out
                     PRINT_ERROR("Failed to get process info for PID %u\n", pid);
                 }
             }
-            if (g_reportFormat == REPORT_CSV) {
-                writeProcessInfo(actualCount, output);
-            }
 #ifdef ENABLE_CJSON
-            else if (g_reportFormat == REPORT_JSON) {
+            if (g_reportFormat == REPORT_JSON) {
                 cJSON_t *processesArray = g_cjson.CreateArray();
                 if (!processesArray) {
                     PRINT_ERROR("Failed to create JSON processes array\n");
@@ -3139,7 +3135,7 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, bool cli_out
                 g_cjson.AddItemToObject(g_rootObject, "processes", processesArray);
             }
 #endif
-            else {
+            if (g_reportFormat != REPORT_CSV) {
                 freeProcessInfoList();
             }
         }
@@ -3157,6 +3153,12 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, bool cli_out
         }
 
         if (g_reportFormat == REPORT_CSV) {
+            saveMeminfo(output);
+            if (g_CollectFragData) {
+                saveFragmentationInfo(output);
+            }
+            fprintf(output, "%s%s\n", CSV_PROCESSES_SECTION_HEADER, CSV_PROCESS_HEADER);
+            writeProcessInfo(actualCount, output);
             fprintf(output, "0,Total,%lu,%lu,%lu,%lu,%lu,%lu,0,0,0\n",
                     rssTotal, pssTotal, shared_clean_total, private_clean_total,
                     private_dirty_total, swap_pss_total);
