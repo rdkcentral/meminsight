@@ -1,0 +1,79 @@
+schema_version: 1
+project:
+  name: meminsight
+  repository_root: .
+  description: Lightweight Linux memory profiling and monitoring utility focused on embedded-safe, parser-tolerant collection.
+  lifecycle_state: baseline
+  source_of_truth:
+    specs_dir: openspec/specs
+    changes_dir: openspec/changes
+
+context:
+  product_domain: system observability
+  runtime_environment:
+    os: linux
+    data_sources:
+      - /proc
+      - /sys
+      - /etc/device.properties
+      - /version.txt
+  quality_principles:
+    - Preserve existing CSV compatibility unless explicitly changed.
+    - Keep parser behavior tolerant to kernel layout drift.
+    - Fail soft when optional sources are unavailable.
+    - Keep memory-safe behavior suitable for embedded targets.
+
+technical_stack:
+  languages:
+    - C
+    - Shell
+  build_system:
+    tools:
+      - autoconf
+      - automake
+      - make
+    primary_commands:
+      bootstrap: autoreconf -fiv
+      configure: ./configure
+      build: make
+  testing:
+    fixture_runner: sh test/run_ut.sh
+    build_wrapper: sh cov_build.sh --test
+    fixture_directories:
+      - test/
+  optional_features:
+    json_output:
+      compile_flag: --enable-cjson
+      runtime_behavior: Fallback to CSV when cJSON runtime library is unavailable.
+    test_mode:
+      compile_flag: --enable-test
+      runtime_flag: --test
+
+agent_configuration:
+  default_mode: implementer
+  operational_protocol:
+    primary_requirements_source: openspec/specs
+    change_protocol: openspec/changes
+    behavior:
+      - Read relevant spec files in openspec/specs before editing code.
+      - Keep implementation aligned to documented As-Is capabilities unless a change-spec is introduced.
+      - Update specs and code together only when behavior changes are intentional and approved.
+      - Do not treat README claims as normative when they conflict with openspec specs.
+  role_overrides:
+    meminsight-implementer:
+      scope:
+        - src/
+        - test/
+        - scripts/
+        - .github/workflows/
+      requirements:
+        - Maintain report compatibility for CSV and optional JSON modes.
+        - Add fixture coverage for parser and schema-impacting changes.
+
+governance:
+  baseline_rules:
+    openspec_changes_must_be_empty_at_baseline: true
+    allow_active_delta_specs: false
+  documentation_policy:
+    specs_must_reflect_verified_as_is_behavior_only: true
+    forbid_future_or_proposed_language: true
