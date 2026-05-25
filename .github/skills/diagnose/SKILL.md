@@ -26,7 +26,7 @@ Debug meminsight issues through a strict loop:
 
 ## Suggested workflow
 
-1. Create a fast pass/fail loop using sh test/run_ut.sh or targeted --test fixture runs.
+1. Create a fast pass/fail loop using `sh test/run_ut.sh` or targeted `--test` fixture runs.
 2. Capture 3 to 5 ranked hypotheses before modifying production code.
 3. Add narrow instrumentation for one hypothesis at a time.
 4. Implement minimal fix.

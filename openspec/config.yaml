@@ -72,7 +72,7 @@ agent_configuration:
 
 governance:
   baseline_rules:
-    openspec_changes_must_be_empty_at_baseline: true
+    openspec_changes_must_have_no_active_delta_specs_at_baseline: true
     allow_active_delta_specs: false
   documentation_policy:
     specs_must_reflect_verified_as_is_behavior_only: true

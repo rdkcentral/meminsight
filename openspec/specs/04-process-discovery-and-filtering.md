@@ -8,12 +8,12 @@ This specification defines system-wide process discovery and the enrichment/filt
 
 1. Process discovery iterates entries in /proc.
 2. Entries are considered process candidates when the name parses to a positive PID.
-3. Per-process base fields are read from /proc/<pid>/stat:
-- process name
-- minor faults
-- major faults
-- user+system CPU time
-- process flags
+3. Per-process base fields are read from `/proc/<pid>/stat`:
+	- process name
+	- minor faults
+	- major faults
+	- user+system CPU time
+	- process flags
 4. Kernel-thread inclusion is controlled by -a or --all.
 5. When kernel-thread inclusion is disabled, entries with PF_KTHREAD are skipped.
 6. On stat read failure for a process, that process is skipped and collection continues.

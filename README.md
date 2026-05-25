@@ -121,7 +121,7 @@ cat /tmp/meminsight-leak-reports/leak_report_*.txt
 
 A comprehensive code audit has been performed identifying memory safety, resource management, and optimization improvements:
 
-📄 **[docs/CODE_AUDIT_AND_HARDENING.md](docs/CODE_AUDIT_AND_HARDENING.md)** - Complete findings including:
+Audit outcomes currently tracked in repository documentation and planning notes include:
 - **3 CRITICAL resource leaks** (file handles, directory handles) with fixes
 - **7 High/Medium issues** (overflow risks, crash possibilities, missing checks)
 - **5 Low-severity optimizations** (code structure, performance)
@@ -608,9 +608,9 @@ The `RUN_ID` groups all report files from the same invocation together, making i
 ## 📦 Integration Samples
 
 - Sample systemd unit file: `deploy/systemd/meminsight.service` (main capture service)
-- Sample systemd upload path unit: `yocto/meminsight-upload.path` (watches for marker)
-- Sample systemd upload service: `yocto/meminsight-upload.service` (triggers upload script)
 - Sample Yocto recipe: `deploy/yocto/meminsight.bb` (includes all units)
+
+Note: upload path/service unit samples are platform-integration artifacts and are not versioned in this repository.
 
 
 

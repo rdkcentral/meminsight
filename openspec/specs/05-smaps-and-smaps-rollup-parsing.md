@@ -2,11 +2,11 @@
 
 ## Scope
 
-This specification defines how meminsight parses process memory map data from /proc/<pid>/smaps or /proc/<pid>/smaps_rollup.
+This specification defines how meminsight parses process memory map data from `/proc/<pid>/smaps` or `/proc/<pid>/smaps_rollup`.
 
 ## Parser source selection
 
-1. When forced by --smaps, source is smaps.
+1. When forced by `--smaps`, source is `smaps`.
 2. Otherwise, smaps_rollup is selected when available.
 3. If smaps_rollup is unavailable, source is smaps.
 

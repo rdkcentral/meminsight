@@ -6,8 +6,8 @@ This specification defines JSON report behavior when built with optional cJSON s
 
 ## Enablement
 
-1. JSON output is selected by --fmt json.
-2. --json-pretty is valid only with --fmt json.
+1. JSON output is selected by `--fmt json`.
+2. `--json-pretty` is valid only with `--fmt json`.
 3. If build does not include cJSON support, JSON request falls back to CSV.
 
 ## Runtime library loading
@@ -28,7 +28,7 @@ Current JSON report includes:
 
 ## Serialization behavior
 
-1. Pretty or compact serialization is selected by --json-pretty.
+1. Pretty or compact serialization is selected by `--json-pretty`.
 2. JSON root object is released after each write.
 
 ## Source anchors

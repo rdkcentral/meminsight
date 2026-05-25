@@ -19,6 +19,8 @@ OpenSpec is the requirements source-of-truth for meminsight behavior and change 
 3. Read detailed capability files under openspec/specs/.
 4. Use openspec/specs/13-implementation-parity-matrix.md to locate implementation anchors.
 
+Use exact capability IDs (for example C01, C07, C10) consistently in implementation notes, review comments, and issue breakdowns.
+
 ### 1. For bug fixes with no behavior change
 
 1. Identify impacted capability file(s) in openspec/specs.
@@ -55,7 +57,7 @@ OpenSpec is the requirements source-of-truth for meminsight behavior and change 
 1. Confirm behavior change is approved and merged.
 2. Update openspec/specs to reflect new As-Is behavior.
 3. Update parity matrix if implementation anchors changed.
-4. Remove or archive completed delta specs from openspec/changes.
+4. Remove completed delta specs from openspec/changes so baseline state is restored.
 5. Reconfirm openspec/changes baseline state.
 
 ## Configuration usage

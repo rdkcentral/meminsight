@@ -8,14 +8,14 @@ This specification defines CSV output structure and ordering.
 
 Current filename format:
 
-<mac>_<timestamp>_iter<iteration>_meminsight.csv
+`<mac>_<timestamp>_iter<iteration>_meminsight.csv`
 
 ## Current section order
 
 1. Metadata header row.
 2. Metadata value row.
 3. Meminfo section.
-4. Optional fragmentation section (only when --frag).
+4. Optional fragmentation section (only when `--frag`).
 5. Processes section header and per-process rows sorted by pss descending.
 6. Synthetic total row with pid 0 and name Total.
 7. Optional bandwidth section when available.

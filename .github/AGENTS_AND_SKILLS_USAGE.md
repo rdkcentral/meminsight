@@ -102,6 +102,7 @@ Use when changing CSV/JSON output fields or section layout.
 
 Use project-appropriate commands; common examples are:
 
-1. sh cov_build.sh --test
-2. sh test/run_ut.sh
-3. Targeted fixture test command when validating a specific parser edge case
+1. `sh cov_build.sh --clean`
+2. `sh cov_build.sh --enable-cjson --test`
+3. `sh test/run_ut.sh`
+4. Targeted fixture test command when validating a specific parser edge case

@@ -29,8 +29,8 @@ Short, behavior-oriented title.
 
 ### Capability linkage
 
-- Primary capability: Cxx
-- Related capabilities: Cyy, Czz
+- Primary capability: C01 (example)
+- Related capabilities: C07, C09 (example)
 - Spec files: relative paths under openspec/specs
 
 ### What to build

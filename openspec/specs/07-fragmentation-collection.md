@@ -2,7 +2,7 @@
 
 ## Scope
 
-This specification defines optional memory-fragmentation collection behavior enabled by --frag.
+This specification defines optional memory-fragmentation collection behavior enabled by `--frag`.
 
 ## Source precedence
 
@@ -12,7 +12,7 @@ This specification defines optional memory-fragmentation collection behavior ena
 
 ## Enablement
 
-1. Fragmentation collection is disabled unless --frag is passed.
+1. Fragmentation collection is disabled unless `--frag` is passed.
 2. Source selection is performed once at startup and reused for all iterations in the run.
 
 ## CSV behavior

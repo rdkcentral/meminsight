@@ -24,7 +24,7 @@ Build changes in thin, behavior-first slices:
 
 ## Slice template
 
-- Capability: Cxx
+- Capability: C01 (example)
 - Behavior under test: short statement
 - Failing proof: command or test path
 - Minimal implementation change: files touched
