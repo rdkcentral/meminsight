@@ -7,6 +7,7 @@ OpenSpec is the requirements source-of-truth for meminsight behavior and change 
 ## Directory structure
 
 - openspec/config.yaml: project context, stack metadata, and agent behavior rules.
+- openspec/architecture/: architecture baseline package for subsystem/runtime/dependency understanding.
 - openspec/specs/: As-Is capability specifications.
 - openspec/changes/: delta specs for intentional behavior changes.
 
@@ -14,10 +15,11 @@ OpenSpec is the requirements source-of-truth for meminsight behavior and change 
 
 ### Quick navigation steps
 
-1. Open openspec/specs/00-capability-index.md.
-2. Find the capability IDs related to your change.
-3. Read detailed capability files under openspec/specs/.
-4. Use openspec/specs/13-implementation-parity-matrix.md to locate implementation anchors.
+1. Open openspec/architecture/00-baseline-architecture.md for system-level context.
+2. Open openspec/specs/00-capability-index.md.
+3. Find the capability IDs related to your change.
+4. Read detailed capability files under openspec/specs/.
+5. Use openspec/specs/13-implementation-parity-matrix.md to locate implementation anchors.
 
 Use exact capability IDs (for example C01, C07, C10) consistently in implementation notes, review comments, and issue breakdowns.
 
@@ -31,11 +33,13 @@ Use exact capability IDs (for example C01, C07, C10) consistently in implementat
 
 ### 2. For intentional behavior changes
 
-1. Add a delta specification in openspec/changes first.
-2. Reference impacted capability IDs from openspec/specs.
-3. Implement and validate code changes.
-4. Update capability specs when the new behavior becomes baseline.
-5. Clear active delta specs only after approval and merge.
+1. Explore and clarify requirements (openspec-explore, grill-with-docs-openspec).
+2. Add a delta specification in openspec/changes first (or run openspec-propose).
+3. Reference impacted capability IDs from openspec/specs.
+4. Implement and validate code changes (openspec-apply-change, tdd/diagnose).
+5. Update capability specs when the new behavior becomes baseline.
+6. Clear active delta specs only after approval and merge.
+7. Archive completed change artifacts (openspec-archive-change).
 
 ### 2a. Delta spec authoring checklist
 
@@ -71,9 +75,10 @@ The openspec/config.yaml file defines:
 
 ## Capability workflow
 
-1. Start from openspec/specs/00-capability-index.md.
-2. Locate detailed capability file(s) for impacted behavior.
-3. Use openspec/specs/13-implementation-parity-matrix.md for implementation anchors.
+1. Start from openspec/architecture/00-baseline-architecture.md for runtime/dependency boundaries.
+2. Use openspec/specs/00-capability-index.md.
+3. Locate detailed capability file(s) for impacted behavior.
+4. Use openspec/specs/13-implementation-parity-matrix.md for implementation anchors.
 
 ## Baseline rules
 
@@ -86,3 +91,8 @@ The openspec/config.yaml file defines:
 1. Root README: quick links and orientation only.
 2. docs/: detailed operational guidance.
 3. openspec/: normative behavior and change artifacts.
+
+## Prompt and skill entry points
+
+1. Prompt shortcuts: /opsx:propose, /opsx:explore, /opsx:apply, /opsx:archive
+2. Detailed usage: .github/AGENTS_AND_SKILLS_USAGE.md

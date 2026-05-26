@@ -6,7 +6,8 @@ This guide explains how to use meminsight agent modes and skills in day-to-day w
 
 1. Always start from OpenSpec capabilities under openspec/specs.
 2. Use openspec/changes for intentional behavior changes.
-3. Keep implementation and capability documentation synchronized.
+3. Use openspec/architecture for system-level context before larger changes.
+4. Keep implementation and capability documentation synchronized.
 
 ## Agent modes
 
@@ -35,12 +36,13 @@ Use for standards/spec conformance reviews, compatibility risk checks, and test 
 
 ### B. Implement an intentional behavior change
 
-1. Run grill-with-docs-openspec to resolve scope and acceptance behavior.
-2. Create the related delta under openspec/changes before implementation.
+1. Run openspec-explore and grill-with-docs-openspec to resolve scope and acceptance behavior.
+2. Run openspec-propose (or create the related delta manually) under openspec/changes.
 3. Run to-issues-openspec to split work into capability-linked vertical slices.
-4. Implement slices with tdd and keep tests and specs synchronized.
+4. Implement slices with openspec-apply-change plus tdd and keep tests/specs synchronized.
 5. Run MemInsight Reviewer mode and address findings.
 6. Promote updated behavior into openspec/specs after approval.
+7. Run openspec-archive-change when the change is complete.
 
 ### C. Perform a review-only workflow
 
@@ -83,13 +85,38 @@ Use when touching buddyinfo/pagetypeinfo parsing and fallback handling.
 
 Use when changing CSV/JSON output fields or section layout.
 
+### openspec-explore
+
+Use when clarifying requirements, risks, and subsystem boundaries before implementation.
+
+### openspec-propose
+
+Use when converting a feature idea into a complete OpenSpec change artifact set.
+
+### openspec-apply-change
+
+Use when implementing tasks from an approved OpenSpec change.
+
+### openspec-archive-change
+
+Use when implementation and review are complete and the change is ready to archive.
+
 ## Suggested invocation order
 
 1. zoom-out (if area is unfamiliar)
 2. openspec-source-of-truth
-3. grill-with-docs-openspec (for larger changes)
-4. tdd or diagnose
-5. meminsight-reviewer agent mode
+3. openspec-explore and grill-with-docs-openspec (for larger changes)
+4. openspec-propose and to-issues-openspec (for new deltas)
+5. openspec-apply-change with tdd or diagnose
+6. meminsight-reviewer agent mode
+7. openspec-archive-change
+
+## Prompt shortcuts
+
+1. /opsx:propose
+2. /opsx:explore
+3. /opsx:apply
+4. /opsx:archive
 
 ## Evidence checklist before merge
 

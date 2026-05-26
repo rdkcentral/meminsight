@@ -4,7 +4,10 @@ project:
   repository_root: .
   description: Lightweight Linux memory profiling and monitoring utility focused on embedded-safe, parser-tolerant collection.
   lifecycle_state: baseline
+  analysis_context:
+    architecture_baseline_doc: openspec/architecture/00-baseline-architecture.md
   source_of_truth:
+    architecture_dir: openspec/architecture
     specs_dir: openspec/specs
     changes_dir: openspec/changes
 
@@ -22,6 +25,7 @@ context:
     - Keep parser behavior tolerant to kernel layout drift.
     - Fail soft when optional sources are unavailable.
     - Keep memory-safe behavior suitable for embedded targets.
+    - Separate verified facts from inferences, assumptions, and unknowns in architecture analysis artifacts.
 
 technical_stack:
   languages:
@@ -76,4 +80,5 @@ governance:
     allow_active_delta_specs: false
   documentation_policy:
     specs_must_reflect_verified_as_is_behavior_only: true
+    architecture_docs_should_capture_fact_inference_assumption_unknown_boundaries: true
     forbid_future_or_proposed_language: true

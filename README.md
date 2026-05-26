@@ -633,15 +633,24 @@ OpenSpec is the primary behavior source-of-truth for this repository.
 
 - Directory overview: `openspec/README.md`
 - Configuration reference: `openspec/config.yaml`
+- Architecture baseline: `openspec/architecture/00-baseline-architecture.md`
 - Capability specs usage: `openspec/specs/README.md`
 - Change delta workflow: `openspec/changes/README.md`
 - Detailed guide: `docs/OPENSPEC_USAGE_GUIDE.md`
 
 Use OpenSpec as follows:
 
-1. Read impacted capabilities in `openspec/specs/` before coding.
-2. For behavior changes, create/update a delta under `openspec/changes/` first.
-3. Keep implementation, tests, and capability docs in parity.
+1. Read system-level context in `openspec/architecture/` for larger changes.
+2. Read impacted capabilities in `openspec/specs/` before coding.
+3. For behavior changes, create/update a delta under `openspec/changes/` first.
+4. Keep implementation, tests, and capability docs in parity.
+
+OpenSpec lifecycle shortcuts:
+
+1. `/opsx:propose`
+2. `/opsx:explore`
+3. `/opsx:apply`
+4. `/opsx:archive`
 
 ## 👥 Role-Based Workflow
 
@@ -670,6 +679,10 @@ Primary agent modes:
 
 Primary skills:
 
+- `.github/skills/openspec-propose/`
+- `.github/skills/openspec-explore/`
+- `.github/skills/openspec-apply-change/`
+- `.github/skills/openspec-archive-change/`
 - `.github/skills/openspec-source-of-truth/`
 - `.github/skills/diagnose/`
 - `.github/skills/tdd/`
@@ -744,7 +757,7 @@ rm -f /tmp/.meminsight_inprogress
 We welcome contributions! Please follow these guidelines:
 
 1. **Fork the repository**
-2. **Create a feature branch**
+2. **Create a working branch**
 3. **Follow coding standards**
    - Use consistent indentation (4 spaces)
    - Add comprehensive comments

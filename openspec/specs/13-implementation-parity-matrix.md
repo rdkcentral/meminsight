@@ -6,7 +6,7 @@ This document records the current implementation-to-spec parity verification for
 
 ## Verification timestamp
 
-- Date: 2026-05-25
+- Date: 2026-05-26
 - Verification basis: source scan of src/meminsight.c and existing openspec/specs capability files.
 
 ## Parity matrix
@@ -31,3 +31,7 @@ This document records the current implementation-to-spec parity verification for
 - All capabilities in the current As-Is catalog have corresponding spec coverage.
 - No uncovered core capability was found during this verification pass.
 - The capability index and this matrix are consistent for baseline onboarding.
+
+## Related architecture baseline
+
+- System-level baseline package: openspec/architecture/00-baseline-architecture.md

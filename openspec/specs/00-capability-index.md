@@ -29,3 +29,7 @@ Interface and constants source: src/meminsight.h
 ## Verification artifact
 
 - Implementation parity matrix: 13-implementation-parity-matrix.md
+
+## Architecture context artifact
+
+- System-level baseline architecture: ../architecture/00-baseline-architecture.md

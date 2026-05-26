@@ -51,9 +51,10 @@ Responsibilities:
 
 Typical flow:
 
-1. Use grill-with-docs-openspec for requirement refinement.
-2. Use to-issues-openspec for capability-linked issue slicing.
-3. Track adoption and parity updates after merge.
+1. Use openspec-explore and grill-with-docs-openspec for requirement refinement.
+2. Use openspec-propose for proposal/design/tasks initialization.
+3. Use to-issues-openspec for capability-linked issue slicing.
+4. Track adoption, parity updates, and archive closure after merge.
 
 ## 4. Tester
 
@@ -83,6 +84,7 @@ Responsibilities:
 2. Keep contributor docs clear for both engineering and non-engineering readers.
 3. Maintain role guides, usage guides, and architectural rationale clarity.
 4. Remove ambiguous or speculative wording in baseline docs.
+5. Keep prompt/skill lifecycle docs aligned with active OpenSpec workflows.
 
 Typical flow:
 
@@ -97,3 +99,10 @@ Typical flow:
 3. Tester validates edge and end-to-end behavior.
 4. Reviewer enforces standards/spec conformance and approves.
 5. Documentation expert updates narrative and reference docs.
+
+## OpenSpec lifecycle tools
+
+1. Propose: openspec-propose or /opsx:propose
+2. Explore: openspec-explore or /opsx:explore
+3. Apply: openspec-apply-change or /opsx:apply
+4. Archive: openspec-archive-change or /opsx:archive
