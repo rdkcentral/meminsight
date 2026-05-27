@@ -74,6 +74,24 @@
 ./meminsight --frag --iterations 5 --interval 60
 ```
 
+## 🐳 Docker
+
+The repository includes a multi-stage `Dockerfile` with dedicated targets for build, test, and runtime.
+
+```bash
+# Build runtime image
+docker build -t meminsight:latest .
+
+# Run fixture tests inside the image build
+docker build --target test -t meminsight:test .
+
+# Run meminsight help
+docker run --rm meminsight:latest --help
+
+# Example finite run (writes reports inside container)
+docker run --rm meminsight:latest --iterations 1 --interval 0
+```
+
 ## 📊 Build & Testing Scripts
 
 MemInsight includes organized build and testing infrastructure in the `scripts/` directory:

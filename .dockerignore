@@ -1,0 +1,27 @@
+.git
+.github
+.gitignore
+
+openspec
+ref
+docs
+deploy
+scripts
+
+*.md
+*.log
+*.out
+
+autom4te.cache
+
+# Build/test artifacts
+*.o
+*.lo
+*.la
+*.al
+*.so
+*.a
+meminsight
+
+# Local outputs
+tmp
