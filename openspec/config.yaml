@@ -82,3 +82,5 @@ governance:
     specs_must_reflect_verified_as_is_behavior_only: true
     architecture_docs_should_capture_fact_inference_assumption_unknown_boundaries: true
     forbid_future_or_proposed_language: true
+    forbid_future_or_proposed_language_scope: openspec/specs
+    architecture_and_workflow_docs_non_normative_guidance_allowed: true

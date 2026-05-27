@@ -21,7 +21,7 @@ Create repeatable behavior for planning and implementing changes in a brownfield
 ### Unknowns / Manual validation required
 - Team-specific role boundaries and review gates may vary and should be explicitly agreed.
 
-## Recommended orchestration by phase
+## Example orchestration by phase (non-normative)
 
 1. Baseline understanding phase
    - zoom-out

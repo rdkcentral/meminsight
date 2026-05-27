@@ -9,12 +9,12 @@ This folder contains architecture-level baseline artifacts to complement capabil
   - Includes runtime/build/dependency/reliability/test/readiness analysis.
   - Uses explicit Facts, Inferences, Assumptions, and Unknowns sections.
 
-## How this folder should evolve
+## Current folder interpretation
 
-1. Keep openspec/specs focused on current verified behavior (capability-level truth).
-2. Keep openspec/architecture focused on system-level understanding and operational reasoning.
-3. Keep openspec/changes focused on intentional behavior deltas.
-4. When architecture assumptions are validated, promote them to Facts in the next baseline revision.
+1. openspec/specs is the capability-level verified behavior layer.
+2. openspec/architecture is the system-level understanding and operational reasoning layer.
+3. openspec/changes is the intentional behavior-delta layer.
+4. Baseline revisions update assumptions and unknowns when validation evidence is added.
 
 ## Change control guidance
 

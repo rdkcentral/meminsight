@@ -440,7 +440,7 @@ flowchart LR
 - Explicit unit-level function isolation test framework is not evident; testing appears fixture/integration leaning.
 - Service-level/systemd lifecycle tests are not clearly represented in current in-repo test assets.
 
-### Recommended architecture confidence checklist
+### Architecture confidence checklist used in this assessment
 
 1. Build matrix:
    - default build
@@ -477,42 +477,33 @@ flowchart LR
 ### Unknowns / Manual validation required
 - Governance enforcement model (manual vs automated checks in CI) for OpenSpec conformance is not fully defined in currently analyzed assets.
 
-### Recommended OpenSpec hierarchy extension
+### Current OpenSpec artifact grouping observed in repository
 
-- openspec/architecture/
-  - 00-baseline-architecture.md (this document)
-  - 01-subsystem-catalog.md
-  - 02-runtime-flows.md
-  - 03-dependency-and-risk-register.md
-  - 04-open-questions-and-validation-plan.md
+1. openspec/architecture contains architecture-level analysis artifacts.
+2. openspec/specs contains capability-level As-Is behavior artifacts.
+3. openspec/changes contains active behavior-delta artifacts.
 
-- openspec/specs/
-  - Keep capability-level As-Is behavior (already present).
+### Readiness dimensions referenced by this baseline
 
-- openspec/changes/
-  - Keep intentional deltas only.
+1. Procfs format-drift tolerance and parser stability.
+2. Report schema compatibility across CSV and optional JSON modes.
+3. Long-run reliability and resource overhead characteristics.
+4. State and upload integration behavior.
+5. Privilege and platform dependency assumptions.
 
-### Candidate requirement domains for follow-up specs
+### Baseline invariants recorded from current implementation understanding
 
-1. Robust procfs drift tolerance criteria across kernel families.
-2. Report schema compatibility invariants and migration policy.
-3. Long-run reliability and resource overhead acceptance thresholds.
-4. State/upload integration contract and failure semantics.
-5. Privilege and security posture for service deployment.
+1. CSV output remains available when optional JSON runtime loading fails.
+2. Optional collector source failures degrade behavior rather than hard-crashing the tool.
+3. Per-process scan failures are handled as partial-data conditions in normal collection flow.
+4. In-progress state-file lifecycle is explicitly managed by run entry/exit paths.
 
-### Candidate operational invariants
+### Acceptance dimensions used for conformance discussions
 
-1. CSV output remains available as baseline even when optional features fail.
-2. Collector should not crash on missing optional data sources.
-3. Process-scan partial failures should not abort entire iteration unless fatal path reached.
-4. State marker lifecycle should leave no stale in-progress marker on normal completion.
-
-### Candidate acceptance-criteria themes
-
-1. Compatibility: output schema and section structure preservation.
-2. Resilience: graceful degradation on unavailable sources/libraries.
-3. Determinism: fixture-driven parser behavior under TESTME.
-4. Operability: predictable lifecycle files and service execution behavior.
+1. Compatibility: output schema and section structure stability.
+2. Resilience: behavior under unavailable optional dependencies.
+3. Determinism: fixture-driven parser validation behavior under TESTME.
+4. Operability: lifecycle file behavior and service execution expectations.
 
 ---
 
