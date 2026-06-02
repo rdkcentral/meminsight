@@ -15,6 +15,9 @@
 - [Advanced Features](#-advanced-features)
 - [Build System](#-build-system)
 - [Architecture](#-architecture)
+- [OpenSpec Workflow](#-openspec-workflow)
+- [Role-Based Workflow](#-role-based-workflow)
+- [Agents and Skills](#-agents-and-skills)
 - [Report Metadata](#-report-metadata)
 - [Examples](#-examples)
 - [Troubleshooting](#-troubleshooting)
@@ -71,6 +74,24 @@
 ./meminsight --frag --iterations 5 --interval 60
 ```
 
+## 🐳 Docker
+
+The repository includes a multi-stage `Dockerfile` with dedicated targets for build, test, and runtime.
+
+```bash
+# Build runtime image
+docker build -t meminsight:latest .
+
+# Run fixture tests inside the image build
+docker build --target test -t meminsight:test .
+
+# Run meminsight help
+docker run --rm meminsight:latest --help
+
+# Example finite run (writes reports inside container)
+docker run --rm meminsight:latest --iterations 1 --interval 0
+```
+
 ## 📊 Build & Testing Scripts
 
 MemInsight includes organized build and testing infrastructure in the `scripts/` directory:
@@ -118,7 +139,7 @@ cat /tmp/meminsight-leak-reports/leak_report_*.txt
 
 A comprehensive code audit has been performed identifying memory safety, resource management, and optimization improvements:
 
-📄 **[docs/CODE_AUDIT_AND_HARDENING.md](docs/CODE_AUDIT_AND_HARDENING.md)** - Complete findings including:
+Audit outcomes currently tracked in repository documentation and planning notes include:
 - **3 CRITICAL resource leaks** (file handles, directory handles) with fixes
 - **7 High/Medium issues** (overflow risks, crash possibilities, missing checks)
 - **5 Low-severity optimizations** (code structure, performance)
@@ -605,9 +626,9 @@ The `RUN_ID` groups all report files from the same invocation together, making i
 ## 📦 Integration Samples
 
 - Sample systemd unit file: `deploy/systemd/meminsight.service` (main capture service)
-- Sample systemd upload path unit: `yocto/meminsight-upload.path` (watches for marker)
-- Sample systemd upload service: `yocto/meminsight-upload.service` (triggers upload script)
 - Sample Yocto recipe: `deploy/yocto/meminsight.bb` (includes all units)
+
+Note: upload path/service unit samples are platform-integration artifacts and are not versioned in this repository.
 
 
 
@@ -621,6 +642,73 @@ The repository includes a project-scoped customization layout under `.github/`:
 - Skills: `.github/skills/`
 
 Each directory includes a local README for short usage guidance.
+
+## 📐 OpenSpec Workflow
+
+OpenSpec is the primary behavior source-of-truth for this repository.
+
+- Documentation index: `docs/README.md`
+
+- Directory overview: `openspec/README.md`
+- Configuration reference: `openspec/config.yaml`
+- Architecture baseline: `openspec/architecture/00-baseline-architecture.md`
+- Capability specs usage: `openspec/specs/README.md`
+- Change delta workflow: `openspec/changes/README.md`
+- Detailed guide: `docs/OPENSPEC_USAGE_GUIDE.md`
+
+Use OpenSpec as follows:
+
+1. Read system-level context in `openspec/architecture/` for larger changes.
+2. Read impacted capabilities in `openspec/specs/` before coding.
+3. For behavior changes, create/update a delta under `openspec/changes/` first.
+4. Keep implementation, tests, and capability docs in parity.
+
+OpenSpec lifecycle shortcuts:
+
+1. `/opsx:propose`
+2. `/opsx:explore`
+3. `/opsx:apply`
+4. `/opsx:archive`
+
+## 👥 Role-Based Workflow
+
+Role-specific operating guidance is documented in:
+
+- `docs/ROLE_BASED_WORKFLOW_GUIDE.md`
+
+The guide defines workflows for:
+
+1. Reviewer
+2. Developer/Contributor
+3. Architect Owner
+4. Tester
+5. Technical Documentation Expert
+
+## 🧭 Agents and Skills
+
+Agent and skill usage is documented in:
+
+- `.github/AGENTS_AND_SKILLS_USAGE.md`
+
+Primary agent modes:
+
+- `.github/agents/meminsight-implementer.agent.md`
+- `.github/agents/meminsight-reviewer.agent.md`
+
+Primary skills:
+
+- `.github/skills/openspec-propose/`
+- `.github/skills/openspec-explore/`
+- `.github/skills/openspec-apply-change/`
+- `.github/skills/openspec-archive-change/`
+- `.github/skills/openspec-source-of-truth/`
+- `.github/skills/diagnose/`
+- `.github/skills/tdd/`
+- `.github/skills/to-issues-openspec/`
+- `.github/skills/zoom-out/`
+- `.github/skills/grill-with-docs-openspec/`
+- `.github/skills/proc-fragmentation-compat/`
+- `.github/skills/report-schema-compat/`
 
 ## 🧪 CI Workflows
 
@@ -687,7 +775,7 @@ rm -f /tmp/.meminsight_inprogress
 We welcome contributions! Please follow these guidelines:
 
 1. **Fork the repository**
-2. **Create a feature branch**
+2. **Create a working branch**
 3. **Follow coding standards**
    - Use consistent indentation (4 spaces)
    - Add comprehensive comments

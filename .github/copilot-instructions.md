@@ -1,5 +1,12 @@
 # MemInsight Workspace Instructions
 
+## OpenSpec-first protocol
+
+- Treat openspec/specs as the primary source of truth for implementation behavior.
+- Treat openspec/changes as the only location for active delta-spec work.
+- If README or other docs differ from openspec/specs, follow openspec/specs and surface the mismatch.
+- For behavior changes, update or add change-spec content before modifying implementation.
+
 ## Engineering ideology
 
 - Prefer correctness and parser tolerance over aggressive assumptions.

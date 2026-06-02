@@ -22,6 +22,9 @@ Use this agent for implementation tasks in meminsight:
 - Prefer minimal, reviewable diffs.
 - Add/update tests when parser/report logic changes.
 - Handle optional dependencies and missing runtime files gracefully.
+- Read relevant requirements in openspec/specs before implementation changes.
+- Treat openspec/specs as authoritative when documentation conflicts exist.
+- For intentional behavior changes, require corresponding openspec/changes entries.
 
 ## Delivery checklist
 
