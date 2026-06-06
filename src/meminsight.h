@@ -99,6 +99,9 @@ This is used to ensure compatibility with older versions of the report parser. *
 #ifndef BW_DDR_FILE
 #define BW_DDR_FILE "/sys/class/aml_ddr/bandwidth"
 #endif
+#ifndef PROC_STAT_FILE
+#define PROC_STAT_FILE PROC_DIR "/stat"
+#endif
 #ifndef BUDDYINFO_FILE
 #define BUDDYINFO_FILE PROC_DIR "/buddyinfo"
 #endif
@@ -142,6 +145,8 @@ This is used to ensure compatibility with older versions of the report parser. *
 
 #define CSV_FRAGMENTATION_SECTION_HEADER "\nFragmentation"
 #define CSV_STAT_VALUE_HEADER "STAT,VALUE"
+
+#define CSV_CPUSTAT_HEADER "user,nice,system,idle,iowait,irq,softirq,steal"
 
 #define CSV_BANDWIDTH_HEADER "TotalBandwidth,UsagePercentage"
 #define CSV_BANDWIDTH_SECTION_HEADER "\nBandwidth:\n"
@@ -245,6 +250,7 @@ int getProcessInfos(unsigned pid);
 void printHelp(char *argv[]);
 void printHelpAndUsage(char *argv[], bool moreInfo, int returnCode);
 void saveMeminfo(FILE *out);
+void saveCpuStat(FILE *out);
 void saveFragmentationInfo(FILE *out);
 void collectBandwidthData(FILE *out);
 int getDeviceProperty(const char *key, char *value, size_t valueLen);
@@ -269,6 +275,7 @@ typedef struct cJSON cJSON_t;
  * No cjson/cJSON.h include is needed at build time.
  */
 void saveMeminfo_JSON(cJSON_t *root);
+void saveCpuStat_JSON(cJSON_t *root);
 void saveFragmentationInfo_JSON(cJSON_t *root);
 void writeProcessInfo_JSON(cJSON_t *processesArray);
 int writeJSONToFile(const char *filepath, const SetupInfo *setup);
