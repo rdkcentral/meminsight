@@ -4078,7 +4078,7 @@ void saveMeminfo(FILE *out)
 }
 
 /**
- * Reads the aggregate cpu line from /proc/stat and writes the 8 CPU fields
+ * Reads the aggregate cpu line from PROC_STAT_FILE and writes the 8 CPU fields
  * (user, nice, system, idle, iowait, irq, softirq, steal) as a CSV section.
  */
 void saveCpuStat(FILE *out)
@@ -4114,11 +4114,11 @@ void saveCpuStat(FILE *out)
     }
 
     if (parsed < CPUSTAT_FIELD_COUNT) {
-        PRINT_ERROR("Warning: /proc/stat cpu line has only %d fields (expected %d), zero-filling rest\n",
-                    parsed, CPUSTAT_FIELD_COUNT);
+        PRINT_ERROR("Warning: %s cpu line has only %d fields (expected %d), zero-filling rest\n",
+                    PROC_STAT_FILE, parsed, CPUSTAT_FIELD_COUNT);
     }
 
-    fprintf(out, "%s:\n%s\n", PROC_STAT_FILE, CSV_CPUSTAT_HEADER);
+    fprintf(out, "\n%s:\n%s\n", PROC_STAT_FILE, CSV_CPUSTAT_HEADER);
     fprintf(out, "%lu,%lu,%lu,%lu,%lu,%lu,%lu,%lu\n",
             fields[0], fields[1], fields[2], fields[3],
             fields[4], fields[5], fields[6], fields[7]);
@@ -4186,7 +4186,7 @@ void saveMeminfo_JSON(cJSON_t *root)
 }
 
 /**
- * @brief Add system-wide CPU stats from /proc/stat to a JSON root object.
+ * @brief Add system-wide CPU stats from PROC_STAT_FILE to a JSON root object.
  *
  * Reads the aggregate cpu line and adds a "cpustat" object with 8 numeric
  * fields: user, nice, system, idle, iowait, irq, softirq, steal.
@@ -4198,7 +4198,11 @@ void saveCpuStat_JSON(cJSON_t *root)
     };
     const int fieldCount = 8;
 
+#ifdef TESTME
+    FILE *fp = fopen((isTestMode && testProcStat[0]) ? testProcStat : PROC_STAT_FILE, "r");
+#else
     FILE *fp = fopen(PROC_STAT_FILE, "r");
+#endif
     if (!fp) {
         PRINT_ERROR("Error opening %s: %s\n", PROC_STAT_FILE, strerror(errno));
         return;

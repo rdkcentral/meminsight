@@ -283,6 +283,7 @@ if $MEM_BIN --help 2>&1 | grep -F -- "--fmt" >/dev/null 2>&1; then
         JSON_FILE=$(ls /tmp/meminsight/*.json 2>/dev/null | head -n 1)
         if [ -n "$JSON_FILE" ] && [ -f "$JSON_FILE" ] && \
            grep -F '"meminfo"' "$JSON_FILE" >/dev/null 2>&1 && \
+           grep -F '"cpustat"' "$JSON_FILE" >/dev/null 2>&1 && \
            grep -F '"processes"' "$JSON_FILE" >/dev/null 2>&1 && \
            grep -F '"fragmentation"' "$JSON_FILE" >/dev/null 2>&1; then
             echo "✓ $JSON_DESC PASSED"
@@ -431,17 +432,27 @@ else
 fi
 echo ""
 
+<<<<<<< HEAD
 # CPU stat section test using deterministic /proc/stat fixture
 CPU_DESC="Test 15: CPU stat raw section"
+=======
+# CPU stats /proc/stat parsing test
+CPU_DESC="Test 15: CPU stats /proc/stat section in CSV output"
+>>>>>>> 2915a38 (RDK-61443: Workflow enhancements)
 CPU_SMAP_FILE="test/1-non-zero-swap-entry/meminsight_testSmap.txt"
 CPU_MEMINFO_FILE="test/1-non-zero-swap-entry/meminsight_testMeminfo.txt"
 CPU_BUDDY_FILE="test/6-buddyinfo-sample/meminsight_testBuddyinfo.txt"
 CPU_PGT_FILE="test/7-pagetypeinfo-sample/meminsight_testPagetypeinfo.txt"
+<<<<<<< HEAD
 CPU_STAT_FILE="test/10-cpu-stat-sample/meminsight_testStat.txt"
+=======
+CPU_PROCSTAT_FILE="test/10-proc-stat-cpu/meminsight_testProcStat.txt"
+>>>>>>> 2915a38 (RDK-61443: Workflow enhancements)
 
 echo "------------------------------------------"
 echo "$CPU_DESC"
 echo "------------------------------------------"
+<<<<<<< HEAD
 echo "Command: $MEM_BIN -o /tmp/meminsight -t $CPU_SMAP_FILE $CPU_MEMINFO_FILE $CPU_BUDDY_FILE $CPU_PGT_FILE $CPU_STAT_FILE"
 
 rm -rf /tmp/meminsight/*.csv
@@ -456,6 +467,21 @@ if $MEM_BIN -o /tmp/meminsight -t "$CPU_SMAP_FILE" "$CPU_MEMINFO_FILE" "$CPU_BUD
         record_tc_result "15" "CPU stat raw section" "SUCCESS"
     else
         echo "✗ $CPU_DESC FAILED (CPU section/header/value missing)"
+=======
+echo "Command: $MEM_BIN -o /tmp/meminsight -t $CPU_SMAP_FILE $CPU_MEMINFO_FILE $CPU_BUDDY_FILE $CPU_PGT_FILE $CPU_PROCSTAT_FILE"
+
+rm -rf /tmp/meminsight/*.csv
+
+if $MEM_BIN -o /tmp/meminsight -t "$CPU_SMAP_FILE" "$CPU_MEMINFO_FILE" "$CPU_BUDDY_FILE" "$CPU_PGT_FILE" "$CPU_PROCSTAT_FILE"; then
+    CSV_FILE=$(ls /tmp/meminsight/*.csv 2>/dev/null | head -n 1)
+    if [ -n "$CSV_FILE" ] && \
+       grep -F "/proc/stat:" "$CSV_FILE" >/dev/null 2>&1 && \
+       grep -F "user,nice,system,idle,iowait,irq,softirq,steal" "$CSV_FILE" >/dev/null 2>&1 && \
+       grep -F "74190,1000,38410,5765412,18163,0,987,0" "$CSV_FILE" >/dev/null 2>&1; then
+        echo "✓ $CPU_DESC PASSED"
+    else
+        echo "✗ $CPU_DESC FAILED (/proc/stat section missing or values incorrect)"
+>>>>>>> 2915a38 (RDK-61443: Workflow enhancements)
         [ -n "$CSV_FILE" ] && cat "$CSV_FILE"
         TEST_FAILED=$((TEST_FAILED + 1))
         record_tc_result "15" "CPU stat raw section" "FAILURE"
@@ -465,6 +491,7 @@ else
     TEST_FAILED=$((TEST_FAILED + 1))
     record_tc_result "15" "CPU stat raw section" "FAILURE"
 fi
+<<<<<<< HEAD
 
 # Also validate JSON cpu_stat emission when JSON support is available
 if $MEM_BIN --help 2>&1 | grep -F -- "--fmt" >/dev/null 2>&1; then
@@ -592,6 +619,8 @@ else
     TEST_FAILED=$((TEST_FAILED + 1))
     record_tc_result "18" "CPU stat legacy field-count compatibility" "FAILURE"
 fi
+=======
+>>>>>>> 2915a38 (RDK-61443: Workflow enhancements)
 echo ""
 
 # Backup policy tests
