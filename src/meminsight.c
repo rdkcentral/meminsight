@@ -736,7 +736,10 @@ static void writeConfigStore(const SetupInfo *setup, int iterations, int interva
     snprintf(v_iter,   sizeof(v_iter),   "%d", iterations);
     snprintf(v_intv,   sizeof(v_intv),   "%d", interval);
     snprintf(v_runid,  sizeof(v_runid),  "%s", setup->runHash);
-    snprintf(v_fmt,    sizeof(v_fmt),    "%s", (g_reportFormat == REPORT_JSON) ? "json" : "csv");
+    snprintf(v_fmt,    sizeof(v_fmt),    "%s", (g_reportFormat == REPORT_T2) ? "t2"
+                                             : (g_reportFormat == REPORT_JSON) ? "json" : "csv");
+    snprintf(v_upload, sizeof(v_upload), "%d", upload_enabled ? 1 : 0);
+    snprintf(v_uintv,  sizeof(v_uintv),  "%d", upload_interval);
     snprintf(v_outdir, sizeof(v_outdir), "%s", setup->outputDir);
     snprintf(v_backup_enabled, sizeof(v_backup_enabled), "%d", 1);
     snprintf(v_backup_count, sizeof(v_backup_count), "%d", g_backupCount);
@@ -843,8 +846,9 @@ SetupInfo initializeSetupInfo(const char *outDir, Report_Format format)
     /* One-time directory and file setup. */
     info.outputDir = (outDir && *outDir) ? outDir : DEFAULT_OUT_DIR;
     info.dirCreated = ensure_output_dir(info.outputDir, info.runHash);
-    info.reportFileName = (format == REPORT_JSON) ? JSON_FILE_NAME : CSV_FILE_NAME;
-
+    info.reportFileName = (format == REPORT_T2)   ? T2_FILE_NAME
+                        : (format == REPORT_JSON) ? JSON_FILE_NAME
+                        :                           CSV_FILE_NAME;
     /* One-time device metadata. */
     char interfaceName[IFNAMSIZ] = {0};
     if (getDeviceProperty(deviceInterfaceKey, interfaceName, sizeof(interfaceName)) && interfaceName[0] != '\0') {
@@ -3350,9 +3354,10 @@ void printHelpAndUsage(char *argv[], bool moreInfo, int returnCode)
     printf("                                    Run in test mode using supplied sample files\n\n");
 #endif
 #ifdef ENABLE_CJSON
-    printf("      --fmt <format>                Specify report format: csv (default) or json\n");
-    printf("                                    (cJSON loaded at runtime via dlopen)\n");
-    printf("      --json-pretty                 Pretty-print JSON output (only with --fmt json)\n\n");
+    printf("      --fmt <format>                    Specify report format: csv (default), json, or t2\n");
+    printf("                                        t2: T2-compatible {\"Report\":[...]} with keyed process objects\n");
+    printf("                                        (cJSON loaded at runtime via dlopen)\n");
+    printf("      --json-pretty                     Pretty-print JSON output (only with --fmt json or t2)\n\n");
 #endif
 
     if (moreInfo)
@@ -3362,8 +3367,9 @@ void printHelpAndUsage(char *argv[], bool moreInfo, int returnCode)
 
         printf("Default behavior (no flags):\n");
         printf("  - Runs indefinite number of iterations, with an interval of 15 minutes, monitors all processes with log level INFO\n");
-        printf("  - Output: %s/<MAC>_<timestamp>_iter<iteration>_%s (CSV format)\n", DEFAULT_OUT_DIR, CSV_FILE_NAME);
-        printf("  - Output: %s/<MAC>_<timestamp>_iter<iteration>_%s (JSON format, with --fmt json)\n\n", DEFAULT_OUT_DIR, JSON_FILE_NAME);
+        printf("  - Output: /tmp/<MAC>_<timestamp>_iter<iteration>_%s (CSV format)\n", CSV_FILE_NAME);
+        printf("  - Output: /tmp/<MAC>_<timestamp>_iter<iteration>_%s (JSON format, with --fmt json)\n", JSON_FILE_NAME);
+        printf("  - Output: /tmp/<MAC>_<timestamp>_iter<iteration>_%s (T2 format, with --fmt t2)\n\n", T2_FILE_NAME);
 
         printf("Example:\n");
         printf("  %s\n", argv[0]);
@@ -3385,6 +3391,7 @@ void printHelpAndUsage(char *argv[], bool moreInfo, int returnCode)
         printf("  - If only one is set, the other uses its default or config value.\n");
         printf("  - Output file name format (CSV): <MAC>_<TIMESTAMP>_iter<iteration>_%s\n", CSV_FILE_NAME);
         printf("  - Output file name format (JSON): <MAC>_<TIMESTAMP>_iter<iteration>_%s (use with --fmt json)\n", JSON_FILE_NAME);
+        printf("  - Output file name format (T2): <MAC>_<TIMESTAMP>_iter<iteration>_%s (use with --fmt t2)\n", T2_FILE_NAME);
     }
     exit(returnCode);
 }
@@ -3592,6 +3599,13 @@ int collectSystemMemoryStats(bool enableKThreads, const char *outDir, int iterat
             g_cjson.AddItemToObject(g_rootObject, "processes", processesArray);
             if (writeJSONToFile(outputfile, &setup) != 0) {
                 PRINT_ERROR("Failed to write JSON output file: %s\n", outputfile);
+                removeFileIfPresent(MEMINSIGHT_INPROGRESS_FILE);
+                return -1;
+            }
+        }
+        else if (g_reportFormat == REPORT_T2) {
+            if (writeT2Report(outputfile, &setup, iter + 1, iterations, interval) != 0) {
+                PRINT_ERROR("Failed to write T2 JSON output file: %s\n", outputfile);
                 removeFileIfPresent(MEMINSIGHT_INPROGRESS_FILE);
                 return -1;
             }
@@ -3851,7 +3865,7 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, bool cli_out
                 g_cjson.AddItemToObject(g_rootObject, "processes", processesArray);
             }
 #endif
-            if (g_reportFormat != REPORT_CSV) {
+            if (g_reportFormat == REPORT_JSON) {
                 freeProcessInfoList();
             }
         }
@@ -3894,6 +3908,16 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, bool cli_out
                 collectBandwidthData_JSON(g_rootObject);
             if (writeJSONToFile(outputFilePath, &setup) != 0) {
                 PRINT_ERROR("Failed to write JSON output file: %s\n", outputFilePath);
+                for (unsigned j = 0; j < config.whiteListCount; j++)
+                    if (config.whitelist[j]) free(config.whitelist[j]);
+                if (config.whitelist) free(config.whitelist);
+                removeFileIfPresent(MEMINSIGHT_INPROGRESS_FILE);
+                return -1;
+            }
+        }
+        else if (g_reportFormat == REPORT_T2) {
+            if (writeT2Report(outputFilePath, &setup, iter + 1, final_iterations, final_interval) != 0) {
+                PRINT_ERROR("Failed to write T2 JSON output file: %s\n", outputFilePath);
                 for (unsigned j = 0; j < config.whiteListCount; j++)
                     if (config.whitelist[j]) free(config.whitelist[j]);
                 if (config.whitelist) free(config.whitelist);
@@ -4349,6 +4373,242 @@ int writeJSONToFile(const char *filepath, const SetupInfo *setup)
     return rc;
 }
 
+/**
+ * @brief Build and write a T2-compatible JSON report to file.
+ *
+ * Produces the format: {"Report":[{key:value},...]} where processes are
+ * represented as keyed objects (e.g., {"OneWifi":{"RSS":1234,"PSS":567,...}})
+ * instead of an anonymous array. This format is directly ingestible by the
+ * T2 Elastic telemetry endpoint.
+ *
+ * Unlike writeJSONToFile(), this function builds the T2 structure from scratch
+ * using the per-iteration state (headProcessInfo linked list, meminfo, cpustat).
+ * The caller must NOT have already freed the process list.
+ *
+ * @param[in] filepath    Output file path.
+ * @param[in] setup       SetupInfo with device metadata.
+ * @param[in] iteration   Current iteration number (1-based).
+ * @param[in] iterations  Total iterations configured.
+ * @param[in] interval    Interval in seconds between iterations.
+ * @return 0 on success, -1 on error.
+ */
+int writeT2Report(const char *filepath, const SetupInfo *setup, int iteration, int iterations, int interval)
+{
+    /* Build the root: {"Report": [...]} */
+    cJSON_t *root = g_cjson.CreateObject();
+    if (!root) {
+        PRINT_ERROR("T2: Failed to create root object\n");
+        return -1;
+    }
+
+    cJSON_t *reportArray = g_cjson.CreateArray();
+    if (!reportArray) {
+        PRINT_ERROR("T2: Failed to create Report array\n");
+        g_cjson.Delete(root);
+        return -1;
+    }
+
+    /* Helper macro: add a single {key: string_value} object to reportArray */
+#define T2_ADD_STRING(key, val) do { \
+    cJSON_t *_obj = g_cjson.CreateObject(); \
+    if (_obj) { \
+        g_cjson.AddStringToObject(_obj, key, val); \
+        g_cjson.AddItemToArray(reportArray, _obj); \
+    } \
+} while(0)
+
+    /* Helper macro: add a single {key: number_value} object to reportArray */
+#define T2_ADD_NUMBER(key, val) do { \
+    cJSON_t *_obj = g_cjson.CreateObject(); \
+    if (_obj) { \
+        g_cjson.AddNumberToObject(_obj, key, (double)(val)); \
+        g_cjson.AddItemToArray(reportArray, _obj); \
+    } \
+} while(0)
+
+    /* --- Metadata fields --- */
+    T2_ADD_STRING("FIRMWARE_NAME",  setup->fwName);
+    T2_ADD_STRING("MAC_ADDRESS",    setup->mac);
+
+    /* Timestamp and uptime fresh for this iteration */
+    time_t timenow = time(NULL);
+    struct tm *tm_info = localtime(&timenow);
+    char ts[32] = {0};
+    strftime(ts, sizeof(ts), "%Y-%m-%d %H:%M:%S", tm_info);
+    T2_ADD_STRING("TIMESTAMP", ts);
+
+    const char *uptime = getSystemUptime();
+    T2_ADD_STRING("UPTIME", uptime);
+    T2_ADD_STRING("KERNEL_VERSION", setup->kernelVersion);
+    T2_ADD_STRING("REPORT_VERSION", reportVersion);
+    T2_ADD_NUMBER("ITERATION",      iteration);
+    T2_ADD_NUMBER("RUN_ITERATIONS", iterations);
+    T2_ADD_NUMBER("RUN_INTERVAL",   interval);
+    T2_ADD_STRING("RUN_ID",         setup->runHash);
+
+    /* --- meminfo as nested object --- */
+    {
+        static const char *meminfoNeeded[] = {
+            "MemTotal", "MemFree", "MemAvailable", "Buffers", "Cached", "SwapCached",
+            "Active(anon)", "Inactive(anon)", "Active(file)", "Inactive(file)",
+            "SwapTotal", "SwapFree", "AnonPages", "Mapped", "Shmem", "Slab",
+            "KernelStack", "VmallocUsed", "CmaFree", "CmaTotal"
+        };
+        const int fieldCount = (int)(sizeof(meminfoNeeded) / sizeof(meminfoNeeded[0]));
+
+        cJSON_t *meminfoObj = g_cjson.CreateObject();
+        if (meminfoObj) {
+#ifdef TESTME
+            FILE *meminfo = fopen((isTestMode) ? testMeminfo : MEMINFO_FILE, "r");
+#else
+            FILE *meminfo = fopen(MEMINFO_FILE, "r");
+#endif
+            if (meminfo) {
+                char tmp[128], name[64];
+                unsigned long value;
+                while (fgets(tmp, sizeof(tmp), meminfo)) {
+                    if (sscanf(tmp, "%63s %lu kB", name, &value) == 2) {
+                        size_t len = strlen(name);
+                        if (len > 0 && name[len - 1] == ':')
+                            name[len - 1] = '\0';
+                        for (int i = 0; i < fieldCount; i++) {
+                            if (strcmp(name, meminfoNeeded[i]) == 0) {
+                                g_cjson.AddNumberToObject(meminfoObj, name, (double)value);
+                                break;
+                            }
+                        }
+                    }
+                }
+                fclose(meminfo);
+            }
+            /* Wrap in {"meminfo": {...}} and add to Report array */
+            cJSON_t *wrapper = g_cjson.CreateObject();
+            if (wrapper) {
+                g_cjson.AddItemToObject(wrapper, "meminfo", meminfoObj);
+                g_cjson.AddItemToArray(reportArray, wrapper);
+            } else {
+                g_cjson.Delete(meminfoObj);
+            }
+        }
+    }
+
+    /* --- cpustat as nested object --- */
+    {
+        static const char *fieldNames[] = {
+            "user", "nice", "system", "idle", "iowait", "irq", "softirq", "steal"
+        };
+        const int fieldCount = 8;
+
+        cJSON_t *cpuObj = g_cjson.CreateObject();
+        if (cpuObj) {
+#ifdef TESTME
+            FILE *fp = fopen((isTestMode && testProcStat[0]) ? testProcStat : PROC_STAT_FILE, "r");
+#else
+            FILE *fp = fopen(PROC_STAT_FILE, "r");
+#endif
+            if (fp) {
+                char line[256];
+                unsigned long fields[8] = {0};
+                int parsed = 0;
+                while (fgets(line, sizeof(line), fp)) {
+                    if (strncmp(line, "cpu ", 4) == 0) {
+                        parsed = sscanf(line + 4, "%lu %lu %lu %lu %lu %lu %lu %lu",
+                                        &fields[0], &fields[1], &fields[2], &fields[3],
+                                        &fields[4], &fields[5], &fields[6], &fields[7]);
+                        break;
+                    }
+                }
+                fclose(fp);
+                if (parsed >= 1) {
+                    for (int i = 0; i < fieldCount; i++) {
+                        g_cjson.AddNumberToObject(cpuObj, fieldNames[i], (double)fields[i]);
+                    }
+                }
+            }
+            cJSON_t *wrapper = g_cjson.CreateObject();
+            if (wrapper) {
+                g_cjson.AddItemToObject(wrapper, "cpustat", cpuObj);
+                g_cjson.AddItemToArray(reportArray, wrapper);
+            } else {
+                g_cjson.Delete(cpuObj);
+            }
+        }
+    }
+
+    /* --- Processes as keyed objects: {"EXE_NAME": {"RSS":x,"PSS":y,...}} --- */
+    {
+        Process_Info *cur = headProcessInfo;
+        while (cur) {
+            if (cur->pid > 0) {  /* Skip synthetic "Total" if present */
+                cJSON_t *procObj = g_cjson.CreateObject();
+                if (procObj) {
+                    g_cjson.AddNumberToObject(procObj, "RSS",           (double)cur->rssTotal);
+                    g_cjson.AddNumberToObject(procObj, "PSS",           (double)cur->pssTotal);
+                    g_cjson.AddNumberToObject(procObj, "shared_clean",  (double)cur->shared_clean_total);
+                    g_cjson.AddNumberToObject(procObj, "private_clean", (double)cur->private_clean_total);
+                    g_cjson.AddNumberToObject(procObj, "private_dirty", (double)cur->private_dirty_total);
+                    g_cjson.AddNumberToObject(procObj, "swap_pss",      (double)cur->swap_pss_total);
+                    g_cjson.AddNumberToObject(procObj, "min_faults",    (double)cur->minFaults);
+                    g_cjson.AddNumberToObject(procObj, "maj_faults",    (double)cur->majFaults);
+                    g_cjson.AddNumberToObject(procObj, "cpu_time",      (double)cur->cputime);
+
+                    /* Wrap: {"ProcessName": {metrics}} */
+                    cJSON_t *wrapper = g_cjson.CreateObject();
+                    if (wrapper) {
+                        g_cjson.AddItemToObject(wrapper, cur->name, procObj);
+                        g_cjson.AddItemToArray(reportArray, wrapper);
+                    } else {
+                        g_cjson.Delete(procObj);
+                    }
+                }
+            }
+            cur = cur->next;
+        }
+    }
+
+    /* --- Assemble and write --- */
+    g_cjson.AddItemToObject(root, "Report", reportArray);
+
+    FILE *out = fopen(filepath, "w");
+    if (!out) {
+        PRINT_ERROR("T2: Failed to open %s for writing: %s\n", filepath, strerror(errno));
+        g_cjson.Delete(root);
+        return -1;
+    }
+
+    char *jsonStr = g_jsonPrettyPrint
+                    ? g_cjson.Print(root)
+                    : g_cjson.PrintUnformatted(root);
+
+    int rc = 0;
+    if (jsonStr) {
+        if (fprintf(out, "%s\n", jsonStr) < 0) {
+            PRINT_ERROR("T2: Failed to write to %s: %s\n", filepath, strerror(errno));
+            rc = -1;
+        }
+        g_cjson.Free(jsonStr);
+    } else {
+        PRINT_ERROR("T2: cJSON serialisation returned NULL for %s\n", filepath);
+        rc = -1;
+    }
+
+    fclose(out);
+    g_cjson.Delete(root);
+
+    /* Free the process linked list (mirrors writeProcessInfo_JSON behavior) */
+    Process_Info *cur = headProcessInfo;
+    while (cur) {
+        Process_Info *tofree = cur;
+        cur = cur->next;
+        free(tofree);
+    }
+    headProcessInfo = NULL;
+
+#undef T2_ADD_STRING
+#undef T2_ADD_NUMBER
+    return rc;
+}
+
 #endif /* ENABLE_CJSON */
 
 // -----------------------------
@@ -4582,6 +4842,17 @@ int main(int argc, char *argv[])
                     g_reportFormat = REPORT_CSV;
 #endif
                 }
+                else if (!strncmp(argv[i], "t2", 3))
+                {
+                    cli_fmt_json = true;
+#ifdef ENABLE_CJSON
+                    g_reportFormat = REPORT_T2;
+#else
+                    printf("Warning: --fmt t2 requested but cJSON support not compiled in.\n");
+                    printf("         Build with --enable-cjson flag. Falling back to CSV.\n");
+                    g_reportFormat = REPORT_CSV;
+#endif
+                }
                 else if (!strncmp(argv[i], "csv", 4))
                 {
                     cli_fmt_json = false;
@@ -4589,7 +4860,7 @@ int main(int argc, char *argv[])
                 }
                 else
                 {
-                    PRINT_MUST("Error: Unsupported format '%s'. Supported: csv, json.\n", argv[i]);
+                    PRINT_MUST("Error: Unsupported format '%s'. Supported: csv, json, t2.\n", argv[i]);
                     printHelpAndUsage(argv, false, 1);
                 }
             }
@@ -4678,7 +4949,7 @@ int main(int argc, char *argv[])
     }
 
 #ifdef ENABLE_CJSON
-    if (g_reportFormat == REPORT_JSON) {
+    if (g_reportFormat == REPORT_JSON || g_reportFormat == REPORT_T2) {
         if (loadCjson() != 0) {
             /* loadCjson() already set g_reportFormat = REPORT_CSV and printed the reason */
             PRINT_MUST("JSON: Continuing with CSV fallback.\n");

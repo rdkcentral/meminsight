@@ -432,27 +432,17 @@ else
 fi
 echo ""
 
-<<<<<<< HEAD
 # CPU stat section test using deterministic /proc/stat fixture
 CPU_DESC="Test 15: CPU stat raw section"
-=======
-# CPU stats /proc/stat parsing test
-CPU_DESC="Test 15: CPU stats /proc/stat section in CSV output"
->>>>>>> 2915a38 (RDK-61443: Workflow enhancements)
 CPU_SMAP_FILE="test/1-non-zero-swap-entry/meminsight_testSmap.txt"
 CPU_MEMINFO_FILE="test/1-non-zero-swap-entry/meminsight_testMeminfo.txt"
 CPU_BUDDY_FILE="test/6-buddyinfo-sample/meminsight_testBuddyinfo.txt"
 CPU_PGT_FILE="test/7-pagetypeinfo-sample/meminsight_testPagetypeinfo.txt"
-<<<<<<< HEAD
 CPU_STAT_FILE="test/10-cpu-stat-sample/meminsight_testStat.txt"
-=======
-CPU_PROCSTAT_FILE="test/10-proc-stat-cpu/meminsight_testProcStat.txt"
->>>>>>> 2915a38 (RDK-61443: Workflow enhancements)
 
 echo "------------------------------------------"
 echo "$CPU_DESC"
 echo "------------------------------------------"
-<<<<<<< HEAD
 echo "Command: $MEM_BIN -o /tmp/meminsight -t $CPU_SMAP_FILE $CPU_MEMINFO_FILE $CPU_BUDDY_FILE $CPU_PGT_FILE $CPU_STAT_FILE"
 
 rm -rf /tmp/meminsight/*.csv
@@ -467,21 +457,6 @@ if $MEM_BIN -o /tmp/meminsight -t "$CPU_SMAP_FILE" "$CPU_MEMINFO_FILE" "$CPU_BUD
         record_tc_result "15" "CPU stat raw section" "SUCCESS"
     else
         echo "✗ $CPU_DESC FAILED (CPU section/header/value missing)"
-=======
-echo "Command: $MEM_BIN -o /tmp/meminsight -t $CPU_SMAP_FILE $CPU_MEMINFO_FILE $CPU_BUDDY_FILE $CPU_PGT_FILE $CPU_PROCSTAT_FILE"
-
-rm -rf /tmp/meminsight/*.csv
-
-if $MEM_BIN -o /tmp/meminsight -t "$CPU_SMAP_FILE" "$CPU_MEMINFO_FILE" "$CPU_BUDDY_FILE" "$CPU_PGT_FILE" "$CPU_PROCSTAT_FILE"; then
-    CSV_FILE=$(ls /tmp/meminsight/*.csv 2>/dev/null | head -n 1)
-    if [ -n "$CSV_FILE" ] && \
-       grep -F "/proc/stat:" "$CSV_FILE" >/dev/null 2>&1 && \
-       grep -F "user,nice,system,idle,iowait,irq,softirq,steal" "$CSV_FILE" >/dev/null 2>&1 && \
-       grep -F "74190,1000,38410,5765412,18163,0,987,0" "$CSV_FILE" >/dev/null 2>&1; then
-        echo "✓ $CPU_DESC PASSED"
-    else
-        echo "✗ $CPU_DESC FAILED (/proc/stat section missing or values incorrect)"
->>>>>>> 2915a38 (RDK-61443: Workflow enhancements)
         [ -n "$CSV_FILE" ] && cat "$CSV_FILE"
         TEST_FAILED=$((TEST_FAILED + 1))
         record_tc_result "15" "CPU stat raw section" "FAILURE"
@@ -491,7 +466,6 @@ else
     TEST_FAILED=$((TEST_FAILED + 1))
     record_tc_result "15" "CPU stat raw section" "FAILURE"
 fi
-<<<<<<< HEAD
 
 # Also validate JSON cpu_stat emission when JSON support is available
 if $MEM_BIN --help 2>&1 | grep -F -- "--fmt" >/dev/null 2>&1; then
@@ -619,8 +593,6 @@ else
     TEST_FAILED=$((TEST_FAILED + 1))
     record_tc_result "18" "CPU stat legacy field-count compatibility" "FAILURE"
 fi
-=======
->>>>>>> 2915a38 (RDK-61443: Workflow enhancements)
 echo ""
 
 # Backup policy tests
@@ -1075,6 +1047,46 @@ else
     record_tc_result "30" "Upload marker/configstore key separation" "FAILURE"
 fi
 rm -f "$META_MARKER"
+echo ""
+
+# T2 JSON output test (runs only when JSON support is compiled in)
+T2_DESC="Test 16: T2 format produces Report array with keyed process objects"
+T2_SMAP_FILE="test/1-non-zero-swap-entry/meminsight_testSmap.txt"
+T2_MEMINFO_FILE="test/1-non-zero-swap-entry/meminsight_testMeminfo.txt"
+
+echo "------------------------------------------"
+echo "$T2_DESC"
+echo "------------------------------------------"
+
+if $MEM_BIN --help 2>&1 | grep -F "t2" >/dev/null 2>&1; then
+    echo "Command: $MEM_BIN --fmt t2 -o /tmp/meminsight -t $T2_SMAP_FILE $T2_MEMINFO_FILE"
+    rm -rf /tmp/meminsight/*.t2.json
+
+    if $MEM_BIN --fmt t2 -o /tmp/meminsight -t "$T2_SMAP_FILE" "$T2_MEMINFO_FILE"; then
+        T2_FILE=$(ls /tmp/meminsight/*.t2.json 2>/dev/null | head -n 1)
+        if [ -n "$T2_FILE" ] && [ -f "$T2_FILE" ] && \
+           grep -F '"Report"' "$T2_FILE" >/dev/null 2>&1 && \
+           grep -F '"meminfo"' "$T2_FILE" >/dev/null 2>&1 && \
+           grep -F '"cpustat"' "$T2_FILE" >/dev/null 2>&1 && \
+           grep -F '"RSS"' "$T2_FILE" >/dev/null 2>&1 && \
+           grep -F '"MAC_ADDRESS"' "$T2_FILE" >/dev/null 2>&1 && \
+           ! grep -F '"processes"' "$T2_FILE" >/dev/null 2>&1; then
+            echo "✓ $T2_DESC PASSED"
+            echo "Output sample:"
+            head -5 "$T2_FILE"
+            echo "..."
+        else
+            echo "✗ $T2_DESC FAILED (missing T2 structure or unexpected 'processes' array)"
+            [ -n "$T2_FILE" ] && cat "$T2_FILE"
+            TEST_FAILED=$((TEST_FAILED + 1))
+        fi
+    else
+        echo "✗ $T2_DESC FAILED (command execution failed)"
+        TEST_FAILED=$((TEST_FAILED + 1))
+    fi
+else
+    echo "- $T2_DESC SKIPPED (T2 format not compiled in this binary)"
+fi
 echo ""
 
 # Summary

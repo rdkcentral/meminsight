@@ -135,6 +135,7 @@ This is used to ensure compatibility with older versions of the report parser. *
 #define CONFIG_EXTN ".conf"
 #define CSV_FILE_NAME "meminsight.csv"
 #define JSON_FILE_NAME "meminsight.json"
+#define T2_FILE_NAME  "meminsight.t2.json"
 #define LONG_RUN_INTERVAL 900 // 900 is Default interval for long runs in seconds
 #define LONG_RUN_ITERATIONS 48 // 12-hour capture at 15-minute interval; caller may override via CLI/config
 
@@ -212,7 +213,8 @@ typedef struct {
 typedef enum
 {
     REPORT_CSV,
-    REPORT_JSON
+    REPORT_JSON,
+    REPORT_T2
 } Report_Format;
 
 // -----------------------------
@@ -279,6 +281,7 @@ void saveCpuStat_JSON(cJSON_t *root);
 void saveFragmentationInfo_JSON(cJSON_t *root);
 void writeProcessInfo_JSON(cJSON_t *processesArray);
 int writeJSONToFile(const char *filepath, const SetupInfo *setup);
+int writeT2Report(const char *filepath, const SetupInfo *setup, int iteration, int iterations, int interval);
 #endif
 
 #endif // MEMINSIGHT_H
