@@ -171,6 +171,11 @@ char gSMAPS_OR_ROLLUP[] = "smaps_rollup";  // Default source for process memory 
 int g_backupCount = DEFAULT_BACKUP_COUNT;  // Number of report files handled by pre-run backup policy (default: 30, max: 100)
 int g_backupArgPassed = 0;                 // 1 when --backup/-b is explicitly provided, else 0
 
+#ifdef ENABLE_HTTP_UPLOAD
+#define DEFAULT_UPLOAD_URL "https://rdktel-oi.stb.r53.xcal.tv"
+static const char *g_uploadUrl = NULL; // Resolved at startup: CLI > env > default
+#endif
+
 typedef enum {
     FRAG_SRC_NONE = 0,
     FRAG_SRC_PAGETYPEINFO,
@@ -719,15 +724,15 @@ static void writeConfigStore(const SetupInfo *setup, int iterations, int interva
     const char * const keys[] = {
         "UPTIME", "KERNEL_VERSION", "MEMINSIGHT_VERSION", "REPORT_VERSION",
         "RUN_ITERATIONS", "RUN_INTERVAL", "RUN_ID", "OUTPUT_FORMAT",
-        "OUTPUT_DIR",
         "BACKUP_ENABLED", "BACKUP_COUNT", "BACKUP_BASE", "FRAGMENTATION_ENABLED"
+        "UPLOAD_ENABLED", "UPLOAD_INTERVAL", "UPLOAD_URL", "OUTPUT_DIR"
     };
     const int nkeys = (int)(sizeof(keys) / sizeof(keys[0]));
 
     char v_uptime[64], v_kver[KERNEL_LEN], v_mver[32], v_rver[32];
     char v_iter[16], v_intv[16], v_runid[32], v_fmt[8];
-    char v_outdir[PATH_MAX];
     char v_backup_enabled[4], v_backup_count[16], v_backup_base[32], v_frag_enabled[4];
+    char v_upload[4], v_uintv[16], v_url[512], v_outdir[PATH_MAX];
 
     snprintf(v_uptime, sizeof(v_uptime), "%s", getSystemUptime());
     snprintf(v_kver,   sizeof(v_kver),   "%s", setup->kernelVersion);
@@ -740,6 +745,11 @@ static void writeConfigStore(const SetupInfo *setup, int iterations, int interva
                                              : (g_reportFormat == REPORT_JSON) ? "json" : "csv");
     snprintf(v_upload, sizeof(v_upload), "%d", upload_enabled ? 1 : 0);
     snprintf(v_uintv,  sizeof(v_uintv),  "%d", upload_interval);
+#ifdef ENABLE_HTTP_UPLOAD
+    snprintf(v_url,    sizeof(v_url),    "%s", g_uploadUrl ? g_uploadUrl : "");
+#else
+    v_url[0] = '\0';
+#endif
     snprintf(v_outdir, sizeof(v_outdir), "%s", setup->outputDir);
     snprintf(v_backup_enabled, sizeof(v_backup_enabled), "%d", 1);
     snprintf(v_backup_count, sizeof(v_backup_count), "%d", g_backupCount);
@@ -756,8 +766,8 @@ static void writeConfigStore(const SetupInfo *setup, int iterations, int interva
     const char * const vals[] = {
         v_uptime, v_kver, v_mver, v_rver,
         v_iter, v_intv, v_runid, v_fmt,
-        v_outdir,
         v_backup_enabled, v_backup_count, v_backup_base, v_frag_enabled
+        v_upload, v_uintv, v_url, v_outdir
     };
 
     /* Check if existing file already has all matching values */
@@ -3349,6 +3359,9 @@ void printHelpAndUsage(char *argv[], bool moreInfo, int returnCode)
     printf("      --frag                        Enable fragmentation data collection (default: disabled)\n");
     printf("  -b, --backup <count>              Number of report files to keep in pre-run backup handling (default: %d, max: %d)\n", DEFAULT_BACKUP_COUNT, MAX_BACKUP_COUNT);
     printf("  -s, --smaps                       Force /proc/<pid>/smaps (disable auto smaps_rollup detection)\n");
+#ifdef ENABLE_HTTP_UPLOAD
+    printf("      --upload-url <url>                Override T2 upload endpoint (default: env or built-in)\n");
+#endif
 #ifdef TESTME
     printf("  -t, --test <smapsFile> <meminfoFile> [buddyinfoFile] [pagetypeinfoFile] [statFile] [bandwidthFile]\n");
     printf("                                    Run in test mode using supplied sample files\n\n");
@@ -3395,6 +3408,108 @@ void printHelpAndUsage(char *argv[], bool moreInfo, int returnCode)
     }
     exit(returnCode);
 }
+
+#ifdef ENABLE_HTTP_UPLOAD
+/**
+ * @brief Scan output directory for *.t2.json files and POST each to T2 via shell curl.
+ *
+ * Constructs and executes a curl command per file using the RDK GetConfigFile pipe
+ * pattern for mTLS password. Files are never deleted regardless of upload outcome.
+ *
+ * @param[in] outDir  Directory to scan for .t2.json files.
+ * @return Number of files successfully uploaded (informational only).
+ */
+static int mi_upload_t2_files(const char *outDir)
+{
+    if (!g_uploadUrl || !outDir)
+        return 0;
+
+    /* Resolve certificate path: prefer dynamic, fall back to static */
+    const char *cert_path = NULL;
+    const char *pass_file = NULL;
+
+    if (access("/opt/certs/devicecert_1.pk12", F_OK) == 0) {
+        cert_path = "/opt/certs/devicecert_1.pk12";
+        pass_file = "/tmp/.cfgDynamicxpki";
+    } else if (access("/etc/ssl/certs/staticXpkiCrt.pk12", F_OK) == 0) {
+        cert_path = "/etc/ssl/certs/staticXpkiCrt.pk12";
+        pass_file = "/tmp/.cfgStaticxpki";
+    } else {
+        fprintf(stderr, "[MemInsight] Upload: No mTLS certificate found, skipping upload.\n");
+        return 0;
+    }
+
+    DIR *dir = opendir(outDir);
+    if (!dir) {
+        fprintf(stderr, "[MemInsight] Upload: Cannot open directory %s: %s\n",
+                outDir, strerror(errno));
+        return 0;
+    }
+
+    int uploaded = 0;
+    struct dirent *entry;
+    while ((entry = readdir(dir)) != NULL) {
+        /* Match files ending in .t2.json */
+        size_t nlen = strlen(entry->d_name);
+        if (nlen < 9 || strcmp(entry->d_name + nlen - 8, ".t2.json") != 0)
+            continue;
+
+        char filepath[PATH_MAX];
+        snprintf(filepath, sizeof(filepath), "%s/%s", outDir, entry->d_name);
+
+        if (access(filepath, R_OK) != 0)
+            continue;
+
+        /*
+         * Construct curl command using GetConfigFile pipe pattern:
+         *   GetConfigFile "<pass_file>" stdout | sed -e 's/^\(.\)/--pass \1/' |
+         *     curl --cert-type P12 --cert <cert> --config /dev/stdin
+         *          --tlsv1.2 -H "Content-type: application/json"
+         *          -X POST -d @<filepath> "<url>"
+         *          --connect-timeout 30 -m 30 -w '%{http_code}' -s -o /dev/null
+         */
+        char cmd[PATH_MAX + 512];
+        int n = snprintf(cmd, sizeof(cmd),
+            "GetConfigFile \"%s\" stdout 2>/dev/null | sed -e 's/^\\(.\\)/--pass \\1/' | "
+            "curl --cert-type P12 --cert %s --config /dev/stdin "
+            "--tlsv1.2 -H \"Content-type: application/json\" "
+            "-X POST -d @%s \"%s\" "
+            "--connect-timeout 30 -m 30 -w '%%{http_code}' -s -o /dev/null 2>/dev/null",
+            pass_file, cert_path, filepath, g_uploadUrl);
+
+        if (n < 0 || (size_t)n >= sizeof(cmd)) {
+            fprintf(stderr, "[MemInsight] Upload: Command too long for %s\n", entry->d_name);
+            continue;
+        }
+
+        FILE *pp = popen(cmd, "r");
+        if (!pp) {
+            fprintf(stderr, "[MemInsight] Upload: popen failed for %s\n", entry->d_name);
+            continue;
+        }
+
+        char http_code[16] = {0};
+        if (fgets(http_code, sizeof(http_code), pp) != NULL) {
+            /* Trim newline */
+            http_code[strcspn(http_code, "\n")] = '\0';
+        }
+        int status = pclose(pp);
+
+        int code = atoi(http_code);
+        if (code >= 200 && code < 300) {
+            uploaded++;
+            printf("[MemInsight] Upload: %s -> HTTP %d\n", entry->d_name, code);
+        } else {
+            fprintf(stderr, "[MemInsight] Upload: %s -> HTTP %s (exit=%d)\n",
+                    entry->d_name, http_code[0] ? http_code : "?", status);
+        }
+    }
+    closedir(dir);
+
+    printf("[MemInsight] Upload: %d file(s) uploaded to %s\n", uploaded, g_uploadUrl);
+    return uploaded;
+}
+#endif /* ENABLE_HTTP_UPLOAD */
 
 /**
  * @brief Run system-wide collection mode and emit CSV or JSON reports.
@@ -3623,6 +3738,12 @@ int collectSystemMemoryStats(bool enableKThreads, const char *outDir, int iterat
         }
     }
     printf("\n---- Completed Data Capture ----\n");
+
+#ifdef ENABLE_HTTP_UPLOAD
+    if (upload_enabled && g_reportFormat == REPORT_T2 && g_uploadUrl)
+        mi_upload_t2_files(setup.outputDir);
+#endif
+
     removeFileIfPresent(MEMINSIGHT_INPROGRESS_FILE);
     return 0;
 }
@@ -3947,6 +4068,12 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, bool cli_out
         free(config.whitelist);
     }
     PRINT_INFO("\n---- Completed Data Capture ----\n");
+
+#ifdef ENABLE_HTTP_UPLOAD
+    if (upload_enabled && g_reportFormat == REPORT_T2 && g_uploadUrl)
+        mi_upload_t2_files(setup.outputDir);
+#endif
+
     removeFileIfPresent(MEMINSIGHT_INPROGRESS_FILE);
     return 0;
 }
@@ -4535,6 +4662,34 @@ int writeT2Report(const char *filepath, const SetupInfo *setup, int iteration, i
         }
     }
 
+    /* --- Fragmentation as nested object (when --frag is enabled) --- */
+    if (g_CollectFragData) {
+        cJSON_t *fragObj = g_cjson.CreateObject();
+        if (fragObj) {
+            if (g_fragSource == FRAG_SRC_PAGETYPEINFO) {
+                g_cjson.AddStringToObject(fragObj, "source", "pagetypeinfo");
+                g_cjson.AddStringToObject(fragObj, "path", PGT_FILE);
+                if (addPagetypeInfoJSON(fragObj) != 0)
+                    g_cjson.AddStringToObject(fragObj, "parse_status", "source_unavailable_or_parse_error");
+            } else if (g_fragSource == FRAG_SRC_BUDDYINFO) {
+                g_cjson.AddStringToObject(fragObj, "source", "buddyinfo");
+                g_cjson.AddStringToObject(fragObj, "path", BUDDYINFO_FILE);
+                if (addBuddyinfoJSON(fragObj) != 0)
+                    g_cjson.AddStringToObject(fragObj, "parse_status", "source_unavailable_or_parse_error");
+            } else {
+                g_cjson.AddStringToObject(fragObj, "source", "none");
+                g_cjson.AddStringToObject(fragObj, "parse_status", "source_unavailable");
+            }
+            cJSON_t *wrapper = g_cjson.CreateObject();
+            if (wrapper) {
+                g_cjson.AddItemToObject(wrapper, "fragmentation", fragObj);
+                g_cjson.AddItemToArray(reportArray, wrapper);
+            } else {
+                g_cjson.Delete(fragObj);
+            }
+        }
+    }
+
     /* --- Processes as keyed objects: {"EXE_NAME": {"RSS":x,"PSS":y,...}} --- */
     {
         Process_Info *cur = headProcessInfo;
@@ -4636,6 +4791,9 @@ int main(int argc, char *argv[])
     bool cli_upload_interval_set = false;
     int  cli_upload_interval = 0;
     bool cli_json_pretty_set = false;
+#ifdef ENABLE_HTTP_UPLOAD
+    const char *cli_upload_url = NULL;
+#endif
 
     // CLI parsing and initialization
     if (argc == 1)
@@ -4818,6 +4976,21 @@ int main(int argc, char *argv[])
                 printHelpAndUsage(argv, false, 1);
             }
         }
+#ifdef ENABLE_HTTP_UPLOAD
+        else if (!strncmp(argv[i], "--upload-url", 12))
+        {
+            if (i + 1 < argc)
+            {
+                i++;
+                cli_upload_url = argv[i];
+            }
+            else
+            {
+                PRINT_ERROR("Error: Missing URL after --upload-url\n");
+                printHelpAndUsage(argv, false, 1);
+            }
+        }
+#endif
         else if (!strncmp(argv[i], "-s", 3) || !strncmp(argv[i], "--smaps", 8))
         {
             force_smaps = 1;
@@ -4954,6 +5127,24 @@ int main(int argc, char *argv[])
             /* loadCjson() already set g_reportFormat = REPORT_CSV and printed the reason */
             PRINT_MUST("JSON: Continuing with CSV fallback.\n");
         }
+    }
+#endif
+
+    if (cli_upload_enable)
+    {
+        (void)touchFile(MEMINSIGHT_UPLOAD_MARKER_PATH);
+    }
+
+#ifdef ENABLE_HTTP_UPLOAD
+    /* Resolve upload URL: CLI --upload-url > env MEMINSIGHT_UPLOAD_URL > compiled default */
+    if (cli_upload_enable) {
+        if (cli_upload_url)
+            g_uploadUrl = cli_upload_url;
+        else {
+            const char *env_url = getenv("MEMINSIGHT_UPLOAD_URL");
+            g_uploadUrl = env_url ? env_url : DEFAULT_UPLOAD_URL;
+        }
+        printf("[MemInsight] Upload URL: %s\n", g_uploadUrl);
     }
 #endif
 

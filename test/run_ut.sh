@@ -1089,6 +1089,73 @@ else
 fi
 echo ""
 
+# Upload URL CLI parsing test
+UPLOAD_DESC="Test 17: --upload-url CLI option accepted"
+echo "------------------------------------------"
+echo "$UPLOAD_DESC"
+echo "------------------------------------------"
+
+# Test that --upload-url is accepted without crashing (upload will fail gracefully with no cert/curl)
+if $MEM_BIN --help 2>&1 | grep -F "upload-url" >/dev/null 2>&1; then
+    UPLOAD_LOG="/tmp/meminsight_upload_test.log"
+    echo "Command: $MEM_BIN --fmt t2 --upload-enable --upload-url https://localhost:9999/test -o /tmp/meminsight -t $T2_SMAP_FILE $T2_MEMINFO_FILE"
+    rm -rf /tmp/meminsight/*.t2.json
+
+    $MEM_BIN --fmt t2 --upload-enable --upload-url https://localhost:9999/test \
+        -o /tmp/meminsight -t "$T2_SMAP_FILE" "$T2_MEMINFO_FILE" >"$UPLOAD_LOG" 2>&1
+    RC=$?
+
+    # Binary should still succeed (upload failure doesn't affect exit code)
+    if [ "$RC" -eq 0 ] && grep -F "Upload URL: https://localhost:9999/test" "$UPLOAD_LOG" >/dev/null 2>&1; then
+        echo "✓ $UPLOAD_DESC PASSED"
+    else
+        echo "✗ $UPLOAD_DESC FAILED (exit=$RC)"
+        cat "$UPLOAD_LOG"
+        TEST_FAILED=$((TEST_FAILED + 1))
+    fi
+else
+    echo "- $UPLOAD_DESC SKIPPED (--upload-url not compiled in this binary)"
+fi
+echo ""
+
+# T2 format with fragmentation data test
+T2_FRAG_DESC="Test 18: T2 format with --frag produces fragmentation object"
+T2_FRAG_SMAP_FILE="test/1-non-zero-swap-entry/meminsight_testSmap.txt"
+T2_FRAG_MEMINFO_FILE="test/1-non-zero-swap-entry/meminsight_testMeminfo.txt"
+T2_FRAG_BUDDY_FILE="test/6-buddyinfo-sample/meminsight_testBuddyinfo.txt"
+T2_FRAG_PGT_FILE="test/7-pagetypeinfo-sample/meminsight_testPagetypeinfo.txt"
+
+echo "------------------------------------------"
+echo "$T2_FRAG_DESC"
+echo "------------------------------------------"
+
+if $MEM_BIN --help 2>&1 | grep -F "t2" >/dev/null 2>&1; then
+    echo "Command: $MEM_BIN --fmt t2 --frag -o /tmp/meminsight -t $T2_FRAG_SMAP_FILE $T2_FRAG_MEMINFO_FILE $T2_FRAG_BUDDY_FILE $T2_FRAG_PGT_FILE"
+    rm -rf /tmp/meminsight/*.t2.json
+
+    if $MEM_BIN --fmt t2 --frag -o /tmp/meminsight -t "$T2_FRAG_SMAP_FILE" "$T2_FRAG_MEMINFO_FILE" "$T2_FRAG_BUDDY_FILE" "$T2_FRAG_PGT_FILE"; then
+        T2_FRAG_FILE=$(ls /tmp/meminsight/*.t2.json 2>/dev/null | head -n 1)
+        if [ -n "$T2_FRAG_FILE" ] && [ -f "$T2_FRAG_FILE" ] && \
+           grep -F '"fragmentation"' "$T2_FRAG_FILE" >/dev/null 2>&1 && \
+           grep -F '"Report"' "$T2_FRAG_FILE" >/dev/null 2>&1; then
+            echo "✓ $T2_FRAG_DESC PASSED"
+            echo "Output sample:"
+            head -10 "$T2_FRAG_FILE"
+            echo "..."
+        else
+            echo "✗ $T2_FRAG_DESC FAILED (missing fragmentation object in T2 output)"
+            [ -n "$T2_FRAG_FILE" ] && cat "$T2_FRAG_FILE"
+            TEST_FAILED=$((TEST_FAILED + 1))
+        fi
+    else
+        echo "✗ $T2_FRAG_DESC FAILED (command execution failed)"
+        TEST_FAILED=$((TEST_FAILED + 1))
+    fi
+else
+    echo "- $T2_FRAG_DESC SKIPPED (T2 format not compiled in this binary)"
+fi
+echo ""
+
 # Summary
 echo "===================================================================================="
 echo "Test Summary"
