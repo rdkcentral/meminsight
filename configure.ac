@@ -84,7 +84,7 @@ AC_ARG_ENABLE([http-upload],
     no)  enable_http_upload=no  ;;
     *)   AC_MSG_ERROR([bad value ${enableval} for --enable-http-upload]) ;;
    esac],
-  [enable_http_upload=no])
+  [enable_http_upload=yes])
 
 AS_IF([test "x$enable_http_upload" = "xyes"], [
   AC_DEFINE([ENABLE_HTTP_UPLOAD], [1], [Define to enable HTTP upload via shell curl])
