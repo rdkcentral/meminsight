@@ -3438,6 +3438,7 @@ static int mi_upload_t2_files(const char *outDir)
         fprintf(stderr, "[MemInsight] Upload: No mTLS certificate found, skipping upload.\n");
         return 0;
     }
+    printf("[MemInsight] Upload: Using cert %s (pass via %s)\n", cert_path, pass_file);
 
     DIR *dir = opendir(outDir);
     if (!dir) {
@@ -3447,6 +3448,7 @@ static int mi_upload_t2_files(const char *outDir)
     }
 
     int uploaded = 0;
+    int found = 0;
     struct dirent *entry;
     while ((entry = readdir(dir)) != NULL) {
         /* Match files ending in .t2.json */
@@ -3460,20 +3462,20 @@ static int mi_upload_t2_files(const char *outDir)
         if (access(filepath, R_OK) != 0)
             continue;
 
+        found++;
+
         /*
-         * Construct curl command using GetConfigFile pipe pattern:
-         *   GetConfigFile "<pass_file>" stdout | sed -e 's/^\(.\)/--pass \1/' |
-         *     curl --cert-type P12 --cert <cert> --config /dev/stdin
-         *          --tlsv1.2 -H "Content-type: application/json"
-         *          -X POST -d @<filepath> "<url>"
-         *          --connect-timeout 30 -m 30 -w '%{http_code}' -s -o /dev/null
+         * Construct curl command with mTLS.
+         * GetConfigFile pipes the cert password via --config /dev/stdin.
+         * If GetConfigFile is not available, curl proceeds without --pass
+         * (the pipe produces empty input and --config reads nothing).
          */
         char cmd[PATH_MAX + 512];
         int n = snprintf(cmd, sizeof(cmd),
             "GetConfigFile \"%s\" stdout 2>/dev/null | sed -e 's/^\\(.\\)/--pass \\1/' | "
-            "curl --cert-type P12 --cert %s --config /dev/stdin "
+            "curl --cert-type P12 --cert \"%s\" --config /dev/stdin "
             "--tlsv1.2 -H \"Content-type: application/json\" "
-            "-X POST -d @%s \"%s\" "
+            "-X POST -d @\"%s\" \"%s\" "
             "--connect-timeout 30 -m 30 -w '%%{http_code}' -s -o /dev/null 2>/dev/null",
             pass_file, cert_path, filepath, g_uploadUrl);
 
@@ -3500,13 +3502,14 @@ static int mi_upload_t2_files(const char *outDir)
             uploaded++;
             printf("[MemInsight] Upload: %s -> HTTP %d\n", entry->d_name, code);
         } else {
-            fprintf(stderr, "[MemInsight] Upload: %s -> HTTP %s (exit=%d)\n",
-                    entry->d_name, http_code[0] ? http_code : "?", status);
+            fprintf(stderr, "[MemInsight] Upload: %s -> HTTP %s (exit=%d, curl=%d)\n",
+                    entry->d_name, http_code[0] ? http_code : "?",
+                    status, WIFEXITED(status) ? WEXITSTATUS(status) : -1);
         }
     }
     closedir(dir);
 
-    printf("[MemInsight] Upload: %d file(s) uploaded to %s\n", uploaded, g_uploadUrl);
+    printf("[MemInsight] Upload: %d/%d file(s) uploaded to %s\n", uploaded, found, g_uploadUrl);
     return uploaded;
 }
 #endif /* ENABLE_HTTP_UPLOAD */
@@ -5130,11 +5133,6 @@ int main(int argc, char *argv[])
     }
 #endif
 
-    if (cli_upload_enable)
-    {
-        (void)touchFile(MEMINSIGHT_UPLOAD_MARKER_PATH);
-    }
-
 #ifdef ENABLE_HTTP_UPLOAD
     /* Resolve upload URL: CLI --upload-url > env MEMINSIGHT_UPLOAD_URL > compiled default */
     if (cli_upload_enable) {
@@ -5147,6 +5145,23 @@ int main(int argc, char *argv[])
         printf("[MemInsight] Upload URL: %s\n", g_uploadUrl);
     }
 #endif
+
+    /*
+     * Touch the S3 upload marker ONLY when NOT doing direct HTTP upload.
+     * When ENABLE_HTTP_UPLOAD is active and g_uploadUrl is set, our inline
+     * curl upload replaces the legacy S3 path — touching the marker would
+     * trigger the background S3 service which deletes files from the output
+     * directory before our upload can read them.
+     */
+    if (cli_upload_enable)
+    {
+#ifdef ENABLE_HTTP_UPLOAD
+        if (!g_uploadUrl)
+#endif
+        {
+            (void)touchFile(MEMINSIGHT_UPLOAD_MARKER_PATH);
+        }
+    }
 
     if (isConfigPresent)
     {
