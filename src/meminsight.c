@@ -3441,25 +3441,9 @@ static int mi_upload_t2_files(const char *outDir)
     printf("[MemInsight] Upload: Using cert %s (pass via %s)\n", cert_path, pass_file);
 
     /*
-     * Retrieve the cert password via GetConfigFile and pass it
-     * directly to curl via --pass in the command line.
+     * Retrieve the cert password via GetConfigFile piped to curl's
+     * --config to avoid exposing the password in the process list.
      */
-    char pass_cmd[256];
-    snprintf(pass_cmd, sizeof(pass_cmd),
-             "GetConfigFile \"%s\" stdout 2>/dev/null", pass_file);
-
-    char password[128] = {0};
-    FILE *pp = popen(pass_cmd, "r");
-    if (pp) {
-        if (fgets(password, sizeof(password), pp) != NULL)
-            password[strcspn(password, "\n\r")] = '\0';
-        pclose(pp);
-    }
-
-    if (!password[0]) {
-        fprintf(stderr, "[MemInsight] Upload: GetConfigFile returned empty password for %s\n",
-                pass_file);
-    }
 
     /* Scan directory for .t2.json files and upload each */
     DIR *dir = opendir(outDir);
@@ -3486,28 +3470,28 @@ static int mi_upload_t2_files(const char *outDir)
 
         found++;
 
+        /*
+         * Use GetConfigFile pipe pattern to keep password out of ps output:
+         *   GetConfigFile outputs raw password →
+         *   awk prepends "--pass " →
+         *   curl reads it via --config /dev/stdin
+         */
         char cmd[PATH_MAX + 512];
-        int n;
-        if (password[0]) {
-            n = snprintf(cmd, sizeof(cmd),
-                "curl --cert-type P12 --cert \"%s\" --pass \"%s\" "
-                "--tlsv1.2 -H \"Content-type: application/json\" "
-                "-X POST -d @\"%s\" \"%s\" "
-                "--connect-timeout 30 -m 30 -w '%%{http_code}' -s -o /dev/null 2>/dev/null",
-                cert_path, password, filepath, g_uploadUrl);
-        } else {
-            n = snprintf(cmd, sizeof(cmd),
-                "curl --cert-type P12 --cert \"%s\" "
-                "--tlsv1.2 -H \"Content-type: application/json\" "
-                "-X POST -d @\"%s\" \"%s\" "
-                "--connect-timeout 30 -m 30 -w '%%{http_code}' -s -o /dev/null 2>/dev/null",
-                cert_path, filepath, g_uploadUrl);
-        }
+        int n = snprintf(cmd, sizeof(cmd),
+            "/usr/bin/GetConfigFile \"%s\" stdout 2>/dev/null | "
+            "awk '{print \"--pass \" $0}' | "
+            "curl --cert-type P12 --cert \"%s\" --config /dev/stdin "
+            "--tlsv1.2 -H \"Content-type: application/json\" "
+            "-X POST -d @\"%s\" \"%s\" "
+            "--connect-timeout 30 -m 30 -w '%%{http_code}' -s -o /dev/null",
+            pass_file, cert_path, filepath, g_uploadUrl);
 
         if (n < 0 || (size_t)n >= sizeof(cmd)) {
             fprintf(stderr, "[MemInsight] Upload: Command too long for %s\n", entry->d_name);
             continue;
         }
+
+        printf("[MemInsight] Upload: CMD: %s\n", cmd);
 
         FILE *cp = popen(cmd, "r");
         if (!cp) {
