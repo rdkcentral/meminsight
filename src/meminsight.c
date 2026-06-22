@@ -3440,6 +3440,28 @@ static int mi_upload_t2_files(const char *outDir)
     }
     printf("[MemInsight] Upload: Using cert %s (pass via %s)\n", cert_path, pass_file);
 
+    /*
+     * Retrieve the cert password via GetConfigFile and pass it
+     * directly to curl via --pass in the command line.
+     */
+    char pass_cmd[256];
+    snprintf(pass_cmd, sizeof(pass_cmd),
+             "GetConfigFile \"%s\" stdout 2>/dev/null", pass_file);
+
+    char password[128] = {0};
+    FILE *pp = popen(pass_cmd, "r");
+    if (pp) {
+        if (fgets(password, sizeof(password), pp) != NULL)
+            password[strcspn(password, "\n\r")] = '\0';
+        pclose(pp);
+    }
+
+    if (!password[0]) {
+        fprintf(stderr, "[MemInsight] Upload: GetConfigFile returned empty password for %s\n",
+                pass_file);
+    }
+
+    /* Scan directory for .t2.json files and upload each */
     DIR *dir = opendir(outDir);
     if (!dir) {
         fprintf(stderr, "[MemInsight] Upload: Cannot open directory %s: %s\n",
@@ -3464,38 +3486,40 @@ static int mi_upload_t2_files(const char *outDir)
 
         found++;
 
-        /*
-         * Construct curl command with mTLS.
-         * GetConfigFile pipes the cert password via --config /dev/stdin.
-         * If GetConfigFile is not available, curl proceeds without --pass
-         * (the pipe produces empty input and --config reads nothing).
-         */
         char cmd[PATH_MAX + 512];
-        int n = snprintf(cmd, sizeof(cmd),
-            "GetConfigFile \"%s\" stdout 2>/dev/null | sed -e 's/^\\(.\\)/--pass \\1/' | "
-            "curl --cert-type P12 --cert \"%s\" --config /dev/stdin "
-            "--tlsv1.2 -H \"Content-type: application/json\" "
-            "-X POST -d @\"%s\" \"%s\" "
-            "--connect-timeout 30 -m 30 -w '%%{http_code}' -s -o /dev/null 2>/dev/null",
-            pass_file, cert_path, filepath, g_uploadUrl);
+        int n;
+        if (password[0]) {
+            n = snprintf(cmd, sizeof(cmd),
+                "curl --cert-type P12 --cert \"%s\" --pass \"%s\" "
+                "--tlsv1.2 -H \"Content-type: application/json\" "
+                "-X POST -d @\"%s\" \"%s\" "
+                "--connect-timeout 30 -m 30 -w '%%{http_code}' -s -o /dev/null 2>/dev/null",
+                cert_path, password, filepath, g_uploadUrl);
+        } else {
+            n = snprintf(cmd, sizeof(cmd),
+                "curl --cert-type P12 --cert \"%s\" "
+                "--tlsv1.2 -H \"Content-type: application/json\" "
+                "-X POST -d @\"%s\" \"%s\" "
+                "--connect-timeout 30 -m 30 -w '%%{http_code}' -s -o /dev/null 2>/dev/null",
+                cert_path, filepath, g_uploadUrl);
+        }
 
         if (n < 0 || (size_t)n >= sizeof(cmd)) {
             fprintf(stderr, "[MemInsight] Upload: Command too long for %s\n", entry->d_name);
             continue;
         }
 
-        FILE *pp = popen(cmd, "r");
-        if (!pp) {
+        FILE *cp = popen(cmd, "r");
+        if (!cp) {
             fprintf(stderr, "[MemInsight] Upload: popen failed for %s\n", entry->d_name);
             continue;
         }
 
         char http_code[16] = {0};
-        if (fgets(http_code, sizeof(http_code), pp) != NULL) {
-            /* Trim newline */
+        if (fgets(http_code, sizeof(http_code), cp) != NULL) {
             http_code[strcspn(http_code, "\n")] = '\0';
         }
-        int status = pclose(pp);
+        int status = pclose(cp);
 
         int code = atoi(http_code);
         if (code >= 200 && code < 300) {
