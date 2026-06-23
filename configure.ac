@@ -88,7 +88,7 @@ AC_ARG_ENABLE([http-upload],
 
 AS_IF([test "x$enable_http_upload" = "xyes"], [
   AC_DEFINE([ENABLE_HTTP_UPLOAD], [1], [Define to enable HTTP upload via libcurl])
-  AC_CHECK_LIB([curl], [curl_easy_init], [],
+  PKG_CHECK_MODULES([CURL], [libcurl], [],
     [AC_MSG_ERROR([libcurl required for --enable-http-upload])])
 ])
 
