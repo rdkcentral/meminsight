@@ -29,8 +29,7 @@ meminsight_HEADERS = src/meminsight.h
 
 meminsight_LDADD = -ldl
 if ENABLE_HTTP_UPLOAD
-AM_CPPFLAGS += $(CURL_CFLAGS)
-meminsight_LDADD += $(CURL_LIBS)
+meminsight_LDADD += -lcurl
 endif
 if ENABLE_CERTSELECTOR
 meminsight_LDADD += -lRdkCertSelector -lrdkconfig

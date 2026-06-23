@@ -88,8 +88,6 @@ AC_ARG_ENABLE([http-upload],
 
 AS_IF([test "x$enable_http_upload" = "xyes"], [
   AC_DEFINE([ENABLE_HTTP_UPLOAD], [1], [Define to enable HTTP upload via libcurl])
-  PKG_CHECK_MODULES([CURL], [libcurl], [],
-    [AC_MSG_ERROR([libcurl required for --enable-http-upload])])
 ])
 
 # ---------------------------------------------------------------------------
@@ -107,11 +105,6 @@ AC_ARG_ENABLE([certselector],
 
 AS_IF([test "x$enable_certselector" = "xyes"], [
   AC_DEFINE([LIBRDKCERTSEL_BUILD], [1], [Define to link libRdkCertSelector directly])
-  AC_CHECK_LIB([rdkconfig], [rdkconfig_getStr], [],
-    [AC_MSG_ERROR([librdkconfig required for --enable-certselector])])
-  AC_CHECK_LIB([RdkCertSelector], [rdkcertselector_new], [],
-    [AC_MSG_ERROR([libRdkCertSelector required for --enable-certselector])],
-    [-lrdkconfig])
 ])
 
 AM_CONDITIONAL([ENABLE_CJSON], [test "x$enable_cjson" = "xyes"])
