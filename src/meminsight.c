@@ -3675,7 +3675,9 @@ static int mi_upload_t2_files(const char *outDir)
             continue;
 
         char filepath[PATH_MAX];
-        snprintf(filepath, sizeof(filepath), "%s/%s", outDir, entry->d_name);
+        int n = snprintf(filepath, sizeof(filepath), "%s/%s", outDir, entry->d_name);
+        if (n < 0 || (size_t)n >= sizeof(filepath))
+            continue;
         if (access(filepath, R_OK) != 0)
             continue;
 
