@@ -3478,14 +3478,16 @@ static int mi_upload_t2_files(const char *outDir)
          * curl writes HTTP code to a temp file via -w; system() returns the exit status.
          */
         char cmd[PATH_MAX + 512];
+        char err_out[PATH_MAX];
+        snprintf(err_out, sizeof(err_out), "%s/.mi_curl_err_%d", outDir, (int)getpid());
         int n = snprintf(cmd, sizeof(cmd),
             "/usr/bin/GetConfigFile \"%s\" stdout 2>/dev/null | "
             "awk '{print \"--pass \" $0}' | "
             "curl --cert-type P12 --cert \"%s\" --config /dev/stdin "
             "--tlsv1.2 -H \"Content-type: application/json\" "
             "-X POST -d @\"%s\" \"%s\" "
-            "--connect-timeout 30 -m 30 -w '%%{http_code}' -s -o /dev/null > \"%s\" 2>/dev/null",
-            pass_file, cert_path, filepath, g_uploadUrl, http_out);
+            "--connect-timeout 30 -m 30 -w '%%{http_code}' -s -o /dev/null > \"%s\" 2>\"%s\"",
+            pass_file, cert_path, filepath, g_uploadUrl, http_out, err_out);
 
         if (n < 0 || (size_t)n >= sizeof(cmd)) {
             fprintf(stderr, "[MemInsight] Upload: Command too long for %s\n", entry->d_name);
@@ -3511,7 +3513,16 @@ static int mi_upload_t2_files(const char *outDir)
         } else {
             fprintf(stderr, "[MemInsight] Upload: %s -> HTTP %s (curl=%d)\n",
                     entry->d_name, http_code[0] ? http_code : "?", curl_exit);
+            /* Print curl's stderr for diagnosis */
+            FILE *ef = fopen(err_out, "r");
+            if (ef) {
+                char errbuf[256];
+                while (fgets(errbuf, sizeof(errbuf), ef) != NULL)
+                    fprintf(stderr, "[MemInsight] Upload: curl-err: %s", errbuf);
+                fclose(ef);
+            }
         }
+        unlink(err_out);
     }
     closedir(dir);
     unlink(http_out);
