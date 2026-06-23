@@ -27,6 +27,14 @@ meminsight_HEADERS = src/meminsight.h
 
 # AM_CPPFLAGS = @CPPFLAGS@
 
+meminsight_LDADD = -ldl
+if ENABLE_HTTP_UPLOAD
+meminsight_LDADD += -lcurl
+endif
+if ENABLE_CERTSELECTOR
+meminsight_LDADD += -lRdkCertSelector -lrdkconfig
+endif
+
 # Add clean targets for better cleanup
 CLEANFILES = *.o *.lo *.la *.al *.so *.a
 DISTCLEANFILES = config.h config.h.in config.log config.status Makefile.in aclocal.m4 configure
