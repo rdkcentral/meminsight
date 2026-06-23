@@ -3437,24 +3437,6 @@ static size_t mi_curl_discard_cb(void *ptr, size_t size, size_t nmemb, void *use
 }
 
 /**
- * @brief Retrieve cert password via GetConfigFile (fallback when certselector unavailable).
- */
-static int mi_get_cert_password(const char *pass_file, char *out, size_t out_size)
-{
-    char cmd[256];
-    snprintf(cmd, sizeof(cmd), "/usr/bin/GetConfigFile \"%s\" stdout 2>/dev/null", pass_file);
-
-    FILE *pp = popen(cmd, "r");
-    if (!pp)
-        return -1;
-
-    if (fgets(out, (int)out_size, pp) != NULL)
-        out[strcspn(out, "\n\r")] = '\0';
-    pclose(pp);
-    return out[0] ? 0 : -1;
-}
-
-/**
  * @brief Upload a single file via libcurl with mTLS using certselector retry loop.
  *
  * @return HTTP response code (e.g. 200) or 0 on failure.
@@ -3541,70 +3523,9 @@ static int mi_curl_upload_file_certselector(const char *filepath, const char *ur
 #endif /* LIBRDKCERTSEL_BUILD */
 
 /**
- * @brief Upload a single file via libcurl with mTLS (fallback — no certselector).
- *
- * @return HTTP response code (e.g. 200) or 0 on failure.
- */
-static int mi_curl_upload_file_direct(const char *filepath, const char *url,
-                                      const char *cert_path, const char *password)
-{
-    FILE *fp = fopen(filepath, "r");
-    if (!fp) return 0;
-
-    fseek(fp, 0, SEEK_END);
-    long fsize = ftell(fp);
-    fseek(fp, 0, SEEK_SET);
-    if (fsize <= 0 || fsize > 2 * 1024 * 1024) { fclose(fp); return 0; }
-
-    char *payload = (char *)malloc((size_t)fsize + 1);
-    if (!payload) { fclose(fp); return 0; }
-    size_t nread = fread(payload, 1, (size_t)fsize, fp);
-    fclose(fp);
-    payload[nread] = '\0';
-
-    CURL *easy = curl_easy_init();
-    if (!easy) { free(payload); return 0; }
-
-    struct curl_slist *headers = NULL;
-    headers = curl_slist_append(headers, "Content-type: application/json");
-
-    curl_easy_setopt(easy, CURLOPT_URL, url);
-    curl_easy_setopt(easy, CURLOPT_POST, 1L);
-    curl_easy_setopt(easy, CURLOPT_POSTFIELDS, payload);
-    curl_easy_setopt(easy, CURLOPT_POSTFIELDSIZE, (long)nread);
-    curl_easy_setopt(easy, CURLOPT_HTTPHEADER, headers);
-
-    curl_easy_setopt(easy, CURLOPT_SSLCERTTYPE, "P12");
-    curl_easy_setopt(easy, CURLOPT_SSLCERT, cert_path);
-    if (password && password[0])
-        curl_easy_setopt(easy, CURLOPT_KEYPASSWD, password);
-    curl_easy_setopt(easy, CURLOPT_SSL_VERIFYPEER, 1L);
-    curl_easy_setopt(easy, CURLOPT_SSLVERSION, (long)CURL_SSLVERSION_TLSv1_2);
-    curl_easy_setopt(easy, CURLOPT_CONNECTTIMEOUT, 30L);
-    curl_easy_setopt(easy, CURLOPT_TIMEOUT, 30L);
-    curl_easy_setopt(easy, CURLOPT_NOSIGNAL, 1L);
-    curl_easy_setopt(easy, CURLOPT_WRITEFUNCTION, mi_curl_discard_cb);
-
-    CURLcode res = curl_easy_perform(easy);
-
-    long http_code = 0;
-    if (res == CURLE_OK)
-        curl_easy_getinfo(easy, CURLINFO_RESPONSE_CODE, &http_code);
-    else
-        fprintf(stderr, "[MemInsight] Upload: curl error (%d): %s\n",
-                res, curl_easy_strerror(res));
-
-    curl_slist_free_all(headers);
-    curl_easy_cleanup(easy);
-    free(payload);
-    return (int)http_code;
-}
-
-/**
  * @brief Scan output directory for *.t2.json files and POST each to T2 via libcurl.
  *
  * Uses rdkcertselector for cert selection and retry (same as telemetry).
- * Falls back to manual cert path + GetConfigFile if rdkcertselector unavailable.
  * Files are never deleted regardless of upload outcome.
  *
  * @param[in] outDir  Directory to scan for .t2.json files.
@@ -3619,40 +3540,18 @@ static int mi_upload_t2_files(const char *outDir)
     curl_global_init(CURL_GLOBAL_DEFAULT);
 
 #ifdef LIBRDKCERTSEL_BUILD
-    int use_certselector = 1;
     rdkcertselector_h certsel = rdkcertselector_new(NULL, NULL, "MTLS");
     if (!certsel) {
-        fprintf(stderr, "[MemInsight] Upload: rdkcertselector_new failed, using fallback.\n");
-        use_certselector = 0;
-    } else {
-        printf("[MemInsight] Upload: Using rdkcertselector for mTLS.\n");
+        fprintf(stderr, "[MemInsight] Upload: rdkcertselector_new failed, skipping upload.\n");
+        curl_global_cleanup();
+        return 0;
     }
+    printf("[MemInsight] Upload: Using rdkcertselector for mTLS.\n");
 #else
-    int use_certselector = 0;
+    fprintf(stderr, "[MemInsight] Upload: No cert selector available (not built with --enable-certselector), skipping.\n");
+    curl_global_cleanup();
+    return 0;
 #endif
-
-    const char *cert_path = NULL;
-    char password[128] = {0};
-
-    if (!use_certselector) {
-        /* Fallback: manual cert path + GetConfigFile password */
-        const char *pass_file = NULL;
-        if (access("/opt/certs/devicecert_1.pk12", F_OK) == 0) {
-            cert_path = "/opt/certs/devicecert_1.pk12";
-            pass_file = "/tmp/.cfgDynamicxpki";
-        } else if (access("/etc/ssl/certs/staticXpkiCrt.pk12", F_OK) == 0) {
-            cert_path = "/etc/ssl/certs/staticXpkiCrt.pk12";
-            pass_file = "/tmp/.cfgStaticxpki";
-        } else {
-            fprintf(stderr, "[MemInsight] Upload: No mTLS certificate found, skipping upload.\n");
-            curl_global_cleanup();
-            return 0;
-        }
-        if (mi_get_cert_password(pass_file, password, sizeof(password)) != 0)
-            fprintf(stderr, "[MemInsight] Upload: Warning: GetConfigFile returned empty password\n");
-        printf("[MemInsight] Upload: Using cert %s (password length=%d)\n",
-               cert_path, (int)strlen(password));
-    }
 
     /* Scan directory for .t2.json files and upload each */
     DIR *dir = opendir(outDir);
@@ -3660,7 +3559,7 @@ static int mi_upload_t2_files(const char *outDir)
         fprintf(stderr, "[MemInsight] Upload: Cannot open directory %s: %s\n",
                 outDir, strerror(errno));
 #ifdef LIBRDKCERTSEL_BUILD
-        if (certsel) rdkcertselector_free(&certsel);
+        rdkcertselector_free(&certsel);
 #endif
         curl_global_cleanup();
         return 0;
@@ -3682,14 +3581,11 @@ static int mi_upload_t2_files(const char *outDir)
             continue;
 
         found++;
-        int http_code;
-
 #ifdef LIBRDKCERTSEL_BUILD
-        if (use_certselector)
-            http_code = mi_curl_upload_file_certselector(filepath, g_uploadUrl, certsel);
-        else
+        int http_code = mi_curl_upload_file_certselector(filepath, g_uploadUrl, certsel);
+#else
+        int http_code = 0;
 #endif
-            http_code = mi_curl_upload_file_direct(filepath, g_uploadUrl, cert_path, password);
 
         if (http_code >= 200 && http_code < 300) {
             uploaded++;
@@ -3701,7 +3597,7 @@ static int mi_upload_t2_files(const char *outDir)
     closedir(dir);
 
 #ifdef LIBRDKCERTSEL_BUILD
-    if (certsel) rdkcertselector_free(&certsel);
+    rdkcertselector_free(&certsel);
 #endif
     curl_global_cleanup();
 
