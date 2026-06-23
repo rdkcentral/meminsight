@@ -3441,9 +3441,12 @@ static int mi_upload_t2_files(const char *outDir)
     printf("[MemInsight] Upload: Using cert %s (pass via %s)\n", cert_path, pass_file);
 
     /*
-     * Retrieve the cert password via GetConfigFile piped to curl's
-     * --config to avoid exposing the password in the process list.
+     * Use GetConfigFile pipe pattern to keep password out of ps output.
+     * system() is used instead of popen() to avoid pipe fd interference
+     * with curl's --config /dev/stdin. HTTP code written to a temp file.
      */
+    char http_out[PATH_MAX];
+    snprintf(http_out, sizeof(http_out), "%s/.mi_http_out_%d", outDir, (int)getpid());
 
     /* Scan directory for .t2.json files and upload each */
     DIR *dir = opendir(outDir);
@@ -3471,10 +3474,8 @@ static int mi_upload_t2_files(const char *outDir)
         found++;
 
         /*
-         * Use GetConfigFile pipe pattern to keep password out of ps output:
-         *   GetConfigFile outputs raw password →
-         *   awk prepends "--pass " →
-         *   curl reads it via --config /dev/stdin
+         * Pipeline: GetConfigFile → awk prepends "--pass " → curl reads via --config /dev/stdin
+         * curl writes HTTP code to a temp file via -w; system() returns the exit status.
          */
         char cmd[PATH_MAX + 512];
         int n = snprintf(cmd, sizeof(cmd),
@@ -3483,39 +3484,37 @@ static int mi_upload_t2_files(const char *outDir)
             "curl --cert-type P12 --cert \"%s\" --config /dev/stdin "
             "--tlsv1.2 -H \"Content-type: application/json\" "
             "-X POST -d @\"%s\" \"%s\" "
-            "--connect-timeout 30 -m 30 -w '%%{http_code}' -s -o /dev/null",
-            pass_file, cert_path, filepath, g_uploadUrl);
+            "--connect-timeout 30 -m 30 -w '%%{http_code}' -s -o /dev/null > \"%s\" 2>/dev/null",
+            pass_file, cert_path, filepath, g_uploadUrl, http_out);
 
         if (n < 0 || (size_t)n >= sizeof(cmd)) {
             fprintf(stderr, "[MemInsight] Upload: Command too long for %s\n", entry->d_name);
             continue;
         }
 
-        printf("[MemInsight] Upload: CMD: %s\n", cmd);
+        int status = system(cmd);
+        int curl_exit = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
 
-        FILE *cp = popen(cmd, "r");
-        if (!cp) {
-            fprintf(stderr, "[MemInsight] Upload: popen failed for %s\n", entry->d_name);
-            continue;
-        }
-
+        /* Read HTTP code from temp file */
         char http_code[16] = {0};
-        if (fgets(http_code, sizeof(http_code), cp) != NULL) {
-            http_code[strcspn(http_code, "\n")] = '\0';
+        FILE *fp = fopen(http_out, "r");
+        if (fp) {
+            if (fgets(http_code, sizeof(http_code), fp) != NULL)
+                http_code[strcspn(http_code, "\n")] = '\0';
+            fclose(fp);
         }
-        int status = pclose(cp);
 
         int code = atoi(http_code);
         if (code >= 200 && code < 300) {
             uploaded++;
             printf("[MemInsight] Upload: %s -> HTTP %d\n", entry->d_name, code);
         } else {
-            fprintf(stderr, "[MemInsight] Upload: %s -> HTTP %s (exit=%d, curl=%d)\n",
-                    entry->d_name, http_code[0] ? http_code : "?",
-                    status, WIFEXITED(status) ? WEXITSTATUS(status) : -1);
+            fprintf(stderr, "[MemInsight] Upload: %s -> HTTP %s (curl=%d)\n",
+                    entry->d_name, http_code[0] ? http_code : "?", curl_exit);
         }
     }
     closedir(dir);
+    unlink(http_out);
 
     printf("[MemInsight] Upload: %d/%d file(s) uploaded to %s\n", uploaded, found, g_uploadUrl);
     return uploaded;
