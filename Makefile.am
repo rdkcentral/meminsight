@@ -25,15 +25,14 @@ meminsight_SOURCES = src/meminsight.c
 meminsightdir = $(includedir)
 meminsight_HEADERS = src/meminsight.h
 
-# AM_CPPFLAGS = @CPPFLAGS@
+AM_CPPFLAGS = @CPPFLAGS@
+AM_LDFLAGS = @LDFLAGS@
 
 meminsight_LDADD = -ldl
-meminsight_LDFLAGS =
 if ENABLE_HTTP_UPLOAD
 meminsight_LDADD += -lcurl
 endif
 if ENABLE_CERTSELECTOR
-meminsight_LDFLAGS += -Wl,--no-as-needed
 meminsight_LDADD += -lRdkCertSelector -lrdkconfig -lrdklogger -lsecure_wrapper
 endif
 

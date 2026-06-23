@@ -101,7 +101,7 @@ AC_ARG_ENABLE([certselector],
     no)  enable_certselector=no  ;;
     *)   AC_MSG_ERROR([bad value ${enableval} for --enable-certselector]) ;;
    esac],
-  [enable_certselector=yes])
+  [enable_certselector=no])
 
 AS_IF([test "x$enable_certselector" = "xyes"], [
   AC_DEFINE([LIBRDKCERTSEL_BUILD], [1], [Define to link libRdkCertSelector directly])
