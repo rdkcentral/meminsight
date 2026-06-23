@@ -32,7 +32,7 @@ if ENABLE_HTTP_UPLOAD
 meminsight_LDADD += -lcurl
 endif
 if ENABLE_CERTSELECTOR
-meminsight_LDADD += -lRdkCertSelector -lrdkconfig
+meminsight_LDADD += -lRdkCertSelector -lrdkconfig -Wl,--no-as-needed -lrdklogger -Wl,--as-needed
 endif
 
 # Add clean targets for better cleanup
