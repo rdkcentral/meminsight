@@ -4702,111 +4702,123 @@ int writeT2Report(const char *filepath, const SetupInfo *setup, int iteration, i
     } \
 } while(0)
 
-    /* --- Metadata fields --- */
-    T2_ADD_STRING("FIRMWARE_NAME",  setup->fwName);
-    T2_ADD_STRING("MAC_ADDRESS",    setup->mac);
+    /* --- Standard T2 metadata --- */
+    T2_ADD_STRING("Profile_Name", "MEMINSIGHT_REPORT");
+    T2_ADD_STRING("Profile",      "RDKB");
+    T2_ADD_STRING("mac",          setup->mac);
+    T2_ADD_STRING("Version",      setup->fwName);
 
-    /* Timestamp and uptime fresh for this iteration */
+    /* Parse device.model, device.version, device.environment from firmware name.
+     * Format: MODEL_VERSION_ENVIRONMENT  e.g. CGM4331COM_DEV_stable2_20260610090917sdy_65318
+     * First token = model, second = version, rest = environment */
+    {
+        char fwCopy[256];
+        strncpy(fwCopy, setup->fwName, sizeof(fwCopy) - 1);
+        fwCopy[sizeof(fwCopy) - 1] = '\0';
+
+        char *model = fwCopy;
+        char *version = NULL;
+        char *environment = NULL;
+        char *first_sep = strchr(fwCopy, '_');
+        if (first_sep) {
+            *first_sep = '\0';
+            version = first_sep + 1;
+            char *second_sep = strchr(version, '_');
+            if (second_sep) {
+                *second_sep = '\0';
+                environment = second_sep + 1;
+            }
+        }
+        T2_ADD_STRING("device.model",       model);
+        T2_ADD_STRING("device.version",     version ? version : "");
+        T2_ADD_STRING("device.environment", environment ? environment : "");
+    }
+
+    /* Timestamp, Date, Uptime, Iteration */
     time_t timenow = time(NULL);
     struct tm *tm_info = localtime(&timenow);
     char ts[32] = {0};
+    char dateStr[16] = {0};
     strftime(ts, sizeof(ts), "%Y-%m-%d %H:%M:%S", tm_info);
-    T2_ADD_STRING("TIMESTAMP", ts);
+    strftime(dateStr, sizeof(dateStr), "%Y-%m-%d", tm_info);
+    T2_ADD_STRING("Time", ts);
+    T2_ADD_STRING("Date", dateStr);
 
     const char *uptime = getSystemUptime();
-    T2_ADD_STRING("UPTIME", uptime);
-    T2_ADD_STRING("KERNEL_VERSION", setup->kernelVersion);
-    T2_ADD_STRING("REPORT_VERSION", reportVersion);
-    T2_ADD_NUMBER("ITERATION",      iteration);
-    T2_ADD_NUMBER("RUN_ITERATIONS", iterations);
-    T2_ADD_NUMBER("RUN_INTERVAL",   interval);
-    T2_ADD_STRING("RUN_ID",         setup->runHash);
+    T2_ADD_STRING("Uptime", uptime);
 
-    /* --- meminfo as nested object --- */
+    {
+        char iterStr[16];
+        snprintf(iterStr, sizeof(iterStr), "%d", iteration);
+        T2_ADD_STRING("Iteration", iterStr);
+    }
+
+    /* --- meminfo as flat dot-notation keys: meminfo.MemTotal, meminfo.MemFree, etc. --- */
     {
         static const char *meminfoNeeded[] = {
-            "MemTotal", "MemFree", "MemAvailable", "Buffers", "Cached", "SwapCached",
-            "Active(anon)", "Inactive(anon)", "Active(file)", "Inactive(file)",
-            "SwapTotal", "SwapFree", "AnonPages", "Mapped", "Shmem", "Slab",
-            "KernelStack", "VmallocUsed", "CmaFree", "CmaTotal"
+            "MemTotal", "MemFree", "MemAvailable", "Buffers", "Cached",
+            "SwapTotal", "SwapFree", "Slab", "KernelStack"
         };
         const int fieldCount = (int)(sizeof(meminfoNeeded) / sizeof(meminfoNeeded[0]));
 
-        cJSON_t *meminfoObj = g_cjson.CreateObject();
-        if (meminfoObj) {
 #ifdef TESTME
-            FILE *meminfo = fopen((isTestMode) ? testMeminfo : MEMINFO_FILE, "r");
+        FILE *meminfo = fopen((isTestMode) ? testMeminfo : MEMINFO_FILE, "r");
 #else
-            FILE *meminfo = fopen(MEMINFO_FILE, "r");
+        FILE *meminfo = fopen(MEMINFO_FILE, "r");
 #endif
-            if (meminfo) {
-                char tmp[128], name[64];
-                unsigned long value;
-                while (fgets(tmp, sizeof(tmp), meminfo)) {
-                    if (sscanf(tmp, "%63s %lu kB", name, &value) == 2) {
-                        size_t len = strlen(name);
-                        if (len > 0 && name[len - 1] == ':')
-                            name[len - 1] = '\0';
-                        for (int i = 0; i < fieldCount; i++) {
-                            if (strcmp(name, meminfoNeeded[i]) == 0) {
-                                g_cjson.AddNumberToObject(meminfoObj, name, (double)value);
-                                break;
-                            }
+        if (meminfo) {
+            char tmp[128], name[64];
+            unsigned long value;
+            while (fgets(tmp, sizeof(tmp), meminfo)) {
+                if (sscanf(tmp, "%63s %lu kB", name, &value) == 2) {
+                    size_t len = strlen(name);
+                    if (len > 0 && name[len - 1] == ':')
+                        name[len - 1] = '\0';
+                    for (int i = 0; i < fieldCount; i++) {
+                        if (strcmp(name, meminfoNeeded[i]) == 0) {
+                            char dotKey[80];
+                            snprintf(dotKey, sizeof(dotKey), "meminfo.%s", name);
+                            T2_ADD_NUMBER(dotKey, value);
+                            break;
                         }
                     }
                 }
-                fclose(meminfo);
             }
-            /* Wrap in {"meminfo": {...}} and add to Report array */
-            cJSON_t *wrapper = g_cjson.CreateObject();
-            if (wrapper) {
-                g_cjson.AddItemToObject(wrapper, "meminfo", meminfoObj);
-                g_cjson.AddItemToArray(reportArray, wrapper);
-            } else {
-                g_cjson.Delete(meminfoObj);
-            }
+            fclose(meminfo);
         }
     }
 
-    /* --- cpustat as nested object --- */
+    /* --- cpu_stats as flat dot-notation: cpu_stats.user, cpu_stats.system, etc. --- */
     {
         static const char *fieldNames[] = {
             "user", "nice", "system", "idle", "iowait", "irq", "softirq", "steal"
         };
         const int fieldCount = 8;
 
-        cJSON_t *cpuObj = g_cjson.CreateObject();
-        if (cpuObj) {
 #ifdef TESTME
-            FILE *fp = fopen((isTestMode && testProcStat[0]) ? testProcStat : PROC_STAT_FILE, "r");
+        FILE *fp = fopen((isTestMode && testProcStat[0]) ? testProcStat : PROC_STAT_FILE, "r");
 #else
-            FILE *fp = fopen(PROC_STAT_FILE, "r");
+        FILE *fp = fopen(PROC_STAT_FILE, "r");
 #endif
-            if (fp) {
-                char line[256];
-                unsigned long fields[8] = {0};
-                int parsed = 0;
-                while (fgets(line, sizeof(line), fp)) {
-                    if (strncmp(line, "cpu ", 4) == 0) {
-                        parsed = sscanf(line + 4, "%lu %lu %lu %lu %lu %lu %lu %lu",
-                                        &fields[0], &fields[1], &fields[2], &fields[3],
-                                        &fields[4], &fields[5], &fields[6], &fields[7]);
-                        break;
-                    }
-                }
-                fclose(fp);
-                if (parsed >= 1) {
-                    for (int i = 0; i < fieldCount; i++) {
-                        g_cjson.AddNumberToObject(cpuObj, fieldNames[i], (double)fields[i]);
-                    }
+        if (fp) {
+            char line[256];
+            unsigned long fields[8] = {0};
+            int parsed = 0;
+            while (fgets(line, sizeof(line), fp)) {
+                if (strncmp(line, "cpu ", 4) == 0) {
+                    parsed = sscanf(line + 4, "%lu %lu %lu %lu %lu %lu %lu %lu",
+                                    &fields[0], &fields[1], &fields[2], &fields[3],
+                                    &fields[4], &fields[5], &fields[6], &fields[7]);
+                    break;
                 }
             }
-            cJSON_t *wrapper = g_cjson.CreateObject();
-            if (wrapper) {
-                g_cjson.AddItemToObject(wrapper, "cpustat", cpuObj);
-                g_cjson.AddItemToArray(reportArray, wrapper);
-            } else {
-                g_cjson.Delete(cpuObj);
+            fclose(fp);
+            if (parsed >= 1) {
+                for (int i = 0; i < fieldCount; i++) {
+                    char dotKey[64];
+                    snprintf(dotKey, sizeof(dotKey), "cpu_stats.%s", fieldNames[i]);
+                    T2_ADD_NUMBER(dotKey, fields[i]);
+                }
             }
         }
     }
@@ -4839,32 +4851,30 @@ int writeT2Report(const char *filepath, const SetupInfo *setup, int iteration, i
         }
     }
 
-    /* --- Processes as keyed objects: {"EXE_NAME": {"RSS":x,"PSS":y,...}} --- */
+    /* --- Processes as flat dot-notation: ProcessName.PSS, ProcessName.RSS, etc. --- */
     {
         Process_Info *cur = headProcessInfo;
         while (cur) {
-            if (cur->pid > 0) {  /* Skip synthetic "Total" if present */
-                cJSON_t *procObj = g_cjson.CreateObject();
-                if (procObj) {
-                    g_cjson.AddNumberToObject(procObj, "RSS",           (double)cur->rssTotal);
-                    g_cjson.AddNumberToObject(procObj, "PSS",           (double)cur->pssTotal);
-                    g_cjson.AddNumberToObject(procObj, "shared_clean",  (double)cur->shared_clean_total);
-                    g_cjson.AddNumberToObject(procObj, "private_clean", (double)cur->private_clean_total);
-                    g_cjson.AddNumberToObject(procObj, "private_dirty", (double)cur->private_dirty_total);
-                    g_cjson.AddNumberToObject(procObj, "swap_pss",      (double)cur->swap_pss_total);
-                    g_cjson.AddNumberToObject(procObj, "min_faults",    (double)cur->minFaults);
-                    g_cjson.AddNumberToObject(procObj, "maj_faults",    (double)cur->majFaults);
-                    g_cjson.AddNumberToObject(procObj, "cpu_time",      (double)cur->cputime);
+            if (cur->pid > 0) {
+                char dotKey[128];
 
-                    /* Wrap: {"ProcessName": {metrics}} */
-                    cJSON_t *wrapper = g_cjson.CreateObject();
-                    if (wrapper) {
-                        g_cjson.AddItemToObject(wrapper, cur->name, procObj);
-                        g_cjson.AddItemToArray(reportArray, wrapper);
-                    } else {
-                        g_cjson.Delete(procObj);
-                    }
-                }
+                snprintf(dotKey, sizeof(dotKey), "%s.PID", cur->name);
+                T2_ADD_NUMBER(dotKey, cur->pid);
+
+                snprintf(dotKey, sizeof(dotKey), "%s.RSS", cur->name);
+                T2_ADD_NUMBER(dotKey, cur->rssTotal);
+
+                snprintf(dotKey, sizeof(dotKey), "%s.PSS", cur->name);
+                T2_ADD_NUMBER(dotKey, cur->pssTotal);
+
+                snprintf(dotKey, sizeof(dotKey), "%s.CPU_TIME", cur->name);
+                T2_ADD_NUMBER(dotKey, cur->cputime);
+
+                snprintf(dotKey, sizeof(dotKey), "%s.MIN_FAULTS", cur->name);
+                T2_ADD_NUMBER(dotKey, cur->minFaults);
+
+                snprintf(dotKey, sizeof(dotKey), "%s.MAJ_FAULTS", cur->name);
+                T2_ADD_NUMBER(dotKey, cur->majFaults);
             }
             cur = cur->next;
         }
