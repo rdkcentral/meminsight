@@ -173,7 +173,7 @@ int g_backupArgPassed = 0;                 // 1 when --backup/-b is explicitly p
 
 #ifdef ENABLE_HTTP_UPLOAD
 #define DCM_PROPERTIES_FILE "/nvram/dcm.properties"
-#define DCM_URL_KEY "LOG_SERVER"
+#define DCM_URL_KEY "T2_UPLOAD_SERVER"
 static const char *g_uploadUrl = NULL; // CLI --upload-url or from dcm.properties
 static char g_dcmUrl[512] = {0};       // Buffer for URL read from dcm.properties
 
