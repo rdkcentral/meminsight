@@ -172,8 +172,53 @@ int g_backupCount = DEFAULT_BACKUP_COUNT;  // Number of report files handled by 
 int g_backupArgPassed = 0;                 // 1 when --backup/-b is explicitly provided, else 0
 
 #ifdef ENABLE_HTTP_UPLOAD
-#define DEFAULT_UPLOAD_URL "https://rdktel-oi.stb.r53.xcal.tv"
-static const char *g_uploadUrl = NULL; // Resolved at startup: CLI > env > default
+#define DCM_PROPERTIES_FILE "/nvram/dcm.properties"
+#define DCM_URL_KEY "LOG_SERVER"
+static const char *g_uploadUrl = NULL; // CLI --upload-url or from dcm.properties
+static char g_dcmUrl[512] = {0};       // Buffer for URL read from dcm.properties
+
+/**
+ * @brief Read upload URL from dcm.properties file.
+ * @return URL string (points to g_dcmUrl) or NULL if not found.
+ */
+static const char *mi_read_dcm_url(void)
+{
+    FILE *fp = fopen(DCM_PROPERTIES_FILE, "r");
+    if (!fp) {
+        fprintf(stderr, "[MemInsight] Upload: Cannot open %s\n", DCM_PROPERTIES_FILE);
+        return NULL;
+    }
+
+    char line[1024];
+    const size_t keylen = strlen(DCM_URL_KEY);
+    g_dcmUrl[0] = '\0';
+
+    while (fgets(line, sizeof(line), fp)) {
+        /* Skip comments and blank lines */
+        if (line[0] == '#' || line[0] == '\n')
+            continue;
+        if (strncmp(line, DCM_URL_KEY, keylen) == 0 && line[keylen] == '=') {
+            const char *val = line + keylen + 1;
+            /* Trim trailing whitespace/newline */
+            size_t len = strlen(val);
+            while (len > 0 && (val[len-1] == '\n' || val[len-1] == '\r' || val[len-1] == ' '))
+                len--;
+            if (len > 0 && len < sizeof(g_dcmUrl)) {
+                memcpy(g_dcmUrl, val, len);
+                g_dcmUrl[len] = '\0';
+            }
+            break;
+        }
+    }
+    fclose(fp);
+
+    if (g_dcmUrl[0]) {
+        printf("[MemInsight] Upload: URL from %s: %s\n", DCM_PROPERTIES_FILE, g_dcmUrl);
+        return g_dcmUrl;
+    }
+    fprintf(stderr, "[MemInsight] Upload: %s not found in %s\n", DCM_URL_KEY, DCM_PROPERTIES_FILE);
+    return NULL;
+}
 #endif
 
 typedef enum {
@@ -3533,8 +3578,17 @@ static int mi_curl_upload_file_certselector(const char *filepath, const char *ur
  */
 static int mi_upload_t2_files(const char *outDir)
 {
-    if (!g_uploadUrl || !outDir)
+    if (!outDir)
         return 0;
+
+    /* Resolve URL: CLI takes priority, otherwise read from dcm.properties each cycle */
+    const char *url = g_uploadUrl;
+    if (!url)
+        url = mi_read_dcm_url();
+    if (!url) {
+        fprintf(stderr, "[MemInsight] Upload: No upload URL available, skipping.\n");
+        return 0;
+    }
 
     /* Initialize libcurl */
     curl_global_init(CURL_GLOBAL_DEFAULT);
@@ -3582,7 +3636,7 @@ static int mi_upload_t2_files(const char *outDir)
 
         found++;
 #ifdef LIBRDKCERTSEL_BUILD
-        int http_code = mi_curl_upload_file_certselector(filepath, g_uploadUrl, certsel);
+        int http_code = mi_curl_upload_file_certselector(filepath, url, certsel);
 #else
         int http_code = 0;
 #endif
@@ -3601,7 +3655,7 @@ static int mi_upload_t2_files(const char *outDir)
 #endif
     curl_global_cleanup();
 
-    printf("[MemInsight] Upload: %d/%d file(s) uploaded to %s\n", uploaded, found, g_uploadUrl);
+    printf("[MemInsight] Upload: %d/%d file(s) uploaded to %s\n", uploaded, found, url);
     return uploaded;
 }
 #endif /* ENABLE_HTTP_UPLOAD */
@@ -3835,7 +3889,7 @@ int collectSystemMemoryStats(bool enableKThreads, const char *outDir, int iterat
     printf("\n---- Completed Data Capture ----\n");
 
 #ifdef ENABLE_HTTP_UPLOAD
-    if (upload_enabled && g_reportFormat == REPORT_T2 && g_uploadUrl)
+    if (upload_enabled && g_reportFormat == REPORT_T2)
         mi_upload_t2_files(setup.outputDir);
 #endif
 
@@ -4165,7 +4219,7 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, bool cli_out
     PRINT_INFO("\n---- Completed Data Capture ----\n");
 
 #ifdef ENABLE_HTTP_UPLOAD
-    if (upload_enabled && g_reportFormat == REPORT_T2 && g_uploadUrl)
+    if (upload_enabled && g_reportFormat == REPORT_T2)
         mi_upload_t2_files(setup.outputDir);
 #endif
 
@@ -5226,15 +5280,13 @@ int main(int argc, char *argv[])
 #endif
 
 #ifdef ENABLE_HTTP_UPLOAD
-    /* Resolve upload URL: CLI --upload-url > env MEMINSIGHT_UPLOAD_URL > compiled default */
+    /* Resolve upload URL: CLI --upload-url takes priority, otherwise read from dcm.properties each cycle */
     if (cli_upload_enable) {
-        if (cli_upload_url)
+        if (cli_upload_url) {
             g_uploadUrl = cli_upload_url;
-        else {
-            const char *env_url = getenv("MEMINSIGHT_UPLOAD_URL");
-            g_uploadUrl = env_url ? env_url : DEFAULT_UPLOAD_URL;
+            printf("[MemInsight] Upload URL (CLI): %s\n", g_uploadUrl);
         }
-        printf("[MemInsight] Upload URL: %s\n", g_uploadUrl);
+        /* If no CLI URL, g_uploadUrl stays NULL — mi_upload_t2_files will read dcm.properties */
     }
 #endif
 
