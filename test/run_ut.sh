@@ -1069,7 +1069,8 @@ if $MEM_BIN --help 2>&1 | grep -F "t2" >/dev/null 2>&1; then
            grep -F '"meminfo"' "$T2_FILE" >/dev/null 2>&1 && \
            grep -F '"MemTotal"' "$T2_FILE" >/dev/null 2>&1 && \
            grep -F '"cpu_stats"' "$T2_FILE" >/dev/null 2>&1 && \
-           grep -F '"processes"' "$T2_FILE" >/dev/null 2>&1 && \
+           grep -F '"PID"' "$T2_FILE" >/dev/null 2>&1 && \
+           grep -F '"PSS"' "$T2_FILE" >/dev/null 2>&1 && \
            grep -F '"mac"' "$T2_FILE" >/dev/null 2>&1; then
             echo "✓ $T2_DESC PASSED"
             echo "Output sample:"

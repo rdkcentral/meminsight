@@ -4758,7 +4758,9 @@ int writeT2Report(const char *filepath, const SetupInfo *setup, int iteration, i
     {
         static const char *meminfoNeeded[] = {
             "MemTotal", "MemFree", "MemAvailable", "Buffers", "Cached",
-            "SwapTotal", "SwapFree", "Slab", "KernelStack"
+            "SwapCached", "Active(anon)", "Inactive(anon)", "Active(file)",
+            "Inactive(file)", "SwapTotal", "SwapFree", "AnonPages", "Mapped",
+            "Shmem", "Slab", "KernelStack", "VmallocUsed"
         };
         const int fieldCount = (int)(sizeof(meminfoNeeded) / sizeof(meminfoNeeded[0]));
 
@@ -4799,12 +4801,14 @@ int writeT2Report(const char *filepath, const SetupInfo *setup, int iteration, i
         }
     }
 
-    /* --- cpu_stats as nested object --- */
+    /* --- cpu_stats as nested object with deltas --- */
     {
         static const char *fieldNames[] = {
             "user", "nice", "system", "idle", "iowait", "irq", "softirq", "steal"
         };
         const int fieldCount = 8;
+        static unsigned long prevCpu[8] = {0};
+        static int hasPrev = 0;
 
         cJSON_t *cpuObj = g_cjson.CreateObject();
 #ifdef TESTME
@@ -4829,6 +4833,30 @@ int writeT2Report(const char *filepath, const SetupInfo *setup, int iteration, i
                 for (int i = 0; i < fieldCount; i++) {
                     g_cjson.AddNumberToObject(cpuObj, fieldNames[i], (double)fields[i]);
                 }
+
+                /* Compute deltas */
+                unsigned long delta_user = 0, delta_system = 0, delta_idle = 0, delta_total = 0;
+                if (hasPrev) {
+                    delta_user = fields[0] - prevCpu[0];
+                    delta_system = fields[2] - prevCpu[2];
+                    delta_idle = fields[3] - prevCpu[3];
+                    for (int i = 0; i < fieldCount; i++)
+                        delta_total += (fields[i] - prevCpu[i]);
+                }
+                g_cjson.AddNumberToObject(cpuObj, "delta_user", (double)delta_user);
+                g_cjson.AddNumberToObject(cpuObj, "delta_system", (double)delta_system);
+                g_cjson.AddNumberToObject(cpuObj, "delta_idle", (double)delta_idle);
+                g_cjson.AddNumberToObject(cpuObj, "delta_total", (double)delta_total);
+
+                double cpu_percent = 0.0;
+                if (delta_total > 0)
+                    cpu_percent = (double)(delta_user + delta_system) / (double)delta_total * 100.0;
+                g_cjson.AddNumberToObject(cpuObj, "cpu_percent", cpu_percent);
+
+                /* Save current as previous for next iteration */
+                for (int i = 0; i < fieldCount; i++)
+                    prevCpu[i] = fields[i];
+                hasPrev = 1;
             }
         } else if (fp) {
             fclose(fp);
@@ -4872,34 +4900,84 @@ int writeT2Report(const char *filepath, const SetupInfo *setup, int iteration, i
         }
     }
 
-    /* --- Processes as nested array --- */
+    /* --- Processes as individually named objects with deltas --- */
     {
-        cJSON_t *procArray = g_cjson.CreateArray();
-        if (procArray) {
-            Process_Info *cur = headProcessInfo;
-            while (cur) {
-                if (cur->pid > 0) {
-                    cJSON_t *pObj = g_cjson.CreateObject();
-                    if (pObj) {
-                        g_cjson.AddStringToObject(pObj, "name", cur->name);
-                        g_cjson.AddNumberToObject(pObj, "PID", (double)cur->pid);
-                        g_cjson.AddNumberToObject(pObj, "RSS", (double)cur->rssTotal);
-                        g_cjson.AddNumberToObject(pObj, "PSS", (double)cur->pssTotal);
-                        g_cjson.AddNumberToObject(pObj, "CPU_TIME", (double)cur->cputime);
-                        g_cjson.AddNumberToObject(pObj, "MIN_FAULTS", (double)cur->minFaults);
-                        g_cjson.AddNumberToObject(pObj, "MAJ_FAULTS", (double)cur->majFaults);
-                        g_cjson.AddItemToArray(procArray, pObj);
+        /* Previous iteration storage for deltas */
+        typedef struct prev_proc {
+            char name[256];
+            unsigned long cputime;
+            unsigned long minFaults;
+            unsigned long majFaults;
+            struct prev_proc *next;
+        } PrevProc;
+
+        static PrevProc *prevList = NULL;
+
+        Process_Info *cur = headProcessInfo;
+        while (cur) {
+            if (cur->pid > 0) {
+                cJSON_t *pObj = g_cjson.CreateObject();
+                if (pObj) {
+                    g_cjson.AddNumberToObject(pObj, "PID", (double)cur->pid);
+                    g_cjson.AddNumberToObject(pObj, "RSS", (double)cur->rssTotal);
+                    g_cjson.AddNumberToObject(pObj, "PSS", (double)cur->pssTotal);
+                    g_cjson.AddNumberToObject(pObj, "SHARED_CLEAN", (double)cur->shared_clean_total);
+                    g_cjson.AddNumberToObject(pObj, "PRIVATE_CLEAN", (double)cur->private_clean_total);
+                    g_cjson.AddNumberToObject(pObj, "PRIVATE_DIRTY", (double)cur->private_dirty_total);
+                    g_cjson.AddNumberToObject(pObj, "SWAP_PSS", (double)cur->swap_pss_total);
+                    g_cjson.AddNumberToObject(pObj, "MIN_FAULTS", (double)cur->minFaults);
+                    g_cjson.AddNumberToObject(pObj, "MAJ_FAULTS", (double)cur->majFaults);
+                    g_cjson.AddNumberToObject(pObj, "CPU_TIME", (double)cur->cputime);
+
+                    /* Compute deltas from previous iteration */
+                    unsigned long delta_cpu = 0, delta_min = 0, delta_maj = 0;
+                    PrevProc *pp = prevList;
+                    while (pp) {
+                        if (strcmp(pp->name, cur->name) == 0) {
+                            delta_cpu = cur->cputime - pp->cputime;
+                            delta_min = cur->minFaults - pp->minFaults;
+                            delta_maj = cur->majFaults - pp->majFaults;
+                            break;
+                        }
+                        pp = pp->next;
+                    }
+                    g_cjson.AddNumberToObject(pObj, "delta_cpu_time", (double)delta_cpu);
+                    g_cjson.AddNumberToObject(pObj, "delta_min_faults", (double)delta_min);
+                    g_cjson.AddNumberToObject(pObj, "delta_maj_faults", (double)delta_maj);
+
+                    cJSON_t *wrapper = g_cjson.CreateObject();
+                    if (wrapper) {
+                        g_cjson.AddItemToObject(wrapper, cur->name, pObj);
+                        g_cjson.AddItemToArray(reportArray, wrapper);
+                    } else {
+                        g_cjson.Delete(pObj);
                     }
                 }
-                cur = cur->next;
             }
-            cJSON_t *wrapper = g_cjson.CreateObject();
-            if (wrapper) {
-                g_cjson.AddItemToObject(wrapper, "processes", procArray);
-                g_cjson.AddItemToArray(reportArray, wrapper);
-            } else {
-                g_cjson.Delete(procArray);
+            cur = cur->next;
+        }
+
+        /* Free previous list and rebuild from current */
+        while (prevList) {
+            PrevProc *tmp = prevList;
+            prevList = prevList->next;
+            free(tmp);
+        }
+        cur = headProcessInfo;
+        while (cur) {
+            if (cur->pid > 0) {
+                PrevProc *pp = (PrevProc *)malloc(sizeof(PrevProc));
+                if (pp) {
+                    strncpy(pp->name, cur->name, sizeof(pp->name) - 1);
+                    pp->name[sizeof(pp->name) - 1] = '\0';
+                    pp->cputime = cur->cputime;
+                    pp->minFaults = cur->minFaults;
+                    pp->majFaults = cur->majFaults;
+                    pp->next = prevList;
+                    prevList = pp;
+                }
             }
+            cur = cur->next;
         }
     }
 
