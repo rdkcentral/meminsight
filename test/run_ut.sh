@@ -1050,7 +1050,7 @@ rm -f "$META_MARKER"
 echo ""
 
 # T2 JSON output test (runs only when JSON support is compiled in)
-T2_DESC="Test 16: T2 format produces Report array with flat dot-notation keys"
+T2_DESC="Test 16: T2 format produces Report array with nested objects"
 T2_SMAP_FILE="test/1-non-zero-swap-entry/meminsight_testSmap.txt"
 T2_MEMINFO_FILE="test/1-non-zero-swap-entry/meminsight_testMeminfo.txt"
 
@@ -1066,17 +1066,17 @@ if $MEM_BIN --help 2>&1 | grep -F "t2" >/dev/null 2>&1; then
         T2_FILE=$(ls /tmp/meminsight/*.t2.json 2>/dev/null | head -n 1)
         if [ -n "$T2_FILE" ] && [ -f "$T2_FILE" ] && \
            grep -F '"Report"' "$T2_FILE" >/dev/null 2>&1 && \
-           grep -F '"meminfo.MemTotal"' "$T2_FILE" >/dev/null 2>&1 && \
-           grep -F '"cpu_stats.user"' "$T2_FILE" >/dev/null 2>&1 && \
-           grep -F '"bash.PSS"' "$T2_FILE" >/dev/null 2>&1 && \
-           grep -F '"mac"' "$T2_FILE" >/dev/null 2>&1 && \
-           ! grep -F '"processes"' "$T2_FILE" >/dev/null 2>&1; then
+           grep -F '"meminfo"' "$T2_FILE" >/dev/null 2>&1 && \
+           grep -F '"MemTotal"' "$T2_FILE" >/dev/null 2>&1 && \
+           grep -F '"cpu_stats"' "$T2_FILE" >/dev/null 2>&1 && \
+           grep -F '"processes"' "$T2_FILE" >/dev/null 2>&1 && \
+           grep -F '"mac"' "$T2_FILE" >/dev/null 2>&1; then
             echo "✓ $T2_DESC PASSED"
             echo "Output sample:"
             head -5 "$T2_FILE"
             echo "..."
         else
-            echo "✗ $T2_DESC FAILED (missing flat dot-notation keys)"
+            echo "✗ $T2_DESC FAILED (missing nested structure)"
             [ -n "$T2_FILE" ] && cat "$T2_FILE"
             TEST_FAILED=$((TEST_FAILED + 1))
         fi

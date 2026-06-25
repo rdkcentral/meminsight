@@ -4754,7 +4754,7 @@ int writeT2Report(const char *filepath, const SetupInfo *setup, int iteration, i
         T2_ADD_STRING("Iteration", iterStr);
     }
 
-    /* --- meminfo as flat dot-notation keys: meminfo.MemTotal, meminfo.MemFree, etc. --- */
+    /* --- meminfo as nested object --- */
     {
         static const char *meminfoNeeded[] = {
             "MemTotal", "MemFree", "MemAvailable", "Buffers", "Cached",
@@ -4762,12 +4762,13 @@ int writeT2Report(const char *filepath, const SetupInfo *setup, int iteration, i
         };
         const int fieldCount = (int)(sizeof(meminfoNeeded) / sizeof(meminfoNeeded[0]));
 
+        cJSON_t *meminfoObj = g_cjson.CreateObject();
 #ifdef TESTME
         FILE *meminfo = fopen((isTestMode) ? testMeminfo : MEMINFO_FILE, "r");
 #else
         FILE *meminfo = fopen(MEMINFO_FILE, "r");
 #endif
-        if (meminfo) {
+        if (meminfo && meminfoObj) {
             char tmp[128], name[64];
             unsigned long value;
             while (fgets(tmp, sizeof(tmp), meminfo)) {
@@ -4777,31 +4778,41 @@ int writeT2Report(const char *filepath, const SetupInfo *setup, int iteration, i
                         name[len - 1] = '\0';
                     for (int i = 0; i < fieldCount; i++) {
                         if (strcmp(name, meminfoNeeded[i]) == 0) {
-                            char dotKey[80];
-                            snprintf(dotKey, sizeof(dotKey), "meminfo.%s", name);
-                            T2_ADD_NUMBER(dotKey, value);
+                            g_cjson.AddNumberToObject(meminfoObj, name, (double)value);
                             break;
                         }
                     }
                 }
             }
             fclose(meminfo);
+        } else if (meminfo) {
+            fclose(meminfo);
+        }
+        if (meminfoObj) {
+            cJSON_t *wrapper = g_cjson.CreateObject();
+            if (wrapper) {
+                g_cjson.AddItemToObject(wrapper, "meminfo", meminfoObj);
+                g_cjson.AddItemToArray(reportArray, wrapper);
+            } else {
+                g_cjson.Delete(meminfoObj);
+            }
         }
     }
 
-    /* --- cpu_stats as flat dot-notation: cpu_stats.user, cpu_stats.system, etc. --- */
+    /* --- cpu_stats as nested object --- */
     {
         static const char *fieldNames[] = {
             "user", "nice", "system", "idle", "iowait", "irq", "softirq", "steal"
         };
         const int fieldCount = 8;
 
+        cJSON_t *cpuObj = g_cjson.CreateObject();
 #ifdef TESTME
         FILE *fp = fopen((isTestMode && testProcStat[0]) ? testProcStat : PROC_STAT_FILE, "r");
 #else
         FILE *fp = fopen(PROC_STAT_FILE, "r");
 #endif
-        if (fp) {
+        if (fp && cpuObj) {
             char line[256];
             unsigned long fields[8] = {0};
             int parsed = 0;
@@ -4816,10 +4827,19 @@ int writeT2Report(const char *filepath, const SetupInfo *setup, int iteration, i
             fclose(fp);
             if (parsed >= 1) {
                 for (int i = 0; i < fieldCount; i++) {
-                    char dotKey[64];
-                    snprintf(dotKey, sizeof(dotKey), "cpu_stats.%s", fieldNames[i]);
-                    T2_ADD_NUMBER(dotKey, fields[i]);
+                    g_cjson.AddNumberToObject(cpuObj, fieldNames[i], (double)fields[i]);
                 }
+            }
+        } else if (fp) {
+            fclose(fp);
+        }
+        if (cpuObj) {
+            cJSON_t *wrapper = g_cjson.CreateObject();
+            if (wrapper) {
+                g_cjson.AddItemToObject(wrapper, "cpu_stats", cpuObj);
+                g_cjson.AddItemToArray(reportArray, wrapper);
+            } else {
+                g_cjson.Delete(cpuObj);
             }
         }
     }
@@ -4852,32 +4872,34 @@ int writeT2Report(const char *filepath, const SetupInfo *setup, int iteration, i
         }
     }
 
-    /* --- Processes as flat dot-notation: ProcessName.PSS, ProcessName.RSS, etc. --- */
+    /* --- Processes as nested array --- */
     {
-        Process_Info *cur = headProcessInfo;
-        while (cur) {
-            if (cur->pid > 0) {
-                char dotKey[128];
-
-                snprintf(dotKey, sizeof(dotKey), "%s.PID", cur->name);
-                T2_ADD_NUMBER(dotKey, cur->pid);
-
-                snprintf(dotKey, sizeof(dotKey), "%s.RSS", cur->name);
-                T2_ADD_NUMBER(dotKey, cur->rssTotal);
-
-                snprintf(dotKey, sizeof(dotKey), "%s.PSS", cur->name);
-                T2_ADD_NUMBER(dotKey, cur->pssTotal);
-
-                snprintf(dotKey, sizeof(dotKey), "%s.CPU_TIME", cur->name);
-                T2_ADD_NUMBER(dotKey, cur->cputime);
-
-                snprintf(dotKey, sizeof(dotKey), "%s.MIN_FAULTS", cur->name);
-                T2_ADD_NUMBER(dotKey, cur->minFaults);
-
-                snprintf(dotKey, sizeof(dotKey), "%s.MAJ_FAULTS", cur->name);
-                T2_ADD_NUMBER(dotKey, cur->majFaults);
+        cJSON_t *procArray = g_cjson.CreateArray();
+        if (procArray) {
+            Process_Info *cur = headProcessInfo;
+            while (cur) {
+                if (cur->pid > 0) {
+                    cJSON_t *pObj = g_cjson.CreateObject();
+                    if (pObj) {
+                        g_cjson.AddStringToObject(pObj, "name", cur->name);
+                        g_cjson.AddNumberToObject(pObj, "PID", (double)cur->pid);
+                        g_cjson.AddNumberToObject(pObj, "RSS", (double)cur->rssTotal);
+                        g_cjson.AddNumberToObject(pObj, "PSS", (double)cur->pssTotal);
+                        g_cjson.AddNumberToObject(pObj, "CPU_TIME", (double)cur->cputime);
+                        g_cjson.AddNumberToObject(pObj, "MIN_FAULTS", (double)cur->minFaults);
+                        g_cjson.AddNumberToObject(pObj, "MAJ_FAULTS", (double)cur->majFaults);
+                        g_cjson.AddItemToArray(procArray, pObj);
+                    }
+                }
+                cur = cur->next;
             }
-            cur = cur->next;
+            cJSON_t *wrapper = g_cjson.CreateObject();
+            if (wrapper) {
+                g_cjson.AddItemToObject(wrapper, "processes", procArray);
+                g_cjson.AddItemToArray(reportArray, wrapper);
+            } else {
+                g_cjson.Delete(procArray);
+            }
         }
     }
 
