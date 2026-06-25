@@ -3529,6 +3529,7 @@ static int mi_curl_upload_file_certselector(const char *filepath, const char *ur
         if (!easy) { free(payload); return 0; }
 
         struct curl_slist *headers = NULL;
+        headers = curl_slist_append(headers, "Accept: application/json");
         headers = curl_slist_append(headers, "Content-type: application/json");
 
         curl_easy_setopt(easy, CURLOPT_URL, url);
