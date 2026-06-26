@@ -170,7 +170,15 @@ unsigned force_smaps = 0;                  // CLI override: force reading /proc/
 char gSMAPS_OR_ROLLUP[] = "smaps_rollup";  // Default source for process memory info (may be overridden by --smaps)
 int g_backupCount = DEFAULT_BACKUP_COUNT;  // Number of report files handled by pre-run backup policy (default: 30, max: 100)
 int g_backupArgPassed = 0;                 // 1 when --backup/-b is explicitly provided, else 0
-int g_topProcs = 5;                  // Top N processes by PSS for T2 report (default: 20)
+int g_topProcs = 5;                  // Top N processes by PSS for T2 report (default: 5)
+
+typedef enum {
+    SORT_BY_RSS = 0,
+    SORT_BY_PSS,
+    SORT_BY_CPU_TIME,
+    SORT_BY_DELTA_CPU_TIME
+} SortByField;
+static SortByField g_sortBy = SORT_BY_RSS;
 
 #ifdef ENABLE_HTTP_UPLOAD
 #define DCM_PROPERTIES_FILE "/nvram/dcm.properties"
@@ -3409,6 +3417,8 @@ void printHelpAndUsage(char *argv[], bool moreInfo, int returnCode)
     printf("      --upload-url <url>                Override T2 upload endpoint (default: env or built-in)\n");
 #endif
     printf("      --top-procs <N>                   Limit T2 report to top N processes by PSS (default: 5)\n");
+    printf("      --frag                            Enable fragmentation data collection (default: disabled)\n");
+    printf("      --sort-by <field>                 Sort T2 processes by: RSS (default), PSS, CPU_TIME, delta_cpu_time\n");
     printf("  -s, --smaps               Force /proc/<pid>/smaps (disable auto smaps_rollup detection)\n");
     printf("  -h, --help                            Show this help message and exit\n");
 #ifdef TESTME
@@ -4938,11 +4948,20 @@ int writeT2Report(const char *filepath, const SetupInfo *setup, int iteration, i
                 cur = cur->next;
             }
 
-            /* Sort descending by PSS (insertion sort) */
+            /* Sort descending by selected field (insertion sort) */
             for (int i = 1; i < totalProcs; i++) {
                 Process_Info *key = sortArr[i];
                 int j = i - 1;
-                while (j >= 0 && sortArr[j]->pssTotal < key->pssTotal) {
+                unsigned long keyVal = key->rssTotal;
+                if (g_sortBy == SORT_BY_PSS) keyVal = key->pssTotal;
+                else if (g_sortBy == SORT_BY_CPU_TIME) keyVal = key->cputime;
+                /* delta_cpu_time sort is handled below after delta computation */
+
+                while (j >= 0) {
+                    unsigned long jVal = sortArr[j]->rssTotal;
+                    if (g_sortBy == SORT_BY_PSS) jVal = sortArr[j]->pssTotal;
+                    else if (g_sortBy == SORT_BY_CPU_TIME) jVal = sortArr[j]->cputime;
+                    if (jVal >= keyVal) break;
                     sortArr[j + 1] = sortArr[j];
                     j--;
                 }
@@ -4952,6 +4971,37 @@ int writeT2Report(const char *filepath, const SetupInfo *setup, int iteration, i
             int limit = totalProcs;
             if (topLimit > 0 && topLimit < totalProcs)
                 limit = topLimit;
+
+            /* For delta_cpu_time sort, compute deltas first then re-sort */
+            unsigned long *deltaArr = NULL;
+            if (g_sortBy == SORT_BY_DELTA_CPU_TIME) {
+                deltaArr = (unsigned long *)calloc((size_t)totalProcs, sizeof(unsigned long));
+                if (deltaArr) {
+                    for (int i = 0; i < totalProcs; i++) {
+                        PrevProc *pp = prevList;
+                        while (pp) {
+                            if (strcmp(pp->name, sortArr[i]->name) == 0 && pp->pid == sortArr[i]->pid) {
+                                deltaArr[i] = sortArr[i]->cputime - pp->cputime;
+                                break;
+                            }
+                            pp = pp->next;
+                        }
+                    }
+                    /* Re-sort by delta_cpu_time descending */
+                    for (int i = 1; i < totalProcs; i++) {
+                        Process_Info *key = sortArr[i];
+                        unsigned long keyDelta = deltaArr[i];
+                        int j = i - 1;
+                        while (j >= 0 && deltaArr[j] < keyDelta) {
+                            sortArr[j + 1] = sortArr[j];
+                            deltaArr[j + 1] = deltaArr[j];
+                            j--;
+                        }
+                        sortArr[j + 1] = key;
+                        deltaArr[j + 1] = keyDelta;
+                    }
+                }
+            }
 
             for (int i = 0; i < limit; i++) {
                 Process_Info *p = sortArr[i];
@@ -4971,15 +5021,29 @@ int writeT2Report(const char *filepath, const SetupInfo *setup, int iteration, i
 
                 /* Compute deltas from previous iteration */
                 unsigned long delta_cpu = 0, delta_min = 0, delta_maj = 0;
-                PrevProc *pp = prevList;
-                while (pp) {
-                    if (strcmp(pp->name, p->name) == 0 && pp->pid == p->pid) {
-                        delta_cpu = p->cputime - pp->cputime;
-                        delta_min = p->minFaults - pp->minFaults;
-                        delta_maj = p->majFaults - pp->majFaults;
-                        break;
+                if (deltaArr && g_sortBy == SORT_BY_DELTA_CPU_TIME) {
+                    delta_cpu = deltaArr[i];
+                    /* Still need to compute delta_min/delta_maj */
+                    PrevProc *pp = prevList;
+                    while (pp) {
+                        if (strcmp(pp->name, p->name) == 0 && pp->pid == p->pid) {
+                            delta_min = p->minFaults - pp->minFaults;
+                            delta_maj = p->majFaults - pp->majFaults;
+                            break;
+                        }
+                        pp = pp->next;
                     }
-                    pp = pp->next;
+                } else {
+                    PrevProc *pp = prevList;
+                    while (pp) {
+                        if (strcmp(pp->name, p->name) == 0 && pp->pid == p->pid) {
+                            delta_cpu = p->cputime - pp->cputime;
+                            delta_min = p->minFaults - pp->minFaults;
+                            delta_maj = p->majFaults - pp->majFaults;
+                            break;
+                        }
+                        pp = pp->next;
+                    }
                 }
                 g_cjson.AddNumberToObject(pObj, "delta_cpu_time", (double)delta_cpu);
                 g_cjson.AddNumberToObject(pObj, "delta_min_faults", (double)delta_min);
@@ -4993,6 +5057,7 @@ int writeT2Report(const char *filepath, const SetupInfo *setup, int iteration, i
                     g_cjson.Delete(pObj);
                 }
             }
+            free(deltaArr);
             free(sortArr);
         }
 
@@ -5310,6 +5375,31 @@ int main(int argc, char *argv[])
             else
             {
                 PRINT_ERROR("Error: Missing count after --top-procs\n");
+                printHelpAndUsage(argv, false, 1);
+            }
+        }
+        else if (!strncmp(argv[i], "--sort-by", 9))
+        {
+            if (i + 1 < argc)
+            {
+                i++;
+                if (!strcasecmp(argv[i], "RSS"))
+                    g_sortBy = SORT_BY_RSS;
+                else if (!strcasecmp(argv[i], "PSS"))
+                    g_sortBy = SORT_BY_PSS;
+                else if (!strcasecmp(argv[i], "CPU_TIME"))
+                    g_sortBy = SORT_BY_CPU_TIME;
+                else if (!strcasecmp(argv[i], "delta_cpu_time"))
+                    g_sortBy = SORT_BY_DELTA_CPU_TIME;
+                else
+                {
+                    PRINT_ERROR("Error: Invalid --sort-by value '%s'. Use RSS, PSS, CPU_TIME, or delta_cpu_time\n", argv[i]);
+                    printHelpAndUsage(argv, false, 1);
+                }
+            }
+            else
+            {
+                PRINT_ERROR("Error: Missing field after --sort-by\n");
                 printHelpAndUsage(argv, false, 1);
             }
         }
