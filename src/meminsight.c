@@ -170,6 +170,7 @@ unsigned force_smaps = 0;                  // CLI override: force reading /proc/
 char gSMAPS_OR_ROLLUP[] = "smaps_rollup";  // Default source for process memory info (may be overridden by --smaps)
 int g_backupCount = DEFAULT_BACKUP_COUNT;  // Number of report files handled by pre-run backup policy (default: 30, max: 100)
 int g_backupArgPassed = 0;                 // 1 when --backup/-b is explicitly provided, else 0
+int g_topProcs = 5;                  // Top N processes by PSS for T2 report (default: 20)
 
 #ifdef ENABLE_HTTP_UPLOAD
 #define DCM_PROPERTIES_FILE "/nvram/dcm.properties"
@@ -3407,6 +3408,9 @@ void printHelpAndUsage(char *argv[], bool moreInfo, int returnCode)
 #ifdef ENABLE_HTTP_UPLOAD
     printf("      --upload-url <url>                Override T2 upload endpoint (default: env or built-in)\n");
 #endif
+    printf("      --top-procs <N>                   Limit T2 report to top N processes by PSS (default: 5)\n");
+    printf("  -s, --smaps               Force /proc/<pid>/smaps (disable auto smaps_rollup detection)\n");
+    printf("  -h, --help                            Show this help message and exit\n");
 #ifdef TESTME
     printf("  -t, --test <smapsFile> <meminfoFile> [buddyinfoFile] [pagetypeinfoFile] [statFile] [bandwidthFile]\n");
     printf("                                    Run in test mode using supplied sample files\n\n");
@@ -4900,11 +4904,12 @@ int writeT2Report(const char *filepath, const SetupInfo *setup, int iteration, i
         }
     }
 
-    /* --- Processes as individually named objects with deltas --- */
+    /* --- Top N processes by PSS as individually named objects with deltas --- */
     {
         /* Previous iteration storage for deltas */
         typedef struct prev_proc {
             char name[256];
+            unsigned pid;
             unsigned long cputime;
             unsigned long minFaults;
             unsigned long majFaults;
@@ -4913,51 +4918,85 @@ int writeT2Report(const char *filepath, const SetupInfo *setup, int iteration, i
 
         static PrevProc *prevList = NULL;
 
+        /* Use configured top-procs limit */
+        int topLimit = g_topProcs;
+
+        /* Collect all valid processes into array for sorting */
+        int totalProcs = 0;
         Process_Info *cur = headProcessInfo;
-        while (cur) {
-            if (cur->pid > 0) {
+        while (cur) { if (cur->pid > 0) totalProcs++; cur = cur->next; }
+
+        Process_Info **sortArr = NULL;
+        if (totalProcs > 0)
+            sortArr = (Process_Info **)malloc(sizeof(Process_Info *) * (size_t)totalProcs);
+
+        if (sortArr) {
+            int idx = 0;
+            cur = headProcessInfo;
+            while (cur) {
+                if (cur->pid > 0) sortArr[idx++] = cur;
+                cur = cur->next;
+            }
+
+            /* Sort descending by PSS (insertion sort) */
+            for (int i = 1; i < totalProcs; i++) {
+                Process_Info *key = sortArr[i];
+                int j = i - 1;
+                while (j >= 0 && sortArr[j]->pssTotal < key->pssTotal) {
+                    sortArr[j + 1] = sortArr[j];
+                    j--;
+                }
+                sortArr[j + 1] = key;
+            }
+
+            int limit = totalProcs;
+            if (topLimit > 0 && topLimit < totalProcs)
+                limit = topLimit;
+
+            for (int i = 0; i < limit; i++) {
+                Process_Info *p = sortArr[i];
                 cJSON_t *pObj = g_cjson.CreateObject();
-                if (pObj) {
-                    g_cjson.AddNumberToObject(pObj, "PID", (double)cur->pid);
-                    g_cjson.AddNumberToObject(pObj, "RSS", (double)cur->rssTotal);
-                    g_cjson.AddNumberToObject(pObj, "PSS", (double)cur->pssTotal);
-                    g_cjson.AddNumberToObject(pObj, "SHARED_CLEAN", (double)cur->shared_clean_total);
-                    g_cjson.AddNumberToObject(pObj, "PRIVATE_CLEAN", (double)cur->private_clean_total);
-                    g_cjson.AddNumberToObject(pObj, "PRIVATE_DIRTY", (double)cur->private_dirty_total);
-                    g_cjson.AddNumberToObject(pObj, "SWAP_PSS", (double)cur->swap_pss_total);
-                    g_cjson.AddNumberToObject(pObj, "MIN_FAULTS", (double)cur->minFaults);
-                    g_cjson.AddNumberToObject(pObj, "MAJ_FAULTS", (double)cur->majFaults);
-                    g_cjson.AddNumberToObject(pObj, "CPU_TIME", (double)cur->cputime);
+                if (!pObj) continue;
 
-                    /* Compute deltas from previous iteration */
-                    unsigned long delta_cpu = 0, delta_min = 0, delta_maj = 0;
-                    PrevProc *pp = prevList;
-                    while (pp) {
-                        if (strcmp(pp->name, cur->name) == 0) {
-                            delta_cpu = cur->cputime - pp->cputime;
-                            delta_min = cur->minFaults - pp->minFaults;
-                            delta_maj = cur->majFaults - pp->majFaults;
-                            break;
-                        }
-                        pp = pp->next;
-                    }
-                    g_cjson.AddNumberToObject(pObj, "delta_cpu_time", (double)delta_cpu);
-                    g_cjson.AddNumberToObject(pObj, "delta_min_faults", (double)delta_min);
-                    g_cjson.AddNumberToObject(pObj, "delta_maj_faults", (double)delta_maj);
+                g_cjson.AddNumberToObject(pObj, "PID", (double)p->pid);
+                g_cjson.AddNumberToObject(pObj, "RSS", (double)p->rssTotal);
+                g_cjson.AddNumberToObject(pObj, "PSS", (double)p->pssTotal);
+                g_cjson.AddNumberToObject(pObj, "SHARED_CLEAN", (double)p->shared_clean_total);
+                g_cjson.AddNumberToObject(pObj, "PRIVATE_CLEAN", (double)p->private_clean_total);
+                g_cjson.AddNumberToObject(pObj, "PRIVATE_DIRTY", (double)p->private_dirty_total);
+                g_cjson.AddNumberToObject(pObj, "SWAP_PSS", (double)p->swap_pss_total);
+                g_cjson.AddNumberToObject(pObj, "MIN_FAULTS", (double)p->minFaults);
+                g_cjson.AddNumberToObject(pObj, "MAJ_FAULTS", (double)p->majFaults);
+                g_cjson.AddNumberToObject(pObj, "CPU_TIME", (double)p->cputime);
 
-                    cJSON_t *wrapper = g_cjson.CreateObject();
-                    if (wrapper) {
-                        g_cjson.AddItemToObject(wrapper, cur->name, pObj);
-                        g_cjson.AddItemToArray(reportArray, wrapper);
-                    } else {
-                        g_cjson.Delete(pObj);
+                /* Compute deltas from previous iteration */
+                unsigned long delta_cpu = 0, delta_min = 0, delta_maj = 0;
+                PrevProc *pp = prevList;
+                while (pp) {
+                    if (strcmp(pp->name, p->name) == 0 && pp->pid == p->pid) {
+                        delta_cpu = p->cputime - pp->cputime;
+                        delta_min = p->minFaults - pp->minFaults;
+                        delta_maj = p->majFaults - pp->majFaults;
+                        break;
                     }
+                    pp = pp->next;
+                }
+                g_cjson.AddNumberToObject(pObj, "delta_cpu_time", (double)delta_cpu);
+                g_cjson.AddNumberToObject(pObj, "delta_min_faults", (double)delta_min);
+                g_cjson.AddNumberToObject(pObj, "delta_maj_faults", (double)delta_maj);
+
+                cJSON_t *wrapper = g_cjson.CreateObject();
+                if (wrapper) {
+                    g_cjson.AddItemToObject(wrapper, p->name, pObj);
+                    g_cjson.AddItemToArray(reportArray, wrapper);
+                } else {
+                    g_cjson.Delete(pObj);
                 }
             }
-            cur = cur->next;
+            free(sortArr);
         }
 
-        /* Free previous list and rebuild from current */
+        /* Free previous list and rebuild from current (all procs, not just top N) */
         while (prevList) {
             PrevProc *tmp = prevList;
             prevList = prevList->next;
@@ -4970,6 +5009,7 @@ int writeT2Report(const char *filepath, const SetupInfo *setup, int iteration, i
                 if (pp) {
                     strncpy(pp->name, cur->name, sizeof(pp->name) - 1);
                     pp->name[sizeof(pp->name) - 1] = '\0';
+                    pp->pid = cur->pid;
                     pp->cputime = cur->cputime;
                     pp->minFaults = cur->minFaults;
                     pp->majFaults = cur->majFaults;
@@ -5258,6 +5298,20 @@ int main(int argc, char *argv[])
         else if (!strncmp(argv[i], "--frag", 6))
         {
             g_CollectFragData = true;
+        }
+        else if (!strncmp(argv[i], "--top-procs", 11))
+        {
+            if (i + 1 < argc)
+            {
+                i++;
+                g_topProcs = atoi(argv[i]);
+                if (g_topProcs < 0) g_topProcs = 0;
+            }
+            else
+            {
+                PRINT_ERROR("Error: Missing count after --top-procs\n");
+                printHelpAndUsage(argv, false, 1);
+            }
         }
         else if (!strncmp(argv[i], "--fmt", 5))
         { // output format: csv or json
