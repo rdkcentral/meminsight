@@ -4773,8 +4773,7 @@ int writeT2Report(const char *filepath, const SetupInfo *setup, int iteration, i
         static const char *meminfoNeeded[] = {
             "MemTotal", "MemFree", "MemAvailable", "Buffers", "Cached",
             "SwapCached", "Active(anon)", "Inactive(anon)", "Active(file)",
-            "Inactive(file)", "SwapTotal", "SwapFree", "AnonPages", "Mapped",
-            "Shmem", "Slab", "KernelStack", "VmallocUsed"
+            "Inactive(file)", "SwapTotal", "SwapFree"
         };
         const int fieldCount = (int)(sizeof(meminfoNeeded) / sizeof(meminfoNeeded[0]));
 
@@ -4817,10 +4816,10 @@ int writeT2Report(const char *filepath, const SetupInfo *setup, int iteration, i
 
     /* --- cpu_stats as nested object with deltas --- */
     {
-        static const char *fieldNames[] = {
-            "user", "nice", "system", "idle", "iowait", "irq", "softirq", "steal"
-        };
+        static const int outputIdx[] = {0, 2, 3, 4}; /* user, system, idle, iowait */
+        static const char *outputNames[] = {"user", "system", "idle", "iowait"};
         const int fieldCount = 8;
+        const int outputCount = 4;
         static unsigned long prevCpu[8] = {0};
         static int hasPrev = 0;
 
@@ -4844,8 +4843,8 @@ int writeT2Report(const char *filepath, const SetupInfo *setup, int iteration, i
             }
             fclose(fp);
             if (parsed >= 1) {
-                for (int i = 0; i < fieldCount; i++) {
-                    g_cjson.AddNumberToObject(cpuObj, fieldNames[i], (double)fields[i]);
+                for (int i = 0; i < outputCount; i++) {
+                    g_cjson.AddNumberToObject(cpuObj, outputNames[i], (double)fields[outputIdx[i]]);
                 }
 
                 /* Compute deltas */
@@ -5015,39 +5014,25 @@ int writeT2Report(const char *filepath, const SetupInfo *setup, int iteration, i
                 g_cjson.AddNumberToObject(pObj, "PRIVATE_CLEAN", (double)p->private_clean_total);
                 g_cjson.AddNumberToObject(pObj, "PRIVATE_DIRTY", (double)p->private_dirty_total);
                 g_cjson.AddNumberToObject(pObj, "SWAP_PSS", (double)p->swap_pss_total);
-                g_cjson.AddNumberToObject(pObj, "MIN_FAULTS", (double)p->minFaults);
-                g_cjson.AddNumberToObject(pObj, "MAJ_FAULTS", (double)p->majFaults);
+
                 g_cjson.AddNumberToObject(pObj, "CPU_TIME", (double)p->cputime);
 
                 /* Compute deltas from previous iteration */
-                unsigned long delta_cpu = 0, delta_min = 0, delta_maj = 0;
+                unsigned long delta_cpu = 0;
                 if (deltaArr && g_sortBy == SORT_BY_DELTA_CPU_TIME) {
                     delta_cpu = deltaArr[i];
-                    /* Still need to compute delta_min/delta_maj */
-                    PrevProc *pp = prevList;
-                    while (pp) {
-                        if (strcmp(pp->name, p->name) == 0 && pp->pid == p->pid) {
-                            delta_min = p->minFaults - pp->minFaults;
-                            delta_maj = p->majFaults - pp->majFaults;
-                            break;
-                        }
-                        pp = pp->next;
-                    }
                 } else {
                     PrevProc *pp = prevList;
                     while (pp) {
                         if (strcmp(pp->name, p->name) == 0 && pp->pid == p->pid) {
                             delta_cpu = p->cputime - pp->cputime;
-                            delta_min = p->minFaults - pp->minFaults;
-                            delta_maj = p->majFaults - pp->majFaults;
                             break;
                         }
                         pp = pp->next;
                     }
                 }
                 g_cjson.AddNumberToObject(pObj, "delta_cpu_time", (double)delta_cpu);
-                g_cjson.AddNumberToObject(pObj, "delta_min_faults", (double)delta_min);
-                g_cjson.AddNumberToObject(pObj, "delta_maj_faults", (double)delta_maj);
+
 
                 cJSON_t *wrapper = g_cjson.CreateObject();
                 if (wrapper) {
