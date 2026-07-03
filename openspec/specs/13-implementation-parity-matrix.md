@@ -6,7 +6,7 @@ This document records the current implementation-to-spec parity verification for
 
 ## Verification timestamp
 
-- Date: 2026-05-26
+- Date: 2026-07-03
 - Verification basis: source scan of src/meminsight.c and existing openspec/specs capability files.
 
 ## Parity matrix
@@ -25,6 +25,7 @@ This document records the current implementation-to-spec parity verification for
 | C10 | 10-json-report-output-optional.md | loadCjson(), unloadCjson(), saveMeminfo_JSON(), saveFragmentationInfo_JSON(), writeProcessInfo_JSON(), writeJSONToFile(), main() |
 | C11 | 11-upload-and-state-files.md | writeConfigStore(), touchFile(), removeFileIfPresent(), main(), collectSystemMemoryStats(), handleConfigMode() |
 | C12 | 12-testme-fixture-mode.md | main(), testGetProcessInfos_Parse(), testGetProcessInfos(), getProcessInfos(), saveMeminfo(), selectFragmentationSource(), collectSystemMemoryStats() |
+| C14 | 14-system-cpu-stat-raw-collection.md | readSystemCpuStat(), saveSystemCpuStat(), saveSystemCpuStat_JSON(), main() |
 
 ## Verification result
 

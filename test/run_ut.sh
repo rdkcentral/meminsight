@@ -374,6 +374,91 @@ else
 fi
 echo ""
 
+# CPU stat section test using deterministic /proc/stat fixture
+CPU_DESC="Test 15: CPU stat raw section"
+CPU_SMAP_FILE="test/1-non-zero-swap-entry/meminsight_testSmap.txt"
+CPU_MEMINFO_FILE="test/1-non-zero-swap-entry/meminsight_testMeminfo.txt"
+CPU_BUDDY_FILE="test/6-buddyinfo-sample/meminsight_testBuddyinfo.txt"
+CPU_PGT_FILE="test/7-pagetypeinfo-sample/meminsight_testPagetypeinfo.txt"
+CPU_STAT_FILE="test/10-cpu-stat-sample/meminsight_testStat.txt"
+
+echo "------------------------------------------"
+echo "$CPU_DESC"
+echo "------------------------------------------"
+echo "Command: $MEM_BIN -o /tmp/meminsight -t $CPU_SMAP_FILE $CPU_MEMINFO_FILE $CPU_BUDDY_FILE $CPU_PGT_FILE $CPU_STAT_FILE"
+
+rm -rf /tmp/meminsight/*.csv
+
+if $MEM_BIN -o /tmp/meminsight -t "$CPU_SMAP_FILE" "$CPU_MEMINFO_FILE" "$CPU_BUDDY_FILE" "$CPU_PGT_FILE" "$CPU_STAT_FILE"; then
+    CSV_FILE=$(ls /tmp/meminsight/*.csv 2>/dev/null | head -n 1)
+    if [ -n "$CSV_FILE" ] && \
+       grep -F "CPUStat:" "$CSV_FILE" >/dev/null 2>&1 && \
+       grep -F "USER,NICE,SYSTEM,IDLE,IOWAIT,IRQ,SOFTIRQ,STEAL,GUEST,GUEST_NICE" "$CSV_FILE" >/dev/null 2>&1 && \
+       grep -F "30543,1668,49363,252716,1758,0,3528,0,0,0" "$CSV_FILE" >/dev/null 2>&1; then
+        echo "✓ $CPU_DESC PASSED"
+    else
+        echo "✗ $CPU_DESC FAILED (CPU section/header/value missing)"
+        [ -n "$CSV_FILE" ] && cat "$CSV_FILE"
+        TEST_FAILED=$((TEST_FAILED + 1))
+    fi
+else
+    echo "✗ $CPU_DESC FAILED (command execution failed)"
+    TEST_FAILED=$((TEST_FAILED + 1))
+fi
+echo ""
+
+# Persist directory archive test
+PERSIST_DESC="Test 16: persist-dir archives CSV output"
+PERSIST_DIR="/tmp/meminsight-persist"
+
+echo "------------------------------------------"
+echo "$PERSIST_DESC"
+echo "------------------------------------------"
+echo "Command: $MEM_BIN --persist-dir $PERSIST_DIR -o /tmp/meminsight -t $CPU_SMAP_FILE $CPU_MEMINFO_FILE $CPU_BUDDY_FILE $CPU_PGT_FILE $CPU_STAT_FILE"
+
+rm -rf /tmp/meminsight/*.csv "$PERSIST_DIR"
+mkdir -p "$PERSIST_DIR"
+
+if $MEM_BIN --persist-dir "$PERSIST_DIR" -o /tmp/meminsight -t "$CPU_SMAP_FILE" "$CPU_MEMINFO_FILE" "$CPU_BUDDY_FILE" "$CPU_PGT_FILE" "$CPU_STAT_FILE"; then
+    TAR_FILE=$(ls "$PERSIST_DIR"/*.tar.gz 2>/dev/null | head -n 1)
+    if [ -n "$TAR_FILE" ] && [ -f "$TAR_FILE" ]; then
+        echo "✓ $PERSIST_DESC PASSED"
+    else
+        echo "✗ $PERSIST_DESC FAILED (archive not created)"
+        TEST_FAILED=$((TEST_FAILED + 1))
+    fi
+else
+    echo "✗ $PERSIST_DESC FAILED (command execution failed)"
+    TEST_FAILED=$((TEST_FAILED + 1))
+fi
+echo ""
+
+# Persist directory must be ignored when upload mode is enabled
+PERSIST_UPLOAD_DESC="Test 17: persist-dir ignored when upload-enable is set"
+
+echo "------------------------------------------"
+echo "$PERSIST_UPLOAD_DESC"
+echo "------------------------------------------"
+echo "Command: $MEM_BIN --upload-enable --persist-dir $PERSIST_DIR -o /tmp/meminsight -t $CPU_SMAP_FILE $CPU_MEMINFO_FILE $CPU_BUDDY_FILE $CPU_PGT_FILE $CPU_STAT_FILE"
+
+rm -rf /tmp/meminsight/*.csv "$PERSIST_DIR"
+mkdir -p "$PERSIST_DIR"
+
+if $MEM_BIN --upload-enable --persist-dir "$PERSIST_DIR" -o /tmp/meminsight -t "$CPU_SMAP_FILE" "$CPU_MEMINFO_FILE" "$CPU_BUDDY_FILE" "$CPU_PGT_FILE" "$CPU_STAT_FILE"; then
+    TAR_FILE=$(ls "$PERSIST_DIR"/*.tar.gz 2>/dev/null | head -n 1)
+    if [ -z "$TAR_FILE" ]; then
+        echo "✓ $PERSIST_UPLOAD_DESC PASSED"
+    else
+        echo "✗ $PERSIST_UPLOAD_DESC FAILED (archive should not be created)"
+        ls -l "$PERSIST_DIR"
+        TEST_FAILED=$((TEST_FAILED + 1))
+    fi
+else
+    echo "✗ $PERSIST_UPLOAD_DESC FAILED (command execution failed)"
+    TEST_FAILED=$((TEST_FAILED + 1))
+fi
+echo ""
+
 # Summary
 echo "=========================================="
 echo "Test Summary"

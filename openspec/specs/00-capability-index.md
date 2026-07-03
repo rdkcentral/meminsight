@@ -20,6 +20,7 @@ Every listed capability has a corresponding specification entry in this director
 - C10: Optional JSON report output with runtime cJSON loading and CSV fallback -> 10-json-report-output-optional.md
 - C11: Upload marker and configstore state file behavior -> 11-upload-and-state-files.md
 - C12: TESTME fixture mode and parser regression checks -> 12-testme-fixture-mode.md
+- C14: System-wide CPU raw counter collection from /proc/stat -> 14-system-cpu-stat-raw-collection.md
 
 ## Canonical implementation references
 

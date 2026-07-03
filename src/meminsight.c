@@ -167,12 +167,22 @@ typedef enum {
 
 static FragmentationSource g_fragSource = FRAG_SRC_NONE;
 
+typedef struct {
+    unsigned long values[10];
+    int parsedCount;
+    bool available;
+} CpuStatSnapshot;
+
+static bool g_persistEnabled = false;
+static char g_persistDir[PATH_MAX] = {0};
+
 #ifdef TESTME
 unsigned isTestMode = 0;
 char testSmap[128];
 char testMeminfo[128];
 char testBuddyinfo[128];
 char testPagetypeinfo[128];
+char testStat[128];
 Process_Info processInfoTest;
 static int unitTestFailed = 0;
 #endif
@@ -752,6 +762,203 @@ static int parseUnsignedSeries(const char *start, unsigned long *values, int max
         p = end;
     }
     return count;
+}
+
+/**
+ * @brief Read aggregate CPU tick counters from /proc/stat's "cpu" line.
+ */
+static bool readSystemCpuStat(CpuStatSnapshot *snapshot)
+{
+    if (!snapshot)
+        return false;
+
+    memset(snapshot, 0, sizeof(*snapshot));
+
+    FILE *fp = NULL;
+#ifdef TESTME
+    if (isTestMode && testStat[0])
+        fp = fopen(testStat, "r");
+    else
+        fp = fopen(STAT_FILE, "r");
+#else
+    fp = fopen(STAT_FILE, "r");
+#endif
+    if (!fp)
+        return false;
+
+    char line[512];
+    while (fgets(line, sizeof(line), fp))
+    {
+        if (strncmp(line, "cpu", 3) != 0)
+            continue;
+        if (line[3] != ' ' && line[3] != '\t')
+            continue;
+
+        snapshot->parsedCount = parseUnsignedSeries(line + 3, snapshot->values, 10);
+        snapshot->available = (snapshot->parsedCount > 0);
+        fclose(fp);
+        return snapshot->available;
+    }
+
+    fclose(fp);
+    return false;
+}
+
+static void saveSystemCpuStat(FILE *out)
+{
+    if (!out)
+        return;
+
+    CpuStatSnapshot cpu = {0};
+    if (!readSystemCpuStat(&cpu))
+    {
+        fprintf(out, "%sparse_status,source_unavailable_or_parse_error\n", CSV_CPUSTAT_SECTION_HEADER);
+        return;
+    }
+
+    fprintf(out, "%s%s\n", CSV_CPUSTAT_SECTION_HEADER, CSV_CPUSTAT_HEADER);
+    fprintf(out, "%lu,%lu,%lu,%lu,%lu,%lu,%lu,%lu,%lu,%lu\n",
+            cpu.values[0], cpu.values[1], cpu.values[2], cpu.values[3], cpu.values[4],
+            cpu.values[5], cpu.values[6], cpu.values[7], cpu.values[8], cpu.values[9]);
+}
+
+#ifdef ENABLE_CJSON
+static void saveSystemCpuStat_JSON(cJSON_t *root)
+{
+    if (!root)
+        return;
+
+    CpuStatSnapshot cpu = {0};
+    cJSON_t *cpuObj = g_cjson.CreateObject();
+    if (!cpuObj)
+        return;
+
+    if (!readSystemCpuStat(&cpu))
+    {
+        g_cjson.AddStringToObject(cpuObj, "parse_status", "source_unavailable_or_parse_error");
+        g_cjson.AddItemToObject(root, "cpu_stat", cpuObj);
+        return;
+    }
+
+    g_cjson.AddNumberToObject(cpuObj, "user",       (double)cpu.values[0]);
+    g_cjson.AddNumberToObject(cpuObj, "nice",       (double)cpu.values[1]);
+    g_cjson.AddNumberToObject(cpuObj, "system",     (double)cpu.values[2]);
+    g_cjson.AddNumberToObject(cpuObj, "idle",       (double)cpu.values[3]);
+    g_cjson.AddNumberToObject(cpuObj, "iowait",     (double)cpu.values[4]);
+    g_cjson.AddNumberToObject(cpuObj, "irq",        (double)cpu.values[5]);
+    g_cjson.AddNumberToObject(cpuObj, "softirq",    (double)cpu.values[6]);
+    g_cjson.AddNumberToObject(cpuObj, "steal",      (double)cpu.values[7]);
+    g_cjson.AddNumberToObject(cpuObj, "guest",      (double)cpu.values[8]);
+    g_cjson.AddNumberToObject(cpuObj, "guest_nice", (double)cpu.values[9]);
+    g_cjson.AddItemToObject(root, "cpu_stat", cpuObj);
+}
+#endif
+
+static bool pathEndsWithCsv(const char *name)
+{
+    size_t len = strlen(name);
+    return (len >= 4 && strcmp(name + len - 4, ".csv") == 0);
+}
+
+static bool outputDirHasCsvReports(const char *dirPath)
+{
+    DIR *dir = opendir(dirPath);
+    if (!dir)
+        return false;
+
+    struct dirent *entry;
+    while ((entry = readdir(dir)) != NULL)
+    {
+        if (entry->d_name[0] == '.')
+            continue;
+        if (pathEndsWithCsv(entry->d_name))
+        {
+            closedir(dir);
+            return true;
+        }
+    }
+
+    closedir(dir);
+    return false;
+}
+
+static bool ensurePersistDir(const char *dir)
+{
+    struct stat st = {0};
+    if (stat(dir, &st) == 0)
+    {
+        if (S_ISDIR(st.st_mode))
+            return true;
+        PRINT_MUST("Persist path '%s' exists but is not a directory\n", dir);
+        return false;
+    }
+
+    if (mkdir(dir, 0755) == -1)
+    {
+        PRINT_MUST("Failed to create persist directory '%s': %s\n", dir, strerror(errno));
+        return false;
+    }
+    return true;
+}
+
+static bool shellQuote(const char *src, char *dst, size_t dstSize)
+{
+    if (!src || !dst || dstSize < 3)
+        return false;
+    if (strchr(src, '\''))
+        return false;
+
+    int n = snprintf(dst, dstSize, "'%s'", src);
+    return (n > 0 && (size_t)n < dstSize);
+}
+
+static void persistCsvReports(const SetupInfo *setup, bool upload_enabled)
+{
+    if (!setup)
+        return;
+    if (!g_persistEnabled || upload_enabled)
+        return;
+
+    if (!ensurePersistDir(g_persistDir))
+        return;
+
+    if (!outputDirHasCsvReports(setup->outputDir))
+    {
+        PRINT_MUST("Persist mode: no CSV files found in '%s'; skipping archive\n", setup->outputDir);
+        return;
+    }
+
+    time_t now = time(NULL);
+    struct tm *tm_info = localtime(&now);
+    char ts[32] = {0};
+    strftime(ts, sizeof(ts), "%Y%m%d%H%M%S", tm_info);
+
+    char archivePath[PATH_MAX * 2] = {0};
+    snprintf(archivePath, sizeof(archivePath), "%s/%s_%s_%s.tar.gz",
+             g_persistDir, setup->mac, setup->runHash, ts);
+
+    char quotedOutDir[PATH_MAX * 2] = {0};
+    char quotedArchive[PATH_MAX * 3] = {0};
+    if (!shellQuote(setup->outputDir, quotedOutDir, sizeof(quotedOutDir)) ||
+        !shellQuote(archivePath, quotedArchive, sizeof(quotedArchive)))
+    {
+        PRINT_MUST("Persist mode: unsupported path for shell quoting; skipping archive\n");
+        return;
+    }
+
+    char cmd[PATH_MAX * 8] = {0};
+    snprintf(cmd, sizeof(cmd),
+             "cd %s && tar -czf %s -- *.csv >/dev/null 2>&1",
+             quotedOutDir, quotedArchive);
+
+    int rc = system(cmd);
+    if (rc != 0)
+    {
+        PRINT_MUST("Persist mode: failed to create archive '%s' (rc=%d)\n", archivePath, rc);
+        return;
+    }
+
+    PRINT_MUST("Persist mode: archived CSV reports to %s\n", archivePath);
 }
 
 /**
@@ -2665,7 +2872,7 @@ void printHelpAndUsage(char *argv[], bool moreInfo, int returnCode)
     printf("  -s, --smaps               Force /proc/<pid>/smaps (disable auto smaps_rollup detection)\n");
     printf("  -h, --help                            Show this help message and exit\n");
 #ifdef TESTME
-    printf("  -t, --test <smapsFile> <meminfoFile> [buddyinfoFile] [pagetypeinfoFile]\n");
+    printf("  -t, --test <smapsFile> <meminfoFile> [buddyinfoFile] [pagetypeinfoFile] [statFile]\n");
     printf("                                      Run in test mode using supplied sample files\n\n");
 #endif
 #ifdef ENABLE_CJSON
@@ -2853,6 +3060,7 @@ int collectSystemMemoryStats(bool enableKThreads, const char *outDir, int iterat
 
         if (g_reportFormat == REPORT_CSV) {
             saveMeminfo(output);
+            saveSystemCpuStat(output);
             if (g_CollectFragData) {
                 saveFragmentationInfo(output);
             }
@@ -2874,6 +3082,7 @@ int collectSystemMemoryStats(bool enableKThreads, const char *outDir, int iterat
 #ifdef ENABLE_CJSON
         else if (g_reportFormat == REPORT_JSON) {
             saveMeminfo_JSON(g_rootObject);
+            saveSystemCpuStat_JSON(g_rootObject);
             if (g_CollectFragData) {
                 saveFragmentationInfo_JSON(g_rootObject);
             }
@@ -2906,6 +3115,7 @@ int collectSystemMemoryStats(bool enableKThreads, const char *outDir, int iterat
             sleep(interval);
         }
     }
+    persistCsvReports(&setup, upload_enabled);
     printf("\n---- Completed Data Capture ----\n");
     removeFileIfPresent(MEMINSIGHT_INPROGRESS_FILE);
     return 0;
@@ -3154,6 +3364,7 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, bool cli_out
 
         if (g_reportFormat == REPORT_CSV) {
             saveMeminfo(output);
+            saveSystemCpuStat(output);
             if (g_CollectFragData) {
                 saveFragmentationInfo(output);
             }
@@ -3169,6 +3380,7 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, bool cli_out
 #ifdef ENABLE_CJSON
         else if (g_reportFormat == REPORT_JSON) {
             saveMeminfo_JSON(g_rootObject);
+            saveSystemCpuStat_JSON(g_rootObject);
             if (g_CollectFragData) {
                 saveFragmentationInfo_JSON(g_rootObject);
             }
@@ -3202,6 +3414,7 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, bool cli_out
     {
         free(config.whitelist);
     }
+    persistCsvReports(&setup, upload_enabled);
     PRINT_INFO("\n---- Completed Data Capture ----\n");
     removeFileIfPresent(MEMINSIGHT_INPROGRESS_FILE);
     return 0;
@@ -3634,6 +3847,18 @@ int main(int argc, char *argv[])
                             }
                         }
 
+                        if ((i + 1) < argc && argv[i + 1][0] != '-') {
+                            i++;
+                            testMapFd = fopen(argv[i], "r");
+                            if (testMapFd) {
+                                fclose(testMapFd);
+                                strncpy(testStat, argv[i], 128);
+                            } else {
+                                PRINT_ERROR("Test stat file %s open error %d [%s]\n", argv[i], errno, strerror(errno));
+                                printHelpAndUsage(argv, false, 1);
+                            }
+                        }
+
                         continue;
                     }
                     else {
@@ -3692,6 +3917,21 @@ int main(int argc, char *argv[])
         {
             cli_upload_enable = true;
             /* Compatibility flag: Handled via RFC handlers. */
+        }
+        else if (!strncmp(argv[i], "--persist-dir", 14))
+        {
+            if (i + 1 < argc)
+            {
+                i++;
+                strncpy(g_persistDir, argv[i], sizeof(g_persistDir) - 1);
+                g_persistDir[sizeof(g_persistDir) - 1] = '\0';
+                g_persistEnabled = true;
+            }
+            else
+            {
+                PRINT_ERROR("Error: Missing directory value after %s\n", argv[i]);
+                printHelpAndUsage(argv, false, 1);
+            }
         }
         else if (!strncmp(argv[i], "--upload-interval", 18))
         {
@@ -3775,6 +4015,13 @@ int main(int argc, char *argv[])
     {
         PRINT_ERROR("Error: --upload-interval requires --upload-enable\n");
         printHelpAndUsage(argv, false, 1);
+    }
+
+    if (cli_upload_enable && g_persistEnabled)
+    {
+        PRINT_MUST("Info: internal persistence mode disabled because upload mode is enabled\n");
+        g_persistEnabled = false;
+        g_persistDir[0] = '\0';
     }
 
     printf("\nExecuting: ");

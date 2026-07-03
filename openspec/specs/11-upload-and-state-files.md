@@ -24,4 +24,4 @@ Current configstore keys include uptime, kernel version, meminsight version, rep
 
 ## Source anchors
 
-writeConfigStore(), touchFile(), removeFileIfPresent(), main(), collectSystemMemoryStats(), handleConfigMode() in src/meminsight.c
+writeConfigStore(), touchFile(), removeFileIfPresent(), persistCsvReports(), main(), collectSystemMemoryStats(), handleConfigMode() in src/meminsight.c

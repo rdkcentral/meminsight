@@ -33,6 +33,7 @@
 - **Swap PSS** - Proportional swap usage
 - **Major Page Faults** - Hard page faults requiring disk I/O
 - **CPU Time** - Combined user and system CPU usage
+- **System CPU Raw Counters** - Aggregate `/proc/stat` `cpu` line values (server computes deltas/percentages)
 
 ### 🛠️ **Flexible Configuration**
 - **Process Whitelisting** - Monitor specific processes by name or PID
@@ -254,6 +255,14 @@ When `--upload-enable` is passed:
 - An in-progress sentinel `/tmp/.meminsight_inprogress` is created at run start and removed at completion
 - The systemd `meminsight-upload.path` unit watches for the marker and triggers the upload service
 
+### System-wide CPU Raw Counters
+
+meminsight captures the aggregate `cpu` line from `/proc/stat` and emits raw counters in fixed kernel order:
+
+`user,nice,system,idle,iowait,irq,softirq,steal,guest,guest_nice`
+
+No CPU percentage is computed by meminsight. Consumers should compute totals/deltas/percentages server-side.
+
 ## 📁 State Files
 
 Meminsight creates and manages the following state files:
@@ -269,7 +278,7 @@ Meminsight creates and manages the following state files:
 UPTIME=12345.67
 KERNEL_VERSION=5.15.0-91-generic
 MEMINSIGHT_VERSION=1.1.0
-REPORT_VERSION=1.1.0
+REPORT_VERSION=1.2.0
 RUN_ITERATIONS=10
 RUN_INTERVAL=60
 RUN_ID=17014563271234507
@@ -622,6 +631,8 @@ Every report file (CSV and JSON) begins with a metadata row containing the follo
 | `RUN_ID` | Per-run identifier built as `<epoch_seconds><pid><2-digit-random-suffix>` |
 
 The `RUN_ID` groups all report files from the same invocation together, making it possible to correlate data across iterations without relying on timestamps alone.
+
+Current report schema version is `1.2.0`.
 
 ## 📦 Integration Samples
 
