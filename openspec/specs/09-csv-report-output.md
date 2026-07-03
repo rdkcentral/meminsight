@@ -36,6 +36,8 @@ Current CPUStat fields are emitted in this exact order:
 - GUEST
 - GUEST_NICE
 
+When `/proc/stat` cannot be read or parsed, CPUStat section emission is skipped and report generation continues.
+
 ## Metadata fields
 
 Current metadata fields are:

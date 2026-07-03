@@ -18,6 +18,7 @@
 
 #include "config.h"
 #include "meminsight.h"
+#include <sys/wait.h>
 
 #ifdef ENABLE_CJSON
 #include <dlfcn.h>
@@ -168,7 +169,7 @@ typedef enum {
 static FragmentationSource g_fragSource = FRAG_SRC_NONE;
 
 typedef struct {
-    unsigned long values[10];
+    uint64_t values[10];
     int parsedCount;
     bool available;
 } CpuStatSnapshot;
@@ -764,6 +765,26 @@ static int parseUnsignedSeries(const char *start, unsigned long *values, int max
     return count;
 }
 
+static int parseUnsignedSeriesU64(const char *start, uint64_t *values, int maxValues)
+{
+    int count = 0;
+    const char *p = start;
+    while (*p && count < maxValues) {
+        while (*p == ' ' || *p == '\t')
+            p++;
+        if (*p == '\0' || *p == '\n' || *p == '\r')
+            break;
+
+        char *end = NULL;
+        unsigned long long v = strtoull(p, &end, 10);
+        if (end == p)
+            break;
+        values[count++] = (uint64_t)v;
+        p = end;
+    }
+    return count;
+}
+
 /**
  * @brief Read aggregate CPU tick counters from /proc/stat's "cpu" line.
  */
@@ -794,7 +815,7 @@ static bool readSystemCpuStat(CpuStatSnapshot *snapshot)
         if (line[3] != ' ' && line[3] != '\t')
             continue;
 
-        snapshot->parsedCount = parseUnsignedSeries(line + 3, snapshot->values, 10);
+        snapshot->parsedCount = parseUnsignedSeriesU64(line + 3, snapshot->values, 10);
         snapshot->available = (snapshot->parsedCount > 0);
         fclose(fp);
         return snapshot->available;
@@ -811,15 +832,15 @@ static void saveSystemCpuStat(FILE *out)
 
     CpuStatSnapshot cpu = {0};
     if (!readSystemCpuStat(&cpu))
-    {
-        fprintf(out, "%sparse_status,source_unavailable_or_parse_error\n", CSV_CPUSTAT_SECTION_HEADER);
         return;
-    }
 
     fprintf(out, "%s%s\n", CSV_CPUSTAT_SECTION_HEADER, CSV_CPUSTAT_HEADER);
-    fprintf(out, "%lu,%lu,%lu,%lu,%lu,%lu,%lu,%lu,%lu,%lu\n",
-            cpu.values[0], cpu.values[1], cpu.values[2], cpu.values[3], cpu.values[4],
-            cpu.values[5], cpu.values[6], cpu.values[7], cpu.values[8], cpu.values[9]);
+        fprintf(out, "%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu\n",
+            (unsigned long long)cpu.values[0], (unsigned long long)cpu.values[1],
+            (unsigned long long)cpu.values[2], (unsigned long long)cpu.values[3],
+            (unsigned long long)cpu.values[4], (unsigned long long)cpu.values[5],
+            (unsigned long long)cpu.values[6], (unsigned long long)cpu.values[7],
+            (unsigned long long)cpu.values[8], (unsigned long long)cpu.values[9]);
 }
 
 #ifdef ENABLE_CJSON
@@ -829,16 +850,12 @@ static void saveSystemCpuStat_JSON(cJSON_t *root)
         return;
 
     CpuStatSnapshot cpu = {0};
+    if (!readSystemCpuStat(&cpu))
+        return;
+
     cJSON_t *cpuObj = g_cjson.CreateObject();
     if (!cpuObj)
         return;
-
-    if (!readSystemCpuStat(&cpu))
-    {
-        g_cjson.AddStringToObject(cpuObj, "parse_status", "source_unavailable_or_parse_error");
-        g_cjson.AddItemToObject(root, "cpu_stat", cpuObj);
-        return;
-    }
 
     g_cjson.AddNumberToObject(cpuObj, "user",       (double)cpu.values[0]);
     g_cjson.AddNumberToObject(cpuObj, "nice",       (double)cpu.values[1]);
@@ -860,28 +877,6 @@ static bool pathEndsWithCsv(const char *name)
     return (len >= 4 && strcmp(name + len - 4, ".csv") == 0);
 }
 
-static bool outputDirHasCsvReports(const char *dirPath)
-{
-    DIR *dir = opendir(dirPath);
-    if (!dir)
-        return false;
-
-    struct dirent *entry;
-    while ((entry = readdir(dir)) != NULL)
-    {
-        if (entry->d_name[0] == '.')
-            continue;
-        if (pathEndsWithCsv(entry->d_name))
-        {
-            closedir(dir);
-            return true;
-        }
-    }
-
-    closedir(dir);
-    return false;
-}
-
 static bool ensurePersistDir(const char *dir)
 {
     struct stat st = {0};
@@ -901,15 +896,74 @@ static bool ensurePersistDir(const char *dir)
     return true;
 }
 
-static bool shellQuote(const char *src, char *dst, size_t dstSize)
+static void freeCsvNameList(char **names, size_t count)
 {
-    if (!src || !dst || dstSize < 3)
-        return false;
-    if (strchr(src, '\''))
+    if (!names)
+        return;
+    for (size_t i = 0; i < count; i++)
+        free(names[i]);
+    free(names);
+}
+
+static bool collectCsvBasenames(const char *dirPath, char ***outNames, size_t *outCount)
+{
+    if (!dirPath || !outNames || !outCount)
         return false;
 
-    int n = snprintf(dst, dstSize, "'%s'", src);
-    return (n > 0 && (size_t)n < dstSize);
+    *outNames = NULL;
+    *outCount = 0;
+
+    DIR *dir = opendir(dirPath);
+    if (!dir)
+        return false;
+
+    struct dirent *entry;
+    while ((entry = readdir(dir)) != NULL)
+    {
+        if (entry->d_name[0] == '.')
+            continue;
+        if (!pathEndsWithCsv(entry->d_name))
+            continue;
+
+        char *dup = strdup(entry->d_name);
+        if (!dup)
+        {
+            closedir(dir);
+            freeCsvNameList(*outNames, *outCount);
+            *outNames = NULL;
+            *outCount = 0;
+            return false;
+        }
+
+        char **tmp = realloc(*outNames, sizeof(char *) * (*outCount + 1));
+        if (!tmp)
+        {
+            free(dup);
+            closedir(dir);
+            freeCsvNameList(*outNames, *outCount);
+            *outNames = NULL;
+            *outCount = 0;
+            return false;
+        }
+
+        *outNames = tmp;
+        (*outNames)[*outCount] = dup;
+        (*outCount)++;
+    }
+
+    closedir(dir);
+    return true;
+}
+
+static const char *resolveTarPath(void)
+{
+    const char *candidates[] = { "/bin/tar", "/usr/bin/tar", NULL };
+    for (int i = 0; candidates[i] != NULL; i++)
+    {
+        if (access(candidates[i], X_OK) == 0)
+            return candidates[i];
+    }
+    return NULL;
 }
 
 static void persistCsvReports(const SetupInfo *setup, bool upload_enabled)
@@ -922,39 +976,102 @@ static void persistCsvReports(const SetupInfo *setup, bool upload_enabled)
     if (!ensurePersistDir(g_persistDir))
         return;
 
-    if (!outputDirHasCsvReports(setup->outputDir))
+    char **csvNames = NULL;
+    size_t csvCount = 0;
+    if (!collectCsvBasenames(setup->outputDir, &csvNames, &csvCount))
+    {
+        PRINT_MUST("Persist mode: failed to enumerate CSV files in '%s'; skipping archive\n", setup->outputDir);
+        return;
+    }
+
+    if (csvCount == 0)
     {
         PRINT_MUST("Persist mode: no CSV files found in '%s'; skipping archive\n", setup->outputDir);
+        freeCsvNameList(csvNames, csvCount);
         return;
     }
 
     time_t now = time(NULL);
-    struct tm *tm_info = localtime(&now);
+    struct tm tm_info;
     char ts[32] = {0};
-    strftime(ts, sizeof(ts), "%Y%m%d%H%M%S", tm_info);
-
-    char archivePath[PATH_MAX * 2] = {0};
-    snprintf(archivePath, sizeof(archivePath), "%s/%s_%s_%s.tar.gz",
-             g_persistDir, setup->mac, setup->runHash, ts);
-
-    char quotedOutDir[PATH_MAX * 2] = {0};
-    char quotedArchive[PATH_MAX * 3] = {0};
-    if (!shellQuote(setup->outputDir, quotedOutDir, sizeof(quotedOutDir)) ||
-        !shellQuote(archivePath, quotedArchive, sizeof(quotedArchive)))
+    if (!localtime_r(&now, &tm_info) ||
+        strftime(ts, sizeof(ts), "%Y%m%d%H%M%S", &tm_info) == 0)
     {
-        PRINT_MUST("Persist mode: unsupported path for shell quoting; skipping archive\n");
+        PRINT_MUST("Persist mode: failed to format timestamp; skipping archive\n");
         return;
     }
 
-    char cmd[PATH_MAX * 8] = {0};
-    snprintf(cmd, sizeof(cmd),
-             "cd %s && tar -czf %s -- *.csv >/dev/null 2>&1",
-             quotedOutDir, quotedArchive);
-
-    int rc = system(cmd);
-    if (rc != 0)
+    char archivePath[PATH_MAX * 2] = {0};
+    int archiveLen = snprintf(archivePath, sizeof(archivePath), "%s/%s_%s_%s.tar.gz",
+                              g_persistDir, setup->mac, setup->runHash, ts);
+    if (archiveLen < 0 || (size_t)archiveLen >= sizeof(archivePath))
     {
-        PRINT_MUST("Persist mode: failed to create archive '%s' (rc=%d)\n", archivePath, rc);
+        PRINT_MUST("Persist mode: archive path too long; skipping archive\n");
+        freeCsvNameList(csvNames, csvCount);
+        return;
+    }
+
+    const char *tarPath = resolveTarPath();
+    if (!tarPath)
+    {
+        PRINT_MUST("Persist mode: tar binary not found; skipping archive\n");
+        freeCsvNameList(csvNames, csvCount);
+        return;
+    }
+
+    size_t argvCount = 7 + csvCount;
+    char **tarArgv = calloc(argvCount, sizeof(char *));
+    if (!tarArgv)
+    {
+        PRINT_MUST("Persist mode: failed to allocate tar argv; skipping archive\n");
+        freeCsvNameList(csvNames, csvCount);
+        return;
+    }
+
+    tarArgv[0] = (char *)tarPath;
+    tarArgv[1] = "-C";
+    tarArgv[2] = (char *)setup->outputDir;
+    tarArgv[3] = "-czf";
+    tarArgv[4] = archivePath;
+    tarArgv[5] = "--";
+    for (size_t i = 0; i < csvCount; i++)
+        tarArgv[6 + i] = csvNames[i];
+    tarArgv[6 + csvCount] = NULL;
+
+    pid_t child = fork();
+    if (child == -1)
+    {
+        PRINT_MUST("Persist mode: fork failed (%s); skipping archive\n", strerror(errno));
+        free(tarArgv);
+        freeCsvNameList(csvNames, csvCount);
+        return;
+    }
+
+    if (child == 0)
+    {
+        execv(tarPath, tarArgv);
+        _exit(127);
+    }
+
+    int status = 0;
+    while (waitpid(child, &status, 0) == -1)
+    {
+        if (errno != EINTR)
+        {
+            PRINT_MUST("Persist mode: waitpid failed (%s)\n", strerror(errno));
+            free(tarArgv);
+            freeCsvNameList(csvNames, csvCount);
+            return;
+        }
+    }
+
+    free(tarArgv);
+    freeCsvNameList(csvNames, csvCount);
+
+    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
+    {
+        PRINT_MUST("Persist mode: failed to create archive '%s' (exit=%d)\n",
+                   archivePath, WIFEXITED(status) ? WEXITSTATUS(status) : -1);
         return;
     }
 
@@ -3852,7 +3969,8 @@ int main(int argc, char *argv[])
                             testMapFd = fopen(argv[i], "r");
                             if (testMapFd) {
                                 fclose(testMapFd);
-                                strncpy(testStat, argv[i], 128);
+                                strncpy(testStat, argv[i], sizeof(testStat) - 1);
+                                testStat[sizeof(testStat) - 1] = '\0';
                             } else {
                                 PRINT_ERROR("Test stat file %s open error %d [%s]\n", argv[i], errno, strerror(errno));
                                 printHelpAndUsage(argv, false, 1);
