@@ -1,4 +1,4 @@
-# C13 - Capability parity verification matrix (As-Is)
+# Implementation parity verification matrix (As-Is)
 
 ## Scope
 
@@ -6,7 +6,7 @@ This document records the current implementation-to-spec parity verification for
 
 ## Verification timestamp
 
-- Date: 2026-05-26
+- Date: 2026-07-06
 - Verification basis: source scan of src/meminsight.c and existing openspec/specs capability files.
 
 ## Parity matrix
@@ -20,11 +20,12 @@ This document records the current implementation-to-spec parity verification for
 | C05 | 05-smaps-and-smaps-rollup-parsing.md | getProcessInfos(), getProcessInfos_initial(), getProcessInfos_learnt(), getProcessInfos_rollup(), getProcessInfos_rollup_learnt() |
 | C06 | 06-meminfo-collection.md | saveMeminfo(), saveMeminfo_JSON() |
 | C07 | 07-fragmentation-collection.md | selectFragmentationSource(), saveFragmentationInfo(), writePagetypeInfoCSV(), writeBuddyinfoCSV(), saveFragmentationInfo_JSON() |
-| C08 | 08-ddr-bandwidth-collection.md | updateBandwidthAvailability(), collectBandwidthData() |
-| C09 | 09-csv-report-output.md | collectSystemMemoryStats(), handleConfigMode(), writeProcessInfo(), saveMeminfo(), saveFragmentationInfo(), collectBandwidthData() |
-| C10 | 10-json-report-output-optional.md | loadCjson(), unloadCjson(), saveMeminfo_JSON(), saveFragmentationInfo_JSON(), writeProcessInfo_JSON(), writeJSONToFile(), main() |
+| C08 | 08-ddr-bandwidth-collection.md | updateBandwidthAvailability(), readBandwidthData(), collectBandwidthData(), collectBandwidthData_JSON() |
+| C09 | 09-csv-report-output.md | collectSystemMemoryStats(), handleConfigMode(), writeProcessInfo(), saveMeminfo(), saveSystemCpuStat(), saveFragmentationInfo(), collectBandwidthData() |
+| C10 | 10-json-report-output-optional.md | loadCjson(), unloadCjson(), saveMeminfo_JSON(), saveSystemCpuStat_JSON(), collectBandwidthData_JSON(), saveFragmentationInfo_JSON(), writeProcessInfo_JSON(), writeJSONToFile(), main() |
 | C11 | 11-upload-and-state-files.md | writeConfigStore(), touchFile(), removeFileIfPresent(), main(), collectSystemMemoryStats(), handleConfigMode() |
 | C12 | 12-testme-fixture-mode.md | main(), testGetProcessInfos_Parse(), testGetProcessInfos(), getProcessInfos(), saveMeminfo(), selectFragmentationSource(), collectSystemMemoryStats() |
+| C13 | 14-system-cpu-stat-raw-collection.md | readSystemCpuStat(), saveSystemCpuStat(), saveSystemCpuStat_JSON(), main() |
 
 ## Verification result
 

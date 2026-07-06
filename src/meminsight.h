@@ -76,12 +76,12 @@
 This is used to ensure compatibility with older versions of the binary. */
 #define MEMINSIGHT_MAJOR_VERSION "1"
 #define MEMINSIGHT_MINOR_VERSION "1"
-#define MEMINSIGHT_PATCH_VERSION "1"
+#define MEMINSIGHT_PATCH_VERSION "2"
 
 /* REPORT_MAJOR_VERSION, REPORT_MINOR_VERSION, and REPORT_PATCH_VERSION are to track the report format, any changes in the report format should increment this version.
 This is used to ensure compatibility with older versions of the report parser. */
 #define REPORT_MAJOR_VERSION "1"
-#define REPORT_MINOR_VERSION "1"
+#define REPORT_MINOR_VERSION "2"
 #define REPORT_PATCH_VERSION "0"
 
 #ifndef DEVICE_INTERFACE_KEY
@@ -93,6 +93,7 @@ This is used to ensure compatibility with older versions of the report parser. *
 #define VERSION_FILE "/version.txt"
 #define DEVICE_PROP_FILE "/etc/device.properties"
 #define MEMINFO_FILE PROC_DIR "/meminfo"
+#define STAT_FILE PROC_DIR "/stat"
 #define UPTIME_FILE PROC_DIR "/uptime"
 #define BW_DDR_MODE_FILE "/sys/class/aml_ddr/mode"
 #ifndef BW_DDR_FILE
@@ -142,6 +143,9 @@ This is used to ensure compatibility with older versions of the report parser. *
 
 #define CSV_BANDWIDTH_HEADER "TotalBandwidth,UsagePercentage"
 #define CSV_BANDWIDTH_SECTION_HEADER "\nBandwidth:\n"
+
+#define CSV_CPUSTAT_SECTION_HEADER "\nCPUStat:\n"
+#define CSV_CPUSTAT_HEADER "USER,NICE,SYSTEM,IDLE,IOWAIT,IRQ,SOFTIRQ,STEAL,GUEST,GUEST_NICE"
 
 // -----------------------------
 // Data Structures
@@ -220,6 +224,7 @@ extern char testSmap[128];
 extern char testMeminfo[128];
 extern char testBuddyinfo[128];
 extern char testPagetypeinfo[128];
+extern char testStat[128];
 extern Process_Info processInfoTest;
 void checkAndFree();
 void testList();

@@ -22,6 +22,8 @@ Current JSON report includes:
 
 - top-level run metadata fields
 - meminfo object
+- cpu_stat object (raw aggregate `/proc/stat` fields) when source is available
+- bandwidth object when bandwidth data is available
 - optional fragmentation object when --frag
 - processes array with per-process rows
 - synthetic total row appended in processes array
@@ -33,4 +35,4 @@ Current JSON report includes:
 
 ## Source anchors
 
-loadCjson(), unloadCjson(), saveMeminfo_JSON(), saveFragmentationInfo_JSON(), writeProcessInfo_JSON(), writeJSONToFile(), main() in src/meminsight.c
+loadCjson(), unloadCjson(), saveMeminfo_JSON(), saveSystemCpuStat_JSON(), collectBandwidthData_JSON(), saveFragmentationInfo_JSON(), writeProcessInfo_JSON(), writeJSONToFile(), main() in src/meminsight.c

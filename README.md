@@ -33,6 +33,7 @@
 - **Swap PSS** - Proportional swap usage
 - **Major Page Faults** - Hard page faults requiring disk I/O
 - **CPU Time** - Combined user and system CPU usage
+- **System CPU Raw Counters** - Aggregate `/proc/stat` ticks for server-side delta and percentage calculation
 
 ### 🛠️ **Flexible Configuration**
 - **Process Whitelisting** - Monitor specific processes by name or PID
@@ -41,6 +42,7 @@
 - **Kernel Thread Support** - Optional inclusion of kernel threads
 - **Long-running Mode** - Extended monitoring with automatic intervals
 - **Fragmentation Data Capture** - Optional via `--frag`; `/proc/pagetypeinfo` preferred with `/proc/buddyinfo` fallback
+- **Bandwidth Reporting** - Optional DDR bandwidth data in CSV and JSON when platform data is available
 
 ### 🔧 **Advanced Capabilities**
 - **Network Interface Detection** - Automatic MAC address retrieval
@@ -212,7 +214,7 @@ OPTIONS:
       --frag                  Enable fragmentation data collection (default: disabled)
       --upload-enable         Enable upload infrastructure (creates marker file)
       --upload-interval SECS  Upload cadence in seconds (requires --upload-enable)
-   -t, --test SMAPS MEMINFO [BUDDYINFO] [PAGETYPEINFO]
+   -t, --test SMAPS MEMINFO [BUDDYINFO] [PAGETYPEINFO] [STAT]
                                Run in test mode using supplied sample files (requires TESTME build)
    -h, --help                  Show help message and exit
 ```
@@ -503,7 +505,7 @@ make install
 6. **In-progress sentinel** — Create `/tmp/.meminsight_inprogress` to mark an active run.
 7. **Iteration loop** — For each iteration:
    - Capture fresh timestamp and uptime.
-   - Collect system meminfo, process smaps stats.
+   - Collect system meminfo, optional aggregate CPU stat counters, process smaps stats.
    - If `--frag` is active, collect fragmentation data.
    - Write CSV/JSON report with full metadata row: `FIRMWARE_NAME, MAC_ADDRESS, TIMESTAMP, UPTIME, KERNEL_VERSION, REPORT_VERSION, ITERATION, RUN_ITERATIONS, RUN_INTERVAL, RUN_ID`.
 8. **Cleanup** — Remove in-progress sentinel on completion or error. Configstore persists for upload script reference.
@@ -524,6 +526,7 @@ make install
 | `writeConfigStore()` | Write/update persistent state file to `/tmp/.meminsight_configstore` | meminsight.c |
 | `touchFile()` | Create or truncate marker files | meminsight.c |
 | `removeFileIfPresent()` | Gracefully remove in-progress sentinel on exit | meminsight.c |
+| `readSystemCpuStat()` | Parse aggregate CPU counters from `/proc/stat` | meminsight.c |
 
 ---
 
@@ -622,6 +625,16 @@ Every report file (CSV and JSON) begins with a metadata row containing the follo
 | `RUN_ID` | Per-run identifier built as `<epoch_seconds><pid><2-digit-random-suffix>` |
 
 The `RUN_ID` groups all report files from the same invocation together, making it possible to correlate data across iterations without relying on timestamps alone.
+
+Current report schema version is `1.2.0`.
+
+When available, reports also include a `CPUStat` section in CSV and a `cpu_stat` object in JSON with raw counters in this order:
+`user, nice, system, idle, iowait, irq, softirq, steal, guest, guest_nice`.
+meminsight does not derive CPU percentages from these values.
+
+When available, reports also include bandwidth data: a `Bandwidth` section in CSV and a `bandwidth` object in JSON.
+
+Current CSV section order is: metadata, meminfo, CPUStat (when available), fragmentation (when enabled), bandwidth (when available), processes, total row.
 
 ## 📦 Integration Samples
 
