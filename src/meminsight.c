@@ -841,9 +841,13 @@ static bool readSystemCpuStat(CpuStatSnapshot *snapshot)
             continue;
 
         snapshot->parsedCount = parseUnsignedSeriesU64(line + 3, snapshot->values, 10);
-        snapshot->available = (snapshot->parsedCount > 0);
+        if (snapshot->parsedCount != 10) {
+            fclose(fp);
+            return false;
+        }
+        snapshot->available = true;
         fclose(fp);
-        return snapshot->available;
+        return true;
     }
 
     fclose(fp);

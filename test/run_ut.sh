@@ -405,6 +405,26 @@ else
     echo "✗ $CPU_DESC FAILED (command execution failed)"
     TEST_FAILED=$((TEST_FAILED + 1))
 fi
+
+# Also validate JSON cpu_stat emission when JSON support is available
+if $MEM_BIN --help 2>&1 | grep -F -- "--fmt" >/dev/null 2>&1; then
+    rm -rf /tmp/meminsight/*.json
+    if $MEM_BIN --fmt json -o /tmp/meminsight -t "$CPU_SMAP_FILE" "$CPU_MEMINFO_FILE" "$CPU_BUDDY_FILE" "$CPU_PGT_FILE" "$CPU_STAT_FILE"; then
+        JSON_FILE=$(ls /tmp/meminsight/*.json 2>/dev/null | head -n 1)
+        if [ -n "$JSON_FILE" ] && \
+           grep -F '"cpu_stat"' "$JSON_FILE" >/dev/null 2>&1 && \
+           grep -F '"user":30543' "$JSON_FILE" >/dev/null 2>&1; then
+            echo "✓ $CPU_DESC (JSON cpu_stat) PASSED"
+        else
+            echo "✗ $CPU_DESC (JSON cpu_stat) FAILED (cpu_stat missing/invalid)"
+            [ -n "$JSON_FILE" ] && cat "$JSON_FILE"
+            TEST_FAILED=$((TEST_FAILED + 1))
+        fi
+    else
+        echo "✗ $CPU_DESC (JSON cpu_stat) FAILED (command execution failed)"
+        TEST_FAILED=$((TEST_FAILED + 1))
+    fi
+fi
 echo ""
 
 # Summary
