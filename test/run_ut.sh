@@ -431,7 +431,7 @@ fi
 echo ""
 
 # JSON bandwidth fixture test with deterministic TESTME input
-BW_JSON_DESC="Test 17: JSON bandwidth fixture coverage"
+BW_JSON_DESC="Test 16: JSON bandwidth fixture coverage"
 BW_STAT_FILE="test/10-cpu-stat-sample/meminsight_testStat.txt"
 BW_FIXTURE_FILE="test/12-bandwidth-sample/meminsight_testBandwidth.txt"
 
@@ -464,7 +464,7 @@ if $MEM_BIN --help 2>&1 | grep -F -- "--fmt" >/dev/null 2>&1; then
     fi
     echo ""
 
-    BW_JSON_ABSENT_DESC="Test 18: JSON bandwidth omitted without fixture"
+    BW_JSON_ABSENT_DESC="Test 17: JSON bandwidth omitted without fixture"
     echo "------------------------------------------"
     echo "$BW_JSON_ABSENT_DESC"
     echo "------------------------------------------"
@@ -492,7 +492,7 @@ if $MEM_BIN --help 2>&1 | grep -F -- "--fmt" >/dev/null 2>&1; then
 fi
 
 # CPU stat compatibility test with legacy aggregate cpu line lacking guest fields
-CPU_COMPAT_DESC="Test 16: CPU stat legacy field-count compatibility"
+CPU_COMPAT_DESC="Test 18: CPU stat legacy field-count compatibility"
 CPU_COMPAT_STAT_FILE="test/11-cpu-stat-legacy-fields/meminsight_testStat.txt"
 
 echo "------------------------------------------"
