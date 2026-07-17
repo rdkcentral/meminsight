@@ -2929,6 +2929,7 @@ void printHelp(char *argv[])
 void printHelpAndUsage(char *argv[], bool moreInfo, int returnCode)
 {
     printf("%s (v%s)\n\n", MEMINSIGHT_BIN, memInsightVersion);
+    printf("Report version %s\n\n", reportVersion);
     printf("Usage: %s [OPTIONS]\n", MEMINSIGHT_BIN);
     printf("A lightweight, configurable tool for collecting detailed system and per-process memory and CPU statistics.\n\n");
 
@@ -2960,8 +2961,8 @@ void printHelpAndUsage(char *argv[], bool moreInfo, int returnCode)
 
         printf("Default behavior (no flags):\n");
         printf("  - Runs indefinite number of iterations, with an interval of 15 minutes, monitors all processes with log level INFO\n");
-        printf("  - Output: /tmp/<MAC>_<timestamp>_iter<iteration>_%s (CSV format)\n", CSV_FILE_NAME);
-        printf("  - Output: /tmp/<MAC>_<timestamp>_iter<iteration>_%s (JSON format, with --fmt json)\n\n", JSON_FILE_NAME);
+        printf("  - Output: %s/<MAC>_<timestamp>_iter<iteration>_%s (CSV format)\n", DEFAULT_OUT_DIR, CSV_FILE_NAME);
+        printf("  - Output: %s/<MAC>_<timestamp>_iter<iteration>_%s (JSON format, with --fmt json)\n\n", DEFAULT_OUT_DIR, JSON_FILE_NAME);
 
         printf("Example:\n");
         printf("  %s\n", argv[0]);
@@ -2975,7 +2976,7 @@ void printHelpAndUsage(char *argv[], bool moreInfo, int returnCode)
 #endif
 
         printf("Sample config file:\n");
-        printf("  process_whitelist=myapp,systemd,1234\n  output_dir=/var/log/\n  iterations=10\n  interval=60\n  log_level=INFO\n\n");
+        printf("process_whitelist=myapp,systemd,1234\noutput_dir=/var/log/\niterations=10\ninterval=60\nlog_level=INFO\n\n");
 
         printf("Notes:\n");
         printf("  - Supported config file extensions: %s\n", CONFIG_EXTN);
