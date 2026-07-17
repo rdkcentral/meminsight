@@ -214,7 +214,7 @@ OPTIONS:
       --frag                  Enable fragmentation data collection (default: disabled)
       --upload-enable         Enable upload infrastructure (creates marker file)
       --upload-interval SECS  Upload cadence in seconds (requires --upload-enable)
-   -t, --test SMAPS MEMINFO [BUDDYINFO] [PAGETYPEINFO] [STAT]
+   -t, --test SMAPS MEMINFO [BUDDYINFO] [PAGETYPEINFO] [STAT] [BANDWIDTH]
                                Run in test mode using supplied sample files (requires TESTME build)
    -h, --help                  Show help message and exit
 ```

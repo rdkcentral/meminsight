@@ -794,6 +794,7 @@ static int parseUnsignedSeries(const char *start, unsigned long *values, int max
 static int parseUnsignedSeriesU64(const char *start, uint64_t *values, int maxValues)
 {
     int count = 0;
+    bool parseError = false;
     const char *p = start;
     while (*p && count < maxValues) {
         while (*p == ' ' || *p == '\t')
@@ -801,14 +802,26 @@ static int parseUnsignedSeriesU64(const char *start, uint64_t *values, int maxVa
         if (*p == '\0' || *p == '\n' || *p == '\r')
             break;
 
-        char *end = NULL;
-        unsigned long long value = strtoull(p, &end, 10);
-        if (end == p)
+        if (*p == '-') {
+            parseError = true;
             break;
+        }
+
+        char *end = NULL;
+        errno = 0;
+        unsigned long long value = strtoull(p, &end, 10);
+        if (end == p) {
+            parseError = true;
+            break;
+        }
+        if (errno == ERANGE) {
+            parseError = true;
+            break;
+        }
         values[count++] = (uint64_t)value;
         p = end;
     }
-    return count;
+    return parseError ? -1 : count;
 }
 
 /**
