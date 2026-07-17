@@ -413,7 +413,7 @@ if $MEM_BIN --help 2>&1 | grep -F -- "--fmt" >/dev/null 2>&1; then
         JSON_FILE=$(ls /tmp/meminsight/*.json 2>/dev/null | head -n 1)
         if [ -n "$JSON_FILE" ] && \
            grep -F '"cpu_stat"' "$JSON_FILE" >/dev/null 2>&1 && \
-           grep -F '"user":30543' "$JSON_FILE" >/dev/null 2>&1; then
+           grep -Eq '"user"[[:space:]]*:[[:space:]]*30543' "$JSON_FILE" >/dev/null 2>&1; then
             echo "✓ $CPU_DESC (JSON cpu_stat) PASSED"
         else
             echo "✗ $CPU_DESC (JSON cpu_stat) FAILED (cpu_stat missing/invalid)"
@@ -424,6 +424,34 @@ if $MEM_BIN --help 2>&1 | grep -F -- "--fmt" >/dev/null 2>&1; then
         echo "✗ $CPU_DESC (JSON cpu_stat) FAILED (command execution failed)"
         TEST_FAILED=$((TEST_FAILED + 1))
     fi
+fi
+echo ""
+
+# CPU stat compatibility test with legacy aggregate cpu line lacking guest fields
+CPU_COMPAT_DESC="Test 16: CPU stat legacy field-count compatibility"
+CPU_COMPAT_STAT_FILE="test/11-cpu-stat-legacy-fields/meminsight_testStat.txt"
+
+echo "------------------------------------------"
+echo "$CPU_COMPAT_DESC"
+echo "------------------------------------------"
+echo "Command: $MEM_BIN -o /tmp/meminsight -t $CPU_SMAP_FILE $CPU_MEMINFO_FILE $CPU_BUDDY_FILE $CPU_PGT_FILE $CPU_COMPAT_STAT_FILE"
+
+rm -rf /tmp/meminsight/*.csv
+
+if $MEM_BIN -o /tmp/meminsight -t "$CPU_SMAP_FILE" "$CPU_MEMINFO_FILE" "$CPU_BUDDY_FILE" "$CPU_PGT_FILE" "$CPU_COMPAT_STAT_FILE"; then
+    CSV_FILE=$(ls /tmp/meminsight/*.csv 2>/dev/null | head -n 1)
+    if [ -n "$CSV_FILE" ] && \
+       grep -F "CPUStat:" "$CSV_FILE" >/dev/null 2>&1 && \
+       grep -F "30543,1668,49363,252716,1758,0,3528,0,0,0" "$CSV_FILE" >/dev/null 2>&1; then
+        echo "✓ $CPU_COMPAT_DESC PASSED"
+    else
+        echo "✗ $CPU_COMPAT_DESC FAILED (legacy CPUStat row missing/invalid)"
+        [ -n "$CSV_FILE" ] && cat "$CSV_FILE"
+        TEST_FAILED=$((TEST_FAILED + 1))
+    fi
+else
+    echo "✗ $CPU_COMPAT_DESC FAILED (command execution failed)"
+    TEST_FAILED=$((TEST_FAILED + 1))
 fi
 echo ""
 

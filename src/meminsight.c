@@ -808,7 +808,9 @@ static int parseUnsignedSeriesU64(const char *start, uint64_t *values, int maxVa
  *
  * Scans for the kernel aggregate `cpu` line and parses up to 10 counters in
  * fixed kernel order: user, nice, system, idle, iowait, irq, softirq, steal,
- * guest, guest_nice. Under TESTME, an optional stat fixture path can replace
+ * guest, guest_nice. Older kernels may omit trailing guest fields; in that
+ * case the missing counters remain zero-filled as long as the first 4 standard
+ * fields are present. Under TESTME, an optional stat fixture path can replace
  * the live procfs source.
  *
  * @param[out] snapshot  Populated CPU snapshot container.
@@ -816,6 +818,8 @@ static int parseUnsignedSeriesU64(const char *start, uint64_t *values, int maxVa
  */
 static bool readSystemCpuStat(CpuStatSnapshot *snapshot)
 {
+    const int minCpuFields = 4;
+
     if (!snapshot)
         return false;
 
@@ -841,7 +845,7 @@ static bool readSystemCpuStat(CpuStatSnapshot *snapshot)
             continue;
 
         snapshot->parsedCount = parseUnsignedSeriesU64(line + 3, snapshot->values, 10);
-        if (snapshot->parsedCount != 10) {
+        if (snapshot->parsedCount < minCpuFields) {
             fclose(fp);
             return false;
         }
@@ -1327,9 +1331,9 @@ void saveFragmentationInfo_JSON(cJSON_t *root)
  * @brief Read DDR bandwidth values from the platform sysfs interface.
  *
  * Ensures bandwidth monitoring mode is enabled, then reads the current total
- * bandwidth and usage percentage from the configured sysfs node. Failures are
- * logged and reported to the caller as a soft false return so report generation
- * can continue without bandwidth data.
+ * bandwidth and usage percentage from the configured sysfs node in the same
+ * collection call. Failures are logged and reported to the caller as a soft
+ * false return so report generation can continue without bandwidth data.
  *
  * @param[out] totalBandwidth   Receives parsed total bandwidth in KB/s.
  * @param[out] usagePercentage  Receives parsed usage percentage.
@@ -1340,6 +1344,7 @@ static bool readBandwidthData(unsigned long *totalBandwidth, float *usagePercent
     if (!totalBandwidth || !usagePercentage)
         return false;
 
+    bool modeEnabledNow = false;
     FILE *fp = NULL;
     char buffer[128] = {0};
     *totalBandwidth = 0;
@@ -1367,10 +1372,13 @@ static bool readBandwidthData(unsigned long *totalBandwidth, float *usagePercent
             fclose(fp);
             return false;
         }
+        modeEnabledNow = true;
         fclose(fp);
-        return false;
     }
-    fclose(fp);
+    else
+    {
+        fclose(fp);
+    }
 
     fp = fopen(BW_DDR_FILE, "r");
     if (!fp)
@@ -1386,6 +1394,8 @@ static bool readBandwidthData(unsigned long *totalBandwidth, float *usagePercent
         return true;
     }
 
+    if (modeEnabledNow)
+        PRINT_ERROR("DDR bandwidth monitoring was enabled, but no parseable sample was immediately available from %s\n", BW_DDR_FILE);
     PRINT_ERROR("Failed to parse bandwidth data from %s\n", BW_DDR_FILE);
     fclose(fp);
     return false;

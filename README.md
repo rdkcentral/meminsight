@@ -456,6 +456,17 @@ Fragmentation fixture coverage is also included via:
 - `test/6-buddyinfo-sample/meminsight_testBuddyinfo.txt`
 - `test/7-pagetypeinfo-sample/meminsight_testPagetypeinfo.txt`
 
+CPU stat fixture coverage includes:
+- `test/10-cpu-stat-sample/meminsight_testStat.txt` for a full 10-field aggregate `cpu` line
+- `test/11-cpu-stat-legacy-fields/meminsight_testStat.txt` for older kernels that omit trailing guest fields; meminsight now zero-fills the missing counters instead of skipping CPUStat output
+
+When JSON output is enabled, the unit tests validate `cpu_stat` content with whitespace-tolerant matching so pretty-printed JSON and minified JSON are both accepted.
+
+### CPUStat and Bandwidth Compatibility Notes
+
+- CPUStat collection accepts aggregate `/proc/stat` `cpu` lines with at least the first 4 counters (`user`, `nice`, `system`, `idle`). Missing trailing counters are emitted as `0` so CSV and JSON output keep the same 10-field schema.
+- DDR bandwidth collection enables monitoring mode when needed and still attempts to read a bandwidth sample in the same iteration. If the platform does not provide a parseable sample immediately, the section is skipped without terminating the run.
+
 ## 🏗️ Build System
 
 ### Autotools Configuration
