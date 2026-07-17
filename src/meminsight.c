@@ -804,7 +804,7 @@ static int parseUnsignedSeries(const char *start, unsigned long *values, int max
  * @param[in]  start      Pointer into a line of text to begin parsing.
  * @param[out] values     Caller-allocated array to receive parsed values.
  * @param[in]  maxValues  Maximum number of values to store in @p values.
- * @return Number of values successfully parsed.
+ * @return Number of values successfully parsed, or -1 when parsing fails.
  */
 static int parseUnsignedSeriesU64(const char *start, uint64_t *values, int maxValues)
 {
