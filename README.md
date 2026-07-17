@@ -439,7 +439,7 @@ make clean && make CFLAGS="-DTESTME"
 ./meminsight --test test/1-non-zero-swap-entry/meminsight_testSmap.txt test/1-non-zero-swap-entry/meminsight_testMeminfo.txt
 
 # Run using sample fixtures including fragmentation, CPU stat, and bandwidth
-./meminsight --test test/1-non-zero-swap-entry/meminsight_testSmap.txt test/1-non-zero-swap-entry/meminsight_testMeminfo.txt test/6-buddyinfo-sample/meminsight_testBuddyinfo.txt test/7-pagetypeinfo-sample/meminsight_testPagetypeinfo.txt test/10-cpu-stat-sample/meminsight_testStat.txt test/12-bandwidth-sample/meminsight_testBandwidth.txt
+./meminsight --test test/1-non-zero-swap-entry/meminsight_testSmap.txt test/1-non-zero-swap-entry/meminsight_testMeminfo.txt [test/6-buddyinfo-sample/meminsight_testBuddyinfo.txt] [test/7-pagetypeinfo-sample/meminsight_testPagetypeinfo.txt] [test/10-cpu-stat-sample/meminsight_testStat.txt] [test/12-bandwidth-sample/meminsight_testBandwidth.txt]
 
 # Run the repository unit-test runner (executes all fixtures and a negative test)
 sh test/run_ut.sh

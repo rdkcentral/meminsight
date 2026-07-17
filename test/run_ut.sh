@@ -408,7 +408,7 @@ fi
 
 # Also validate JSON cpu_stat emission when JSON support is available
 if $MEM_BIN --help 2>&1 | grep -F -- "--fmt" >/dev/null 2>&1; then
-    rm -rf /tmp/meminsight/*.json
+    rm -rf /tmp/meminsight/*.json /tmp/meminsight/*.csv
     if $MEM_BIN --fmt json -o /tmp/meminsight -t "$CPU_SMAP_FILE" "$CPU_MEMINFO_FILE" "$CPU_BUDDY_FILE" "$CPU_PGT_FILE" "$CPU_STAT_FILE"; then
         JSON_FILE=$(ls /tmp/meminsight/*.json 2>/dev/null | head -n 1)
         CSV_FALLBACK_FILE=$(ls /tmp/meminsight/*.csv 2>/dev/null | head -n 1)
