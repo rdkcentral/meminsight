@@ -540,9 +540,11 @@ SetupInfo initializeSetupInfo(const char *outDir, Report_Format format)
 /**
  * @brief Probe DDR bandwidth sysfs nodes and update g_bwDataAvailable.
  *
- * Checks both the mode control file (BW_DDR_MODE_FILE) for read/write access
- * and the bandwidth data file (BW_DDR_FILE) for readability. Sets the global
- * g_bwDataAvailable flag accordingly. Called once at startup.
+ * Checks the mode control file (BW_DDR_MODE_FILE) and bandwidth data file
+ * (BW_DDR_FILE) and updates g_bwDataAvailable. Bandwidth is considered
+ * available when BW_DDR_FILE is readable and BW_DDR_MODE_FILE is readable with
+ * either write access available or mode already enabled ('1'). Called once at
+ * startup.
  */
 static void updateBandwidthAvailability(void)
 {
@@ -553,9 +555,22 @@ static void updateBandwidthAvailability(void)
     }
 #endif
 
-    bool modeAccessible = (access(BW_DDR_MODE_FILE, R_OK | W_OK) == 0);
     bool bwReadable = (access(BW_DDR_FILE, R_OK) == 0);
-    g_bwDataAvailable = (modeAccessible && bwReadable);
+    bool modeReadable = (access(BW_DDR_MODE_FILE, R_OK) == 0);
+    bool modeWritable = (access(BW_DDR_MODE_FILE, W_OK) == 0);
+    bool modeEnabled = false;
+
+    if (modeReadable) {
+        FILE *fp = fopen(BW_DDR_MODE_FILE, "r");
+        if (fp) {
+            char modeBuf[16] = {0};
+            if (fgets(modeBuf, sizeof(modeBuf), fp) && modeBuf[0] == '1')
+                modeEnabled = true;
+            fclose(fp);
+        }
+    }
+
+    g_bwDataAvailable = (bwReadable && modeReadable && (modeWritable || modeEnabled));
 }
 
 /**
