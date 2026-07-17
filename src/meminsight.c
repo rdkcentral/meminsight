@@ -190,6 +190,7 @@ char testMeminfo[128];
 char testBuddyinfo[128];
 char testPagetypeinfo[128];
 char testStat[128];
+char testBandwidth[128];
 Process_Info processInfoTest;
 static int unitTestFailed = 0;
 #endif
@@ -545,6 +546,13 @@ SetupInfo initializeSetupInfo(const char *outDir, Report_Format format)
  */
 static void updateBandwidthAvailability(void)
 {
+#ifdef TESTME
+    if (isTestMode) {
+        g_bwDataAvailable = (testBandwidth[0] != '\0');
+        return;
+    }
+#endif
+
     bool modeAccessible = (access(BW_DDR_MODE_FILE, R_OK | W_OK) == 0);
     bool bwReadable = (access(BW_DDR_FILE, R_OK) == 0);
     g_bwDataAvailable = (modeAccessible && bwReadable);
@@ -1344,11 +1352,36 @@ static bool readBandwidthData(unsigned long *totalBandwidth, float *usagePercent
     if (!totalBandwidth || !usagePercentage)
         return false;
 
-    bool modeEnabledNow = false;
     FILE *fp = NULL;
     char buffer[128] = {0};
+    bool modeEnabledNow = false;
     *totalBandwidth = 0;
     *usagePercentage = 0.0f;
+
+#ifdef TESTME
+    if (isTestMode) {
+        if (!testBandwidth[0])
+            return false;
+
+        fp = fopen(testBandwidth, "r");
+        if (!fp)
+        {
+            PRINT_ERROR("Failed to open test bandwidth fixture %s: %s\n", testBandwidth, strerror(errno));
+            return false;
+        }
+
+        if (fgets(buffer, sizeof(buffer), fp) &&
+            sscanf(buffer, "Total bandwidth: %lu KB/s, usage: %f%%", totalBandwidth, usagePercentage) == 2)
+        {
+            fclose(fp);
+            return true;
+        }
+
+        PRINT_ERROR("Failed to parse bandwidth data from test fixture %s\n", testBandwidth);
+        fclose(fp);
+        return false;
+    }
+#endif
 
     fp = fopen(BW_DDR_MODE_FILE, "r");
     if (!fp)
@@ -2955,7 +2988,7 @@ void printHelpAndUsage(char *argv[], bool moreInfo, int returnCode)
     printf("  -s, --smaps               Force /proc/<pid>/smaps (disable auto smaps_rollup detection)\n");
     printf("  -h, --help                            Show this help message and exit\n");
 #ifdef TESTME
-    printf("  -t, --test <smapsFile> <meminfoFile> [buddyinfoFile] [pagetypeinfoFile] [statFile]\n");
+    printf("  -t, --test <smapsFile> <meminfoFile> [buddyinfoFile] [pagetypeinfoFile] [statFile] [bandwidthFile]\n");
     printf("                                      Run in test mode using supplied sample files\n\n");
 #endif
 #ifdef ENABLE_CJSON
@@ -2982,7 +3015,7 @@ void printHelpAndUsage(char *argv[], bool moreInfo, int returnCode)
         printf("  %s --output /var/log/ --iterations 3\n", argv[0]);
 #ifdef TESTME
     printf("  %s --test ../test/smaps.txt ../test/meminfo.txt\n", argv[0]);
-    printf("  %s --test ../test/smaps.txt ../test/meminfo.txt ../test/buddyinfo.txt ../test/pagetypeinfo.txt [../test/stat.txt]\n\n", argv[0]);
+    printf("  %s --test ../test/smaps.txt ../test/meminfo.txt ../test/buddyinfo.txt ../test/pagetypeinfo.txt [../test/stat.txt] [../test/bandwidth.txt]\n\n", argv[0]);
 #endif
 
         printf("Sample config file:\n");
@@ -3953,6 +3986,19 @@ int main(int argc, char *argv[])
                                 testStat[sizeof(testStat) - 1] = '\0';
                             } else {
                                 PRINT_ERROR("Test stat file %s open error %d [%s]\n", argv[i], errno, strerror(errno));
+                                printHelpAndUsage(argv, false, 1);
+                            }
+                        }
+
+                        if ((i + 1) < argc && argv[i + 1][0] != '-') {
+                            i++;
+                            testMapFd = fopen(argv[i], "r");
+                            if (testMapFd) {
+                                fclose(testMapFd);
+                                strncpy(testBandwidth, argv[i], sizeof(testBandwidth) - 1);
+                                testBandwidth[sizeof(testBandwidth) - 1] = '\0';
+                            } else {
+                                PRINT_ERROR("Test bandwidth file %s open error %d [%s]\n", argv[i], errno, strerror(errno));
                                 printHelpAndUsage(argv, false, 1);
                             }
                         }

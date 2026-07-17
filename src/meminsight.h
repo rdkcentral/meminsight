@@ -225,6 +225,7 @@ extern char testMeminfo[128];
 extern char testBuddyinfo[128];
 extern char testPagetypeinfo[128];
 extern char testStat[128];
+extern char testBandwidth[128];
 extern Process_Info processInfoTest;
 void checkAndFree();
 void testList();

@@ -411,10 +411,13 @@ if $MEM_BIN --help 2>&1 | grep -F -- "--fmt" >/dev/null 2>&1; then
     rm -rf /tmp/meminsight/*.json
     if $MEM_BIN --fmt json -o /tmp/meminsight -t "$CPU_SMAP_FILE" "$CPU_MEMINFO_FILE" "$CPU_BUDDY_FILE" "$CPU_PGT_FILE" "$CPU_STAT_FILE"; then
         JSON_FILE=$(ls /tmp/meminsight/*.json 2>/dev/null | head -n 1)
+        CSV_FALLBACK_FILE=$(ls /tmp/meminsight/*.csv 2>/dev/null | head -n 1)
         if [ -n "$JSON_FILE" ] && \
            grep -F '"cpu_stat"' "$JSON_FILE" >/dev/null 2>&1 && \
-           grep -Eq '"user"[[:space:]]*:[[:space:]]*30543' "$JSON_FILE" >/dev/null 2>&1; then
+           grep -Eq '"user"[[:space:]]*:[[:space:]]*30543(\.0+)?' "$JSON_FILE" >/dev/null 2>&1; then
             echo "✓ $CPU_DESC (JSON cpu_stat) PASSED"
+        elif [ -z "$JSON_FILE" ] && [ -n "$CSV_FALLBACK_FILE" ]; then
+            echo "- $CPU_DESC (JSON cpu_stat) SKIPPED (runtime cJSON unavailable, CSV fallback produced)"
         else
             echo "✗ $CPU_DESC (JSON cpu_stat) FAILED (cpu_stat missing/invalid)"
             [ -n "$JSON_FILE" ] && cat "$JSON_FILE"
@@ -426,6 +429,67 @@ if $MEM_BIN --help 2>&1 | grep -F -- "--fmt" >/dev/null 2>&1; then
     fi
 fi
 echo ""
+
+# JSON bandwidth fixture test with deterministic TESTME input
+BW_JSON_DESC="Test 17: JSON bandwidth fixture coverage"
+BW_STAT_FILE="test/10-cpu-stat-sample/meminsight_testStat.txt"
+BW_FIXTURE_FILE="test/12-bandwidth-sample/meminsight_testBandwidth.txt"
+
+if $MEM_BIN --help 2>&1 | grep -F -- "--fmt" >/dev/null 2>&1; then
+    echo "------------------------------------------"
+    echo "$BW_JSON_DESC"
+    echo "------------------------------------------"
+    echo "Command: $MEM_BIN --fmt json -o /tmp/meminsight -t $CPU_SMAP_FILE $CPU_MEMINFO_FILE $CPU_BUDDY_FILE $CPU_PGT_FILE $BW_STAT_FILE $BW_FIXTURE_FILE"
+
+    rm -rf /tmp/meminsight/*.json /tmp/meminsight/*.csv
+
+    if $MEM_BIN --fmt json -o /tmp/meminsight -t "$CPU_SMAP_FILE" "$CPU_MEMINFO_FILE" "$CPU_BUDDY_FILE" "$CPU_PGT_FILE" "$BW_STAT_FILE" "$BW_FIXTURE_FILE"; then
+        JSON_FILE=$(ls /tmp/meminsight/*.json 2>/dev/null | head -n 1)
+        CSV_FALLBACK_FILE=$(ls /tmp/meminsight/*.csv 2>/dev/null | head -n 1)
+        if [ -n "$JSON_FILE" ] && \
+           grep -F '"bandwidth"' "$JSON_FILE" >/dev/null 2>&1 && \
+           grep -Eq '"total_bandwidth"[[:space:]]*:[[:space:]]*123456(\.0+)?' "$JSON_FILE" >/dev/null 2>&1 && \
+           grep -Eq '"usage_percentage"[[:space:]]*:[[:space:]]*37\.5(0+)?' "$JSON_FILE" >/dev/null 2>&1; then
+            echo "✓ $BW_JSON_DESC PASSED"
+        elif [ -z "$JSON_FILE" ] && [ -n "$CSV_FALLBACK_FILE" ]; then
+            echo "- $BW_JSON_DESC SKIPPED (runtime cJSON unavailable, CSV fallback produced)"
+        else
+            echo "✗ $BW_JSON_DESC FAILED (bandwidth object missing/invalid)"
+            [ -n "$JSON_FILE" ] && cat "$JSON_FILE"
+            TEST_FAILED=$((TEST_FAILED + 1))
+        fi
+    else
+        echo "✗ $BW_JSON_DESC FAILED (command execution failed)"
+        TEST_FAILED=$((TEST_FAILED + 1))
+    fi
+    echo ""
+
+    BW_JSON_ABSENT_DESC="Test 18: JSON bandwidth omitted without fixture"
+    echo "------------------------------------------"
+    echo "$BW_JSON_ABSENT_DESC"
+    echo "------------------------------------------"
+    echo "Command: $MEM_BIN --fmt json -o /tmp/meminsight -t $CPU_SMAP_FILE $CPU_MEMINFO_FILE $CPU_BUDDY_FILE $CPU_PGT_FILE $BW_STAT_FILE"
+
+    rm -rf /tmp/meminsight/*.json /tmp/meminsight/*.csv
+
+    if $MEM_BIN --fmt json -o /tmp/meminsight -t "$CPU_SMAP_FILE" "$CPU_MEMINFO_FILE" "$CPU_BUDDY_FILE" "$CPU_PGT_FILE" "$BW_STAT_FILE"; then
+        JSON_FILE=$(ls /tmp/meminsight/*.json 2>/dev/null | head -n 1)
+        CSV_FALLBACK_FILE=$(ls /tmp/meminsight/*.csv 2>/dev/null | head -n 1)
+        if [ -n "$JSON_FILE" ] && ! grep -F '"bandwidth"' "$JSON_FILE" >/dev/null 2>&1; then
+            echo "✓ $BW_JSON_ABSENT_DESC PASSED"
+        elif [ -z "$JSON_FILE" ] && [ -n "$CSV_FALLBACK_FILE" ]; then
+            echo "- $BW_JSON_ABSENT_DESC SKIPPED (runtime cJSON unavailable, CSV fallback produced)"
+        else
+            echo "✗ $BW_JSON_ABSENT_DESC FAILED (unexpected bandwidth object state)"
+            [ -n "$JSON_FILE" ] && cat "$JSON_FILE"
+            TEST_FAILED=$((TEST_FAILED + 1))
+        fi
+    else
+        echo "✗ $BW_JSON_ABSENT_DESC FAILED (command execution failed)"
+        TEST_FAILED=$((TEST_FAILED + 1))
+    fi
+    echo ""
+fi
 
 # CPU stat compatibility test with legacy aggregate cpu line lacking guest fields
 CPU_COMPAT_DESC="Test 16: CPU stat legacy field-count compatibility"

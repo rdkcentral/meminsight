@@ -438,8 +438,8 @@ make clean && make CFLAGS="-DTESTME"
 # Run using sample fixtures (smaps + meminfo)
 ./meminsight --test test/1-non-zero-swap-entry/meminsight_testSmap.txt test/1-non-zero-swap-entry/meminsight_testMeminfo.txt
 
-# Run using sample fixtures including fragmentation (buddyinfo + pagetypeinfo)
-./meminsight --test test/1-non-zero-swap-entry/meminsight_testSmap.txt test/1-non-zero-swap-entry/meminsight_testMeminfo.txt test/6-buddyinfo-sample/meminsight_testBuddyinfo.txt test/7-pagetypeinfo-sample/meminsight_testPagetypeinfo.txt
+# Run using sample fixtures including fragmentation, CPU stat, and bandwidth
+./meminsight --test test/1-non-zero-swap-entry/meminsight_testSmap.txt test/1-non-zero-swap-entry/meminsight_testMeminfo.txt test/6-buddyinfo-sample/meminsight_testBuddyinfo.txt test/7-pagetypeinfo-sample/meminsight_testPagetypeinfo.txt test/10-cpu-stat-sample/meminsight_testStat.txt test/12-bandwidth-sample/meminsight_testBandwidth.txt
 
 # Run the repository unit-test runner (executes all fixtures and a negative test)
 sh test/run_ut.sh
@@ -460,7 +460,10 @@ CPU stat fixture coverage includes:
 - `test/10-cpu-stat-sample/meminsight_testStat.txt` for a full 10-field aggregate `cpu` line
 - `test/11-cpu-stat-legacy-fields/meminsight_testStat.txt` for older kernels that omit trailing guest fields; meminsight now zero-fills the missing counters instead of skipping CPUStat output
 
-When JSON output is enabled, the unit tests validate `cpu_stat` content with whitespace-tolerant matching so pretty-printed JSON and minified JSON are both accepted.
+Bandwidth fixture coverage includes:
+- `test/12-bandwidth-sample/meminsight_testBandwidth.txt` for deterministic CSV/JSON bandwidth validation under TESTME without relying on platform sysfs
+
+When JSON output is enabled, the unit tests validate `cpu_stat` content with whitespace-tolerant numeric matching, accept `30543.0`-style rendering, and treat runtime cJSON-to-CSV fallback as a skip instead of a failure.
 
 ### CPUStat and Bandwidth Compatibility Notes
 
