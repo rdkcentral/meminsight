@@ -66,6 +66,16 @@ static cJSON_t *g_rootObject = NULL;
  * this block with a static -lcjson link and remove the CSV fallback below.
  * -----------------------------------------------------------------------
  */
+/**
+ * @brief Load libcjson dynamically and resolve required symbols.
+ *
+ * Attempts to open the cJSON shared library at runtime and populates the
+ * module-local function table used by JSON output paths. If the library or
+ * any required symbol cannot be resolved, meminsight logs the reason and
+ * falls back to CSV output rather than terminating the run.
+ *
+ * @return 0 on success, -1 when runtime JSON support is unavailable.
+ */
 static int loadCjson(void)
 {
     memset(&g_cjson, 0, sizeof(g_cjson));
@@ -167,12 +177,20 @@ typedef enum {
 
 static FragmentationSource g_fragSource = FRAG_SRC_NONE;
 
+typedef struct {
+    uint64_t values[10];
+    int parsedCount;
+    bool available;
+} CpuStatSnapshot;
+
 #ifdef TESTME
 unsigned isTestMode = 0;
 char testSmap[128];
 char testMeminfo[128];
 char testBuddyinfo[128];
 char testPagetypeinfo[128];
+char testStat[128];
+char testBandwidth[128];
 Process_Info processInfoTest;
 static int unitTestFailed = 0;
 #endif
@@ -522,15 +540,37 @@ SetupInfo initializeSetupInfo(const char *outDir, Report_Format format)
 /**
  * @brief Probe DDR bandwidth sysfs nodes and update g_bwDataAvailable.
  *
- * Checks both the mode control file (BW_DDR_MODE_FILE) for read/write access
- * and the bandwidth data file (BW_DDR_FILE) for readability. Sets the global
- * g_bwDataAvailable flag accordingly. Called once at startup.
+ * Checks the mode control file (BW_DDR_MODE_FILE) and bandwidth data file
+ * (BW_DDR_FILE) and updates g_bwDataAvailable. Bandwidth is considered
+ * available when BW_DDR_FILE is readable and BW_DDR_MODE_FILE is readable with
+ * either write access available or mode already enabled ('1'). Called once at
+ * startup.
  */
 static void updateBandwidthAvailability(void)
 {
-    bool modeAccessible = (access(BW_DDR_MODE_FILE, R_OK | W_OK) == 0);
+#ifdef TESTME
+    if (isTestMode) {
+        g_bwDataAvailable = (testBandwidth[0] != '\0');
+        return;
+    }
+#endif
+
     bool bwReadable = (access(BW_DDR_FILE, R_OK) == 0);
-    g_bwDataAvailable = (modeAccessible && bwReadable);
+    bool modeReadable = (access(BW_DDR_MODE_FILE, R_OK) == 0);
+    bool modeWritable = (access(BW_DDR_MODE_FILE, W_OK) == 0);
+    bool modeEnabled = false;
+
+    if (modeReadable) {
+        FILE *fp = fopen(BW_DDR_MODE_FILE, "r");
+        if (fp) {
+            char modeBuf[16] = {0};
+            if (fgets(modeBuf, sizeof(modeBuf), fp) && modeBuf[0] == '1')
+                modeEnabled = true;
+            fclose(fp);
+        }
+    }
+
+    g_bwDataAvailable = (bwReadable && modeReadable && (modeWritable || modeEnabled));
 }
 
 /**
@@ -755,6 +795,133 @@ static int parseUnsignedSeries(const char *start, unsigned long *values, int max
 }
 
 /**
+ * @brief Parse a whitespace-separated series of 64-bit unsigned integers.
+ *
+ * This is the 64-bit variant of parseUnsignedSeries(), used for cumulative
+ * kernel counters such as `/proc/stat` CPU tick fields that can exceed 32-bit
+ * ranges on long-lived systems.
+ *
+ * @param[in]  start      Pointer into a line of text to begin parsing.
+ * @param[out] values     Caller-allocated array to receive parsed values.
+ * @param[in]  maxValues  Maximum number of values to store in @p values.
+ * @return Number of values successfully parsed, or -1 when parsing fails.
+ */
+static int parseUnsignedSeriesU64(const char *start, uint64_t *values, int maxValues)
+{
+    int count = 0;
+    bool parseError = false;
+    const char *p = start;
+    while (*p && count < maxValues) {
+        while (*p == ' ' || *p == '\t')
+            p++;
+        if (*p == '\0' || *p == '\n' || *p == '\r')
+            break;
+
+        if (*p == '-') {
+            parseError = true;
+            break;
+        }
+
+        char *end = NULL;
+        errno = 0;
+        unsigned long long value = strtoull(p, &end, 10);
+        if (end == p) {
+            parseError = true;
+            break;
+        }
+        if (errno == ERANGE) {
+            parseError = true;
+            break;
+        }
+        values[count++] = (uint64_t)value;
+        p = end;
+    }
+    return parseError ? -1 : count;
+}
+
+/**
+ * @brief Read aggregate CPU tick counters from `/proc/stat`.
+ *
+ * Scans for the kernel aggregate `cpu` line and parses up to 10 counters in
+ * fixed kernel order: user, nice, system, idle, iowait, irq, softirq, steal,
+ * guest, guest_nice. Older kernels may omit trailing guest fields; in that
+ * case the missing counters remain zero-filled as long as the first 4 standard
+ * fields are present. Under TESTME, an optional stat fixture path can replace
+ * the live procfs source.
+ *
+ * @param[out] snapshot  Populated CPU snapshot container.
+ * @return true when aggregate CPU data was successfully parsed, false otherwise.
+ */
+static bool readSystemCpuStat(CpuStatSnapshot *snapshot)
+{
+    const int minCpuFields = 4;
+
+    if (!snapshot)
+        return false;
+
+    memset(snapshot, 0, sizeof(*snapshot));
+
+    FILE *fp = NULL;
+#ifdef TESTME
+    if (isTestMode && testStat[0])
+        fp = fopen(testStat, "r");
+    else
+        fp = fopen(STAT_FILE, "r");
+#else
+    fp = fopen(STAT_FILE, "r");
+#endif
+    if (!fp)
+        return false;
+
+    char line[512];
+    while (fgets(line, sizeof(line), fp)) {
+        if (strncmp(line, "cpu", 3) != 0)
+            continue;
+        if (line[3] != ' ' && line[3] != '\t')
+            continue;
+
+        snapshot->parsedCount = parseUnsignedSeriesU64(line + 3, snapshot->values, 10);
+        if (snapshot->parsedCount < minCpuFields) {
+            fclose(fp);
+            return false;
+        }
+        snapshot->available = true;
+        fclose(fp);
+        return true;
+    }
+
+    fclose(fp);
+    return false;
+}
+
+/**
+ * @brief Append aggregate CPU counters to a CSV report.
+ *
+ * Writes the `CPUStat` section header, fixed field header row, and raw counter
+ * values when `/proc/stat` data is available. If the source cannot be read or
+ * parsed, this function emits nothing and leaves the rest of the report intact.
+ *
+ * @param[in] out  Open CSV output stream for the current report.
+ */
+static void saveSystemCpuStat(FILE *out)
+{
+    if (!out)
+        return;
+
+    CpuStatSnapshot cpu = {0};
+    if (!readSystemCpuStat(&cpu))
+        return;
+
+    fprintf(out, "%s%s\n", CSV_CPUSTAT_SECTION_HEADER, CSV_CPUSTAT_HEADER);
+    fprintf(out, "%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu\n",
+            (unsigned long long)cpu.values[0], (unsigned long long)cpu.values[1],
+            (unsigned long long)cpu.values[2], (unsigned long long)cpu.values[3],
+            (unsigned long long)cpu.values[4], (unsigned long long)cpu.values[5],
+            (unsigned long long)cpu.values[6], (unsigned long long)cpu.values[7],
+            (unsigned long long)cpu.values[8], (unsigned long long)cpu.values[9]);
+}
+
+/**
  * @brief Parse /proc/pagetypeinfo and write fragmentation data as CSV rows.
  *
  * Reads the kernel's page-type information, emits a section header, then
@@ -956,6 +1123,41 @@ void saveFragmentationInfo(FILE *out)
 }
 
 #ifdef ENABLE_CJSON
+/**
+ * @brief Add aggregate CPU counters to the JSON root object.
+ *
+ * Creates a `cpu_stat` child object populated with raw aggregate CPU counters
+ * when `/proc/stat` data is available. If the source is unavailable or cannot
+ * be parsed, the JSON report simply omits the object.
+ *
+ * @param[in,out] root  JSON root object for the current report iteration.
+ */
+static void saveSystemCpuStat_JSON(cJSON_t *root)
+{
+    if (!root)
+        return;
+
+    CpuStatSnapshot cpu = {0};
+    if (!readSystemCpuStat(&cpu))
+        return;
+
+    cJSON_t *cpuObj = g_cjson.CreateObject();
+    if (!cpuObj)
+        return;
+
+    g_cjson.AddNumberToObject(cpuObj, "user",       (double)cpu.values[0]);
+    g_cjson.AddNumberToObject(cpuObj, "nice",       (double)cpu.values[1]);
+    g_cjson.AddNumberToObject(cpuObj, "system",     (double)cpu.values[2]);
+    g_cjson.AddNumberToObject(cpuObj, "idle",       (double)cpu.values[3]);
+    g_cjson.AddNumberToObject(cpuObj, "iowait",     (double)cpu.values[4]);
+    g_cjson.AddNumberToObject(cpuObj, "irq",        (double)cpu.values[5]);
+    g_cjson.AddNumberToObject(cpuObj, "softirq",    (double)cpu.values[6]);
+    g_cjson.AddNumberToObject(cpuObj, "steal",      (double)cpu.values[7]);
+    g_cjson.AddNumberToObject(cpuObj, "guest",      (double)cpu.values[8]);
+    g_cjson.AddNumberToObject(cpuObj, "guest_nice", (double)cpu.values[9]);
+    g_cjson.AddItemToObject(root, "cpu_stat", cpuObj);
+}
+
 /**
  * @brief Parse /proc/pagetypeinfo and populate a cJSON fragmentation object.
  *
@@ -1162,6 +1364,105 @@ void saveFragmentationInfo_JSON(cJSON_t *root)
 #endif
 
 /**
+ * @brief Read DDR bandwidth values from the platform sysfs interface.
+ *
+ * Ensures bandwidth monitoring mode is enabled, then reads the current total
+ * bandwidth and usage percentage from the configured sysfs node in the same
+ * collection call. Failures are logged and reported to the caller as a soft
+ * false return so report generation can continue without bandwidth data.
+ *
+ * @param[out] totalBandwidth   Receives parsed total bandwidth in KB/s.
+ * @param[out] usagePercentage  Receives parsed usage percentage.
+ * @return true when a parseable bandwidth sample was read, false otherwise.
+ */
+static bool readBandwidthData(unsigned long *totalBandwidth, float *usagePercentage)
+{
+    if (!totalBandwidth || !usagePercentage)
+        return false;
+
+    FILE *fp = NULL;
+    char buffer[128] = {0};
+    bool modeEnabledNow = false;
+    *totalBandwidth = 0;
+    *usagePercentage = 0.0f;
+
+#ifdef TESTME
+    if (isTestMode) {
+        if (!testBandwidth[0])
+            return false;
+
+        fp = fopen(testBandwidth, "r");
+        if (!fp)
+        {
+            PRINT_ERROR("Failed to open test bandwidth fixture %s: %s\n", testBandwidth, strerror(errno));
+            return false;
+        }
+
+        if (fgets(buffer, sizeof(buffer), fp) &&
+            sscanf(buffer, "Total bandwidth: %lu KB/s, usage: %f%%", totalBandwidth, usagePercentage) == 2)
+        {
+            fclose(fp);
+            return true;
+        }
+
+        PRINT_ERROR("Failed to parse bandwidth data from test fixture %s\n", testBandwidth);
+        fclose(fp);
+        return false;
+    }
+#endif
+
+    fp = fopen(BW_DDR_MODE_FILE, "r");
+    if (!fp)
+    {
+        PRINT_ERROR("Failed to open %s: %s\n", BW_DDR_MODE_FILE, strerror(errno));
+        return false;
+    }
+
+    if (!fgets(buffer, sizeof(buffer), fp) || buffer[0] != '1')
+    {
+        fclose(fp);
+        fp = fopen(BW_DDR_MODE_FILE, "w");
+        if (!fp)
+        {
+            PRINT_ERROR("Failed to open %s for writing: %s\n", BW_DDR_MODE_FILE, strerror(errno));
+            return false;
+        }
+        if (fputs("1\n", fp) == EOF)
+        {
+            PRINT_ERROR("Failed to enable DDR bandwidth monitoring: %s\n", strerror(errno));
+            fclose(fp);
+            return false;
+        }
+        modeEnabledNow = true;
+        fclose(fp);
+    }
+    else
+    {
+        fclose(fp);
+    }
+
+    fp = fopen(BW_DDR_FILE, "r");
+    if (!fp)
+    {
+        PRINT_ERROR("Failed to open %s: %s\n", BW_DDR_FILE, strerror(errno));
+        return false;
+    }
+
+    if (fgets(buffer, sizeof(buffer), fp) &&
+        sscanf(buffer, "Total bandwidth: %lu KB/s, usage: %f%%", totalBandwidth, usagePercentage) == 2)
+    {
+        fclose(fp);
+        return true;
+    }
+
+    if (modeEnabledNow)
+        PRINT_ERROR("DDR bandwidth monitoring was enabled, but no parseable sample was immediately available from %s\n", BW_DDR_FILE);
+    PRINT_ERROR("Failed to parse bandwidth data from %s\n", BW_DDR_FILE);
+    fclose(fp);
+    return false;
+}
+
+/**
  * @brief Read DDR bandwidth data from sysfs and write it as a CSV section.
  *
  * Activates bandwidth measurement mode via BW_DDR_MODE_FILE, reads the
@@ -1175,61 +1476,54 @@ void collectBandwidthData(FILE *out)
     if (!out)
         return;
 
-    FILE *fp = NULL;
-    char buffer[128] = {0};
     unsigned long totalBandwidth = 0;
     float usagePercentage = 0.0f;
-
-    fp = fopen(BW_DDR_MODE_FILE, "r");
-    if (!fp)
-    {
-        PRINT_ERROR("Failed to open %s: %s\n", BW_DDR_MODE_FILE, strerror(errno));
+    if (!readBandwidthData(&totalBandwidth, &usagePercentage))
         return;
-    }
 
-    if (!fgets(buffer, sizeof(buffer), fp) || buffer[0] != '1')
-    {
-        fclose(fp);
-        fp = fopen(BW_DDR_MODE_FILE, "w");
-        if (!fp)
-        {
-            PRINT_ERROR("Failed to open %s for writing: %s\n", BW_DDR_MODE_FILE, strerror(errno));
-            return;
-        }
-        if (fputs("1\n", fp) == EOF)
-        {
-            PRINT_ERROR("Failed to enable DDR bandwidth monitoring: %s\n", strerror(errno));
-            fclose(fp);
-            return;
-        }
-        fclose(fp);
-        return;
-    }
-    fclose(fp);
-
-    fp = fopen(BW_DDR_FILE, "r");
-    if (!fp)
-    {
-        PRINT_ERROR("Failed to open %s: %s\n", BW_DDR_FILE, strerror(errno));
-        return;
-    }
-
-    if (fgets(buffer, sizeof(buffer), fp) &&
-        sscanf(buffer, "Total bandwidth: %lu KB/s, usage: %f%%", &totalBandwidth, &usagePercentage) == 2)
-    {
-        fprintf(out, "%s%s\n%lu,%.2f\n", CSV_BANDWIDTH_SECTION_HEADER, CSV_BANDWIDTH_HEADER, totalBandwidth, usagePercentage);
-    }
-    else
-    {
-        PRINT_ERROR("Failed to parse bandwidth data from %s\n", BW_DDR_FILE);
-    }
-
-    fclose(fp);
+    fprintf(out, "%s%s\n%lu,%.2f\n", CSV_BANDWIDTH_SECTION_HEADER, CSV_BANDWIDTH_HEADER, totalBandwidth, usagePercentage);
 }
 
+#ifdef ENABLE_CJSON
 /**
- * Reads the firmware image name from /version.txt.
- * Returns 1 if found, 0 otherwise. Writes result to fwName buffer.
+ * @brief Add DDR bandwidth data to the JSON root object.
+ *
+ * Creates a `bandwidth` child object containing total bandwidth and usage
+ * percentage when the platform bandwidth source is available and parseable.
+ * If no valid sample can be obtained, the JSON report omits the object.
+ *
+ * @param[in,out] root  JSON root object for the current report iteration.
+ */
+static void collectBandwidthData_JSON(cJSON_t *root)
+{
+    if (!root)
+        return;
+
+    unsigned long totalBandwidth = 0;
+    float usagePercentage = 0.0f;
+    if (!readBandwidthData(&totalBandwidth, &usagePercentage))
+        return;
+
+    cJSON_t *bandwidth = g_cjson.CreateObject();
+    if (!bandwidth)
+        return;
+
+    g_cjson.AddNumberToObject(bandwidth, "total_bandwidth", (double)totalBandwidth);
+    g_cjson.AddNumberToObject(bandwidth, "usage_percentage", (double)usagePercentage);
+    g_cjson.AddItemToObject(root, "bandwidth", bandwidth);
+}
+#endif
+
+/**
+ * @brief Read the device firmware image name from `/version.txt`.
+ *
+ * Searches for an `imagename:` entry in the version file and copies the value
+ * into the caller-provided buffer. If the file cannot be read or the expected
+ * key is absent, a default firmware name is written instead.
+ *
+ * @param[out] fwName     Destination buffer for the firmware name.
+ * @param[in]  fwNameLen  Size of @p fwName in bytes.
+ * @return 1 when a firmware name was found in the file, 0 when the default was used.
  */
 
  int getFirmwareImageName(char *fwName, size_t fwNameLen)
@@ -1272,8 +1566,16 @@ void collectBandwidthData(FILE *out)
  }
 
 /**
- * Retrieves the MAC address for a given network interface.
- * Returns the number of characters written to macAddress.
+ * @brief Retrieve the MAC address for a given network interface.
+ *
+ * Opens a datagram socket and issues SIOCGIFHWADDR to obtain the hardware
+ * address, then formats it as a compact lowercase hexadecimal string without
+ * separators.
+ *
+ * @param[in]  iface       Network interface name to query.
+ * @param[out] macAddress  Destination buffer for the formatted MAC string.
+ * @param[in]  szBufSize   Size of @p macAddress in bytes.
+ * @return Number of characters written, or 0 on failure.
  */
 size_t getMacAddress(const char *iface, char *macAddress, size_t szBufSize)
 {
@@ -1306,7 +1608,10 @@ size_t getMacAddress(const char *iface, char *macAddress, size_t szBufSize)
 }
 
 /**
- * Checks if a string represents a valid PID (all digits).
+ * @brief Check whether a string is a numeric PID token.
+ *
+ * @param[in] str  String to validate.
+ * @return 1 when @p str contains only ASCII digits, 0 otherwise.
  */
 int isPID(const char *str)
 {
@@ -1316,8 +1621,14 @@ int isPID(const char *str)
 }
 
 /**
- * Finds the PID of a process by its name.
- * Returns 1 if found, 0 otherwise.
+ * @brief Resolve a process name to a PID by scanning `/proc`.
+ *
+ * Iterates over numeric `/proc/<pid>` directories, reads each `comm` file, and
+ * returns the first PID whose process name matches @p procName exactly.
+ *
+ * @param[in]  procName  Process name to search for.
+ * @param[out] pidOut    Receives the first matching PID when found.
+ * @return 1 if a matching process was found, 0 otherwise.
  */
 int getPIDByProcessName(const char *procName, unsigned int *pidOut)
 {
@@ -1367,8 +1678,15 @@ int getPIDByProcessName(const char *procName, unsigned int *pidOut)
 }
 
 /**
- * Fills process statistics fields from /proc/[pid]/stat.
- * Returns 1 on success, 0 on failure.
+ * @brief Populate selected per-process fields from `/proc/<pid>/stat`.
+ *
+ * Extracts the process name, flags, minor/major fault counters, and combined
+ * user/system CPU time from the kernel stat record for the supplied PID.
+ *
+ * @param[in]  pid       Process ID to inspect.
+ * @param[out] info      Destination structure for parsed values.
+ * @param[out] flagsOut  Optional destination for the raw process flags field.
+ * @return 1 on successful parse, 0 on open/read/parse failure.
  */
 int fillProcessStatFields(unsigned pid, Process_Info *info, unsigned *flagsOut)
 {
@@ -1428,8 +1746,14 @@ int fillProcessStatFields(unsigned pid, Process_Info *info, unsigned *flagsOut)
 // -----------------------------
 
 /**
- * Parses a configuration file for whitelist, output file, iterations,
- * interval, and log level. Returns 0 on success, -1 on failure.
+ * @brief Parse a meminsight `.conf` file into a Config_Data structure.
+ *
+ * Supports process whitelist, output directory, iteration count, interval, and
+ * log level keys. Any unspecified values remain at built-in defaults.
+ *
+ * @param[in]  configPath  Path to the configuration file.
+ * @param[out] config      Destination structure to populate.
+ * @return 0 on success, -1 on validation, allocation, or file-read failure.
  */
 int parseConfig(const char *configPath, Config_Data *config)
 {
@@ -1539,8 +1863,13 @@ int parseConfig(const char *configPath, Config_Data *config)
 // -----------------------------
 
 /**
- * Writes all process info from the linked list to stdout and the output file.
- * Frees each node after writing.
+ * @brief Write sorted process rows to CSV and free the linked list.
+ *
+ * Emits one CSV row per node in the global process-info list, preserving the
+ * existing sort order, then frees each consumed node.
+ *
+ * @param[in] noOfPids  Expected number of process rows.
+ * @param[in] output    Open CSV stream to receive the rows.
  */
 void writeProcessInfo(unsigned noOfPids, FILE *output)
 {
@@ -1583,10 +1912,18 @@ static void freeProcessInfoList(void)
     headProcessInfo = NULL;
 }
 
-/*
-    * Safely adds a value to a total, preventing unsigned long overflow. If an
-    * overflow would occur, it saturates the total at ULONG_MAX and logs a warning.
-*/
+/**
+ * @brief Add a value to an accumulator with unsigned long saturation.
+ *
+ * Prevents overflow while accumulating process totals. If the addition would
+ * overflow, the accumulator is saturated at ULONG_MAX and a diagnostic is
+ * emitted identifying the affected field and PID.
+ *
+ * @param[in,out] total  Accumulator to update.
+ * @param[in]     value  Value to add.
+ * @param[in]     field  Logical field name used for diagnostics.
+ * @param[in]     pid    Process ID associated with the value.
+ */
 static void addULSaturating(unsigned long *total, unsigned long value, const char *field, unsigned int pid)
 {
     if (ULONG_MAX - *total < value)
@@ -1600,8 +1937,12 @@ static void addULSaturating(unsigned long *total, unsigned long value, const cha
 }
 
 /**
- * Inserts a new process info node into the linked list, sorted by descending
- * pssTotal.
+ * @brief Insert a process record into the global list ordered by descending PSS.
+ *
+ * Allocates a new node, copies the caller-provided process snapshot, and places
+ * it into the linked list so higher-PSS entries appear first in CSV/JSON output.
+ *
+ * @param[in] addPInfo  Process record to copy and insert.
  */
 void addProcessInfo(Process_Info *addPInfo)
 {
@@ -2636,7 +2977,9 @@ int getProcessInfos(unsigned pid)
     return ret;
 }
 /**
- * Prints usage information and exits.
+ * @brief Print a short usage string and terminate the process.
+ *
+ * @param[in] argv  Program argv used to display the executable name.
  */
 void printHelp(char *argv[])
 {
@@ -2645,11 +2988,19 @@ void printHelp(char *argv[])
 }
 
 /**
- * Prints detailed help and usage information and exits.
+ * @brief Print detailed help/usage text and terminate the process.
+ *
+ * Includes CLI options, precedence notes, default behavior, and TESTME/JSON
+ * examples depending on build flags.
+ *
+ * @param[in] argv        Program argv used to display the executable name.
+ * @param[in] moreInfo    When true, prints extended examples and notes.
+ * @param[in] returnCode  Exit code to use when terminating.
  */
 void printHelpAndUsage(char *argv[], bool moreInfo, int returnCode)
 {
     printf("%s (v%s)\n\n", MEMINSIGHT_BIN, memInsightVersion);
+    printf("Report version %s\n\n", reportVersion);
     printf("Usage: %s [OPTIONS]\n", MEMINSIGHT_BIN);
     printf("A lightweight, configurable tool for collecting detailed system and per-process memory and CPU statistics.\n\n");
 
@@ -2665,7 +3016,7 @@ void printHelpAndUsage(char *argv[], bool moreInfo, int returnCode)
     printf("  -s, --smaps               Force /proc/<pid>/smaps (disable auto smaps_rollup detection)\n");
     printf("  -h, --help                            Show this help message and exit\n");
 #ifdef TESTME
-    printf("  -t, --test <smapsFile> <meminfoFile> [buddyinfoFile] [pagetypeinfoFile]\n");
+    printf("  -t, --test <smapsFile> <meminfoFile> [buddyinfoFile] [pagetypeinfoFile] [statFile] [bandwidthFile]\n");
     printf("                                      Run in test mode using supplied sample files\n\n");
 #endif
 #ifdef ENABLE_CJSON
@@ -2681,8 +3032,8 @@ void printHelpAndUsage(char *argv[], bool moreInfo, int returnCode)
 
         printf("Default behavior (no flags):\n");
         printf("  - Runs indefinite number of iterations, with an interval of 15 minutes, monitors all processes with log level INFO\n");
-        printf("  - Output: /tmp/<MAC>_<timestamp>_iter<iteration>_%s (CSV format)\n", CSV_FILE_NAME);
-        printf("  - Output: /tmp/<MAC>_<timestamp>_iter<iteration>_%s (JSON format, with --fmt json)\n\n", JSON_FILE_NAME);
+        printf("  - Output: %s/<MAC>_<timestamp>_iter<iteration>_%s (CSV format)\n", DEFAULT_OUT_DIR, CSV_FILE_NAME);
+        printf("  - Output: %s/<MAC>_<timestamp>_iter<iteration>_%s (JSON format, with --fmt json)\n\n", DEFAULT_OUT_DIR, JSON_FILE_NAME);
 
         printf("Example:\n");
         printf("  %s\n", argv[0]);
@@ -2692,11 +3043,11 @@ void printHelpAndUsage(char *argv[], bool moreInfo, int returnCode)
         printf("  %s --output /var/log/ --iterations 3\n", argv[0]);
 #ifdef TESTME
     printf("  %s --test ../test/smaps.txt ../test/meminfo.txt\n", argv[0]);
-    printf("  %s --test ../test/smaps.txt ../test/meminfo.txt ../test/buddyinfo.txt ../test/pagetypeinfo.txt\n\n", argv[0]);
+    printf("  %s --test ../test/smaps.txt ../test/meminfo.txt ../test/buddyinfo.txt ../test/pagetypeinfo.txt [../test/stat.txt] [../test/bandwidth.txt]\n\n", argv[0]);
 #endif
 
         printf("Sample config file:\n");
-        printf("  process_whitelist=myapp,systemd,1234\n  output_dir=/var/log/\n  iterations=10\n  interval=60\n  log_level=INFO\n\n");
+        printf("process_whitelist=myapp,systemd,1234\noutput_dir=/var/log/\niterations=10\ninterval=60\nlog_level=INFO\n\n");
 
         printf("Notes:\n");
         printf("  - Supported config file extensions: %s\n", CONFIG_EXTN);
@@ -2709,8 +3060,20 @@ void printHelpAndUsage(char *argv[], bool moreInfo, int returnCode)
 }
 
 /**
- * Collects system-wide memory statistics and writes to output file.
- * Returns 0 on success, -1 on failure.
+ * @brief Run system-wide collection mode and emit CSV or JSON reports.
+ *
+ * Iterates over all qualifying processes, collects system meminfo, optional
+ * CPU stat, optional fragmentation, optional bandwidth, and per-process memory
+ * summaries, then writes one report per iteration to the output directory.
+ *
+ * @param[in] enableKThreads  Include kernel threads when true.
+ * @param[in] outDir          Output directory override.
+ * @param[in] iterations      Number of iterations to execute.
+ * @param[in] interval        Interval between iterations in seconds.
+ * @param[in] long_run        When true, ignore iteration count termination rules.
+ * @param[in] upload_enabled  Whether upload signaling is enabled.
+ * @param[in] upload_interval Upload cadence in seconds.
+ * @return 0 on success, -1 on handled failure.
  */
 int collectSystemMemoryStats(bool enableKThreads, const char *outDir, int iterations, int interval, bool long_run, bool upload_enabled, int upload_interval)
 {
@@ -2853,9 +3216,12 @@ int collectSystemMemoryStats(bool enableKThreads, const char *outDir, int iterat
 
         if (g_reportFormat == REPORT_CSV) {
             saveMeminfo(output);
+            saveSystemCpuStat(output);
             if (g_CollectFragData) {
                 saveFragmentationInfo(output);
             }
+            if (g_bwDataAvailable)
+                collectBandwidthData(output);
     #ifdef TESTME
             if (isTestMode && unitTestFailed) {
                 fclose(output);
@@ -2867,16 +3233,17 @@ int collectSystemMemoryStats(bool enableKThreads, const char *outDir, int iterat
             writeProcessInfo(noOfPids, output);
             fprintf(output, "0,Total,%lu,%lu,%lu,%lu,%lu,%lu,0,0,0\n", rssTotal, pssTotal, shared_clean_total,
                     private_clean_total, private_dirty_total, swap_pss_total);
-            if (g_bwDataAvailable)
-                collectBandwidthData(output);
             fclose(output);
         }
 #ifdef ENABLE_CJSON
         else if (g_reportFormat == REPORT_JSON) {
             saveMeminfo_JSON(g_rootObject);
+            saveSystemCpuStat_JSON(g_rootObject);
             if (g_CollectFragData) {
                 saveFragmentationInfo_JSON(g_rootObject);
             }
+            if (g_bwDataAvailable)
+                collectBandwidthData_JSON(g_rootObject);
             cJSON_t *processesArray = g_cjson.CreateArray();
             if (!processesArray) {
                 PRINT_ERROR("Failed to create JSON processes array\n");
@@ -3154,24 +3521,28 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, bool cli_out
 
         if (g_reportFormat == REPORT_CSV) {
             saveMeminfo(output);
+            saveSystemCpuStat(output);
             if (g_CollectFragData) {
                 saveFragmentationInfo(output);
             }
+            if (g_bwDataAvailable)
+                collectBandwidthData(output);
             fprintf(output, "%s%s\n", CSV_PROCESSES_SECTION_HEADER, CSV_PROCESS_HEADER);
             writeProcessInfo(actualCount, output);
             fprintf(output, "0,Total,%lu,%lu,%lu,%lu,%lu,%lu,0,0,0\n",
                     rssTotal, pssTotal, shared_clean_total, private_clean_total,
                     private_dirty_total, swap_pss_total);
-            if (g_bwDataAvailable)
-                collectBandwidthData(output);
             fclose(output);
         }
 #ifdef ENABLE_CJSON
         else if (g_reportFormat == REPORT_JSON) {
             saveMeminfo_JSON(g_rootObject);
+            saveSystemCpuStat_JSON(g_rootObject);
             if (g_CollectFragData) {
                 saveFragmentationInfo_JSON(g_rootObject);
             }
+            if (g_bwDataAvailable)
+                collectBandwidthData_JSON(g_rootObject);
             if (writeJSONToFile(outputFilePath, &setup) != 0) {
                 PRINT_ERROR("Failed to write JSON output file: %s\n", outputFilePath);
                 for (unsigned j = 0; j < config.whiteListCount; j++)
@@ -3630,6 +4001,32 @@ int main(int argc, char *argv[])
                                 strncpy(testPagetypeinfo, argv[i], 128);
                             } else {
                                 PRINT_ERROR("Test pagetypeinfo file %s open error %d [%s]\n", argv[i], errno, strerror(errno));
+                                printHelpAndUsage(argv, false, 1);
+                            }
+                        }
+
+                        if ((i + 1) < argc && argv[i + 1][0] != '-') {
+                            i++;
+                            testMapFd = fopen(argv[i], "r");
+                            if (testMapFd) {
+                                fclose(testMapFd);
+                                strncpy(testStat, argv[i], sizeof(testStat) - 1);
+                                testStat[sizeof(testStat) - 1] = '\0';
+                            } else {
+                                PRINT_ERROR("Test stat file %s open error %d [%s]\n", argv[i], errno, strerror(errno));
+                                printHelpAndUsage(argv, false, 1);
+                            }
+                        }
+
+                        if ((i + 1) < argc && argv[i + 1][0] != '-') {
+                            i++;
+                            testMapFd = fopen(argv[i], "r");
+                            if (testMapFd) {
+                                fclose(testMapFd);
+                                strncpy(testBandwidth, argv[i], sizeof(testBandwidth) - 1);
+                                testBandwidth[sizeof(testBandwidth) - 1] = '\0';
+                            } else {
+                                PRINT_ERROR("Test bandwidth file %s open error %d [%s]\n", argv[i], errno, strerror(errno));
                                 printHelpAndUsage(argv, false, 1);
                             }
                         }

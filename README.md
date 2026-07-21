@@ -33,6 +33,7 @@
 - **Swap PSS** - Proportional swap usage
 - **Major Page Faults** - Hard page faults requiring disk I/O
 - **CPU Time** - Combined user and system CPU usage
+- **System CPU Raw Counters** - Aggregate `/proc/stat` ticks for server-side delta and percentage calculation
 
 ### 🛠️ **Flexible Configuration**
 - **Process Whitelisting** - Monitor specific processes by name or PID
@@ -41,6 +42,7 @@
 - **Kernel Thread Support** - Optional inclusion of kernel threads
 - **Long-running Mode** - Extended monitoring with automatic intervals
 - **Fragmentation Data Capture** - Optional via `--frag`; `/proc/pagetypeinfo` preferred with `/proc/buddyinfo` fallback
+- **Bandwidth Reporting** - Optional DDR bandwidth data in CSV and JSON when platform data is available
 
 ### 🔧 **Advanced Capabilities**
 - **Network Interface Detection** - Automatic MAC address retrieval
@@ -212,7 +214,7 @@ OPTIONS:
       --frag                  Enable fragmentation data collection (default: disabled)
       --upload-enable         Enable upload infrastructure (creates marker file)
       --upload-interval SECS  Upload cadence in seconds (requires --upload-enable)
-   -t, --test SMAPS MEMINFO [BUDDYINFO] [PAGETYPEINFO]
+   -t, --test SMAPS MEMINFO [BUDDYINFO] [PAGETYPEINFO] [STAT] [BANDWIDTH]
                                Run in test mode using supplied sample files (requires TESTME build)
    -h, --help                  Show help message and exit
 ```
@@ -268,8 +270,8 @@ Meminsight creates and manages the following state files:
 ```
 UPTIME=12345.67
 KERNEL_VERSION=5.15.0-91-generic
-MEMINSIGHT_VERSION=1.1.0
-REPORT_VERSION=1.1.0
+MEMINSIGHT_VERSION=1.1.2
+REPORT_VERSION=1.2.0
 RUN_ITERATIONS=10
 RUN_INTERVAL=60
 RUN_ID=17014563271234507
@@ -436,8 +438,8 @@ make clean && make CFLAGS="-DTESTME"
 # Run using sample fixtures (smaps + meminfo)
 ./meminsight --test test/1-non-zero-swap-entry/meminsight_testSmap.txt test/1-non-zero-swap-entry/meminsight_testMeminfo.txt
 
-# Run using sample fixtures including fragmentation (buddyinfo + pagetypeinfo)
-./meminsight --test test/1-non-zero-swap-entry/meminsight_testSmap.txt test/1-non-zero-swap-entry/meminsight_testMeminfo.txt test/6-buddyinfo-sample/meminsight_testBuddyinfo.txt test/7-pagetypeinfo-sample/meminsight_testPagetypeinfo.txt
+# Run using sample fixtures including fragmentation, CPU stat, and bandwidth
+./meminsight --test test/1-non-zero-swap-entry/meminsight_testSmap.txt test/1-non-zero-swap-entry/meminsight_testMeminfo.txt [test/6-buddyinfo-sample/meminsight_testBuddyinfo.txt] [test/7-pagetypeinfo-sample/meminsight_testPagetypeinfo.txt] [test/10-cpu-stat-sample/meminsight_testStat.txt] [test/12-bandwidth-sample/meminsight_testBandwidth.txt]
 
 # Run the repository unit-test runner (executes all fixtures and a negative test)
 sh test/run_ut.sh
@@ -453,6 +455,20 @@ There is also a negative fixture in `test/4-negative-duplicate-meminfo-field/` t
 Fragmentation fixture coverage is also included via:
 - `test/6-buddyinfo-sample/meminsight_testBuddyinfo.txt`
 - `test/7-pagetypeinfo-sample/meminsight_testPagetypeinfo.txt`
+
+CPU stat fixture coverage includes:
+- `test/10-cpu-stat-sample/meminsight_testStat.txt` for a full 10-field aggregate `cpu` line
+- `test/11-cpu-stat-legacy-fields/meminsight_testStat.txt` for older kernels that omit trailing guest fields; meminsight now zero-fills the missing counters instead of skipping CPUStat output
+
+Bandwidth fixture coverage includes:
+- `test/12-bandwidth-sample/meminsight_testBandwidth.txt` for deterministic CSV/JSON bandwidth validation under TESTME without relying on platform sysfs
+
+When JSON output is enabled, the unit tests validate `cpu_stat` content with whitespace-tolerant numeric matching, accept `30543.0`-style rendering, and treat runtime cJSON-to-CSV fallback as a skip instead of a failure.
+
+### CPUStat and Bandwidth Compatibility Notes
+
+- CPUStat collection accepts aggregate `/proc/stat` `cpu` lines with at least the first 4 counters (`user`, `nice`, `system`, `idle`). Missing trailing counters are emitted as `0` so CSV and JSON output keep the same 10-field schema.
+- DDR bandwidth collection enables monitoring mode when needed and still attempts to read a bandwidth sample in the same iteration. If the platform does not provide a parseable sample immediately, the section is skipped without terminating the run.
 
 ## 🏗️ Build System
 
@@ -503,7 +519,7 @@ make install
 6. **In-progress sentinel** — Create `/tmp/.meminsight_inprogress` to mark an active run.
 7. **Iteration loop** — For each iteration:
    - Capture fresh timestamp and uptime.
-   - Collect system meminfo, process smaps stats.
+   - Collect system meminfo, optional aggregate CPU stat counters, process smaps stats.
    - If `--frag` is active, collect fragmentation data.
    - Write CSV/JSON report with full metadata row: `FIRMWARE_NAME, MAC_ADDRESS, TIMESTAMP, UPTIME, KERNEL_VERSION, REPORT_VERSION, ITERATION, RUN_ITERATIONS, RUN_INTERVAL, RUN_ID`.
 8. **Cleanup** — Remove in-progress sentinel on completion or error. Configstore persists for upload script reference.
@@ -524,6 +540,7 @@ make install
 | `writeConfigStore()` | Write/update persistent state file to `/tmp/.meminsight_configstore` | meminsight.c |
 | `touchFile()` | Create or truncate marker files | meminsight.c |
 | `removeFileIfPresent()` | Gracefully remove in-progress sentinel on exit | meminsight.c |
+| `readSystemCpuStat()` | Parse aggregate CPU counters from `/proc/stat` | meminsight.c |
 
 ---
 
@@ -622,6 +639,16 @@ Every report file (CSV and JSON) begins with a metadata row containing the follo
 | `RUN_ID` | Per-run identifier built as `<epoch_seconds><pid><2-digit-random-suffix>` |
 
 The `RUN_ID` groups all report files from the same invocation together, making it possible to correlate data across iterations without relying on timestamps alone.
+
+Current report schema version is `1.2.0`.
+
+When available, reports also include a `CPUStat` section in CSV and a `cpu_stat` object in JSON with raw counters in this order:
+`user, nice, system, idle, iowait, irq, softirq, steal, guest, guest_nice`.
+meminsight does not derive CPU percentages from these values.
+
+When available, reports also include bandwidth data: a `Bandwidth` section in CSV and a `bandwidth` object in JSON.
+
+Current CSV section order is: metadata, meminfo, CPUStat (when available), fragmentation (when enabled), bandwidth (when available), processes, total row.
 
 ## 📦 Integration Samples
 

@@ -8,7 +8,7 @@ This specification defines test-only runtime behavior enabled by TESTME builds.
 
 1. Test mode is enabled via -t or --test in TESTME builds.
 2. Required fixture inputs are smaps fixture and meminfo fixture.
-3. Optional fixtures are buddyinfo and pagetypeinfo.
+3. Optional fixtures are buddyinfo, pagetypeinfo, stat, and bandwidth.
 
 ## Current validation behavior
 
@@ -20,6 +20,8 @@ This specification defines test-only runtime behavior enabled by TESTME builds.
 
 1. Meminfo and map parsing functions read fixture paths when test mode is active.
 2. Fragmentation source selection in test mode is inferred from which optional fixture paths are supplied.
+3. System CPU stat parsing reads the optional stat fixture when provided.
+4. DDR bandwidth parsing reads the optional bandwidth fixture when provided, and bandwidth availability in test mode is inferred from whether that fixture path is supplied.
 
 ## Source anchors
 

@@ -15,10 +15,32 @@ Current filename format:
 1. Metadata header row.
 2. Metadata value row.
 3. Meminfo section.
-4. Optional fragmentation section (only when `--frag`).
-5. Processes section header and per-process rows sorted by pss descending.
-6. Synthetic total row with pid 0 and name Total.
-7. Optional bandwidth section when available.
+4. CPUStat section (raw aggregate `/proc/stat` counters) when source is available.
+5. Optional fragmentation section (only when `--frag`).
+6. Optional bandwidth section when available.
+7. Processes section header and per-process rows sorted by pss descending.
+8. Synthetic total row with pid 0 and name Total.
+
+## CPUStat fields
+
+Current CPUStat fields are emitted in this exact order:
+
+- USER
+- NICE
+- SYSTEM
+- IDLE
+- IOWAIT
+- IRQ
+- SOFTIRQ
+- STEAL
+- GUEST
+- GUEST_NICE
+
+When `/proc/stat` cannot be read or parsed, CPUStat section emission is skipped and report generation continues.
+
+## Schema version impact
+
+CPUStat addition is a report-schema change and requires a report-version increment.
 
 ## Metadata fields
 
@@ -37,4 +59,4 @@ Current metadata fields are:
 
 ## Source anchors
 
-collectSystemMemoryStats(), handleConfigMode(), writeProcessInfo(), saveMeminfo(), saveFragmentationInfo(), collectBandwidthData() in src/meminsight.c
+collectSystemMemoryStats(), handleConfigMode(), writeProcessInfo(), saveMeminfo(), saveSystemCpuStat(), saveFragmentationInfo(), collectBandwidthData() in src/meminsight.c

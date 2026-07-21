@@ -15,8 +15,9 @@ This specification defines optional DDR bandwidth reporting behavior based on sy
 2. Bandwidth collection is attempted only when startup checks indicate availability.
 3. During collection, mode is verified and enabled when required.
 4. When a parseable line is read, CSV output appends a Bandwidth section with total bandwidth and usage percentage.
-5. Failures to open or parse bandwidth sources are logged and do not terminate the run.
+5. When JSON output is active and a parseable line is read, JSON output includes a `bandwidth` object with total bandwidth and usage percentage.
+6. Failures to open or parse bandwidth sources are logged and do not terminate the run.
 
 ## Source anchors
 
-updateBandwidthAvailability(), collectBandwidthData() in src/meminsight.c
+updateBandwidthAvailability(), readBandwidthData(), collectBandwidthData(), collectBandwidthData_JSON() in src/meminsight.c
