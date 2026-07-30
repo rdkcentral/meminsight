@@ -207,6 +207,7 @@ OPTIONS:
    -a, --all                   Include kernel threads for process monitoring
    -c, --config FILE           Path to configuration file (must end with .conf)
    -o, --output DIR            Output directory for generated reports (default: /opt/meminsight)
+      -r, --retention N           Pre-run retention count for existing reports (1-100, default: 30)
          --iterations N          Number of iterations to run (overrides config)
          --interval SECONDS      Seconds between iterations (overrides config)
       --fmt FORMAT            Report format: csv (default) or json
@@ -512,7 +513,10 @@ make install
 ### Execution Flow (Manual and Automatic)
 
 1. **Argument parsing** — Parse CLI options including output directory and upload flags.
-2. **Startup sanitization** — `ensure_output_dir()` recursively wipes all contents of the output directory so each run starts clean. The directory itself is preserved or created if absent.
+2. **Startup retention preparation** — `ensure_output_dir()` creates the output directory when absent. If present, it applies format-scoped pre-run retention (`.csv` in CSV mode, `.json` in JSON mode):
+   - If report count is `<= retention`, move all matching reports into `retention_<epoch>_meminsight`.
+   - If report count is `> retention`, move the newest `N` matching reports into retention and delete the older matching ones.
+   - Non-matching files are untouched.
 3. **Setup initialization** — Cache MAC address, firmware name, kernel version, and generate a per-run `RUN_ID` by concatenating epoch seconds + PID + a randomly generated 2-digit suffix.
 4. **State file creation** — Write `/tmp/.meminsight_configstore` with resolved run parameters. This file persists across runs and is selectively updated.
 5. **Upload marker creation** — If `--upload-enable` was passed, create `/tmp/.meminsight_upload` to signal the systemd upload service.
@@ -521,7 +525,7 @@ make install
    - Capture fresh timestamp and uptime.
    - Collect system meminfo, optional aggregate CPU stat counters, process smaps stats.
    - If `--frag` is active, collect fragmentation data.
-   - Write CSV/JSON report with full metadata row: `FIRMWARE_NAME, MAC_ADDRESS, TIMESTAMP, UPTIME, KERNEL_VERSION, REPORT_VERSION, ITERATION, RUN_ITERATIONS, RUN_INTERVAL, RUN_ID`.
+   - Write CSV/JSON report with full metadata row: `FIRMWARE_NAME, MAC_ADDRESS, TIMESTAMP, UPTIME, KERNEL_VERSION, REPORT_VERSION, ITERATION, RUN_ITERATIONS, RUN_INTERVAL, RUN_ID, RETENTION_ARG_PASSED, RETENTION_REPORT`.
 8. **Cleanup** — Remove in-progress sentinel on completion or error. Configstore persists for upload script reference.
 9. **Automatic run (systemd)** — Service starts meminsight with desired flags; path unit watches for marker and triggers upload service.
 
@@ -535,7 +539,7 @@ make install
 | `addProcessInfo()` | Maintain sorted process list | meminsight.c |
 | `getMacAddress()` | Network interface detection | meminsight.c |
 | `parseConfig()` | Configuration file processing | meminsight.c |
-| `ensure_output_dir()` | Create output dir and wipe stale contents on startup | meminsight.c |
+| `ensure_output_dir()` | Create output dir and apply format-scoped pre-run retention policy | meminsight.c |
 | `initializeSetupInfo()` | Cache device metadata and generate run hash | meminsight.c |
 | `writeConfigStore()` | Write/update persistent state file to `/tmp/.meminsight_configstore` | meminsight.c |
 | `touchFile()` | Create or truncate marker files | meminsight.c |
@@ -637,6 +641,8 @@ Every report file (CSV and JSON) begins with a metadata row containing the follo
 | `RUN_ITERATIONS` | Total iterations configured for this run |
 | `RUN_INTERVAL` | Interval in seconds between iterations |
 | `RUN_ID` | Per-run identifier built as `<epoch_seconds><pid><2-digit-random-suffix>` |
+| `RETENTION_ARG_PASSED` | `1` when `--retention/-r` was explicitly provided, otherwise `0` |
+| `RETENTION_REPORT` | Effective retention count used for the run (default `30`, or CLI-provided value) |
 
 The `RUN_ID` groups all report files from the same invocation together, making it possible to correlate data across iterations without relying on timestamps alone.
 

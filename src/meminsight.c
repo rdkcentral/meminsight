@@ -159,15 +159,17 @@ static void unloadCjson(void)
 // -----------------------------
 // Global Variables
 // -----------------------------
-Process_Info getProcessInfo = {0};    // Temporary struct for collecting process info
-Process_Info *headProcessInfo = NULL; // Head of linked list
-Report_Format g_reportFormat  = REPORT_CSV; // Active output format (default: REPORT_CSV)
-bool g_jsonPrettyPrint         = false;
-bool g_bwDataAvailable = false;
-bool g_CollectFragData = false;
-unsigned smaps_rollup;                // Effective source for current parse: 1=smaps_rollup, 0=smaps
-unsigned force_smaps = 0;             // CLI override: force reading /proc/<pid>/smaps
-char gSMAPS_OR_ROLLUP[] = "smaps_rollup";
+Process_Info getProcessInfo = {0};         // Temporary struct for collecting process info
+Process_Info *headProcessInfo = NULL;      // Head of linked list
+Report_Format g_reportFormat = REPORT_CSV; // Active output format (default: REPORT_CSV)
+bool g_jsonPrettyPrint = false;            // Pretty-print JSON when true
+bool g_bwDataAvailable = false;            // Bandwidth data available
+bool g_CollectFragData = false;            // Collect fragmentation data only when --frag is passed
+unsigned smaps_rollup;                     // Effective source for current parse: 1=smaps_rollup, 0=smaps
+unsigned force_smaps = 0;                  // CLI override: force reading /proc/<pid>/smaps
+char gSMAPS_OR_ROLLUP[] = "smaps_rollup";  // Default source for process memory info (may be overridden by --smaps)
+int g_retention = DEFAULT_RETENTION;       // Number of report files retained by pre-run retention (default: 30, max: 100)
+int g_retentionArgPassed = 0;              // 1 when --retention/-r is explicitly provided, else 0
 
 typedef enum {
     FRAG_SRC_NONE = 0,
@@ -318,10 +320,221 @@ static int clear_dir_contents(const char *dir_path)
 }
 
 /**
+ * @brief File entry used for retention sorting.
+ */
+typedef struct {
+    char name[NAME_MAX + 1];
+    time_t mtime;
+} RetainEntry;
+
+/**
+ * @brief qsort comparator: sort RetainEntry by mtime descending (newest first).
+ */
+static int cmp_mtime_desc(const void *a, const void *b)
+{
+    const RetainEntry *ea = (const RetainEntry *)a;
+    const RetainEntry *eb = (const RetainEntry *)b;
+    if (eb->mtime > ea->mtime) return  1;
+    if (eb->mtime < ea->mtime) return -1;
+    return 0;
+}
+
+/**
+ * @brief Apply the retention policy to an existing output directory.
+ *
+ * Scans @p dir for report files matching the currently selected output format
+ * only: .csv in CSV mode, .json in JSON mode. If matching reports exist,
+ * creates a timestamped subdirectory named retention_<epoch>_meminsight inside
+ * @p dir.
+ *
+ * Behavior:
+ *  - If report count is <= @p retain: move all matching reports into retention.
+ *  - If report count is > @p retain: move newest @p retain reports into
+ *    retention and delete the rest.
+ *
+ * Non-report files/subdirectories are untouched. If no matching reports are
+ * found, the function returns immediately without creating a retention dir.
+ *
+ * @param[in] dir     Output directory to apply policy to.
+ * @param[in] retain  Retention count (must be >= 1, capped by MAX_RETENTION).
+ * @return 0 on success, -1 on scan/allocation/archive-create failure.
+ */
+static int apply_retention_policy(const char *dir, int retain)
+{
+    const char *activeExt = (g_reportFormat == REPORT_JSON) ? ".json" : ".csv";
+    const size_t activeExtLen = strlen(activeExt);
+
+    DIR *d = opendir(dir);
+    if (!d)
+    {
+        PRINT_MUST("Failed to open output dir for retention scan '%s': %s\n", dir, strerror(errno));
+        return -1;
+    }
+
+    /* Collect report files only for the active format (.csv or .json). */
+    size_t capacity = 32;
+    size_t count = 0;
+    RetainEntry *entries = (RetainEntry *)malloc(capacity * sizeof(RetainEntry));
+    if (!entries)
+    {
+        PRINT_MUST("Failed to allocate memory for retention scan\n");
+        closedir(d);
+        return -1;
+    }
+
+    struct dirent *ent;
+    while ((ent = readdir(d)) != NULL)
+    {
+        if (ent->d_name[0] == '.')
+            continue;
+
+        size_t nlen = strlen(ent->d_name);
+        if (nlen <= activeExtLen || strcmp(ent->d_name + nlen - activeExtLen, activeExt) != 0)
+            continue;
+
+        char fullpath[PATH_MAX];
+        snprintf(fullpath, sizeof(fullpath), "%s/%s", dir, ent->d_name);
+
+        struct stat st;
+        if (stat(fullpath, &st) != 0 || !S_ISREG(st.st_mode))
+            continue;
+
+        if (count >= capacity)
+        {
+            capacity *= 2;
+            RetainEntry *tmp = (RetainEntry *)realloc(entries, capacity * sizeof(RetainEntry));
+            if (!tmp)
+            {
+                PRINT_MUST("Failed to reallocate memory for retention scan\n");
+                free(entries);
+                closedir(d);
+                return -1;
+            }
+            entries = tmp;
+        }
+
+        strncpy(entries[count].name, ent->d_name, NAME_MAX);
+        entries[count].name[NAME_MAX] = '\0';
+        entries[count].mtime = st.st_mtime;
+        count++;
+    }
+    closedir(d);
+
+    if (count == 0)
+    {
+        free(entries);
+        PRINT_INFO("Output directory '%s' has no existing '%s' reports, proceeding with run.\n", dir, activeExt);
+        return 0;
+    }
+
+    /* Sort newest first. */
+    qsort(entries, count, sizeof(RetainEntry), cmp_mtime_desc);
+
+    int dirfd = open(dir, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    if (dirfd == -1)
+    {
+        PRINT_MUST("Failed to open output dir for retention operations '%s': %s\n", dir, strerror(errno));
+        free(entries);
+        return -1;
+    }
+
+    /*
+     * Create archive subdirectory inside output directory.
+     *
+     * Runs can start within the same second, so retention_<epoch>_meminsight
+     * may already exist. In that case retry with a numeric suffix.
+     */
+    char archiveName[96];
+    time_t epochNow = time(NULL);
+    bool archiveCreated = false;
+    for (int suffix = 0; suffix < 1000; suffix++)
+    {
+        int archiveNameLen;
+        if (suffix == 0)
+        {
+            archiveNameLen = snprintf(archiveName, sizeof(archiveName), "retention_%lld_meminsight",
+                                      (long long)epochNow);
+        }
+        else
+        {
+            archiveNameLen = snprintf(archiveName, sizeof(archiveName), "retention_%lld_%d_meminsight",
+                                      (long long)epochNow, suffix);
+        }
+
+        if (archiveNameLen <= 0 || (size_t)archiveNameLen >= sizeof(archiveName))
+        {
+            PRINT_MUST("Failed to build retention archive name for '%s'\n", dir);
+            close(dirfd);
+            free(entries);
+            return -1;
+        }
+
+        if (mkdirat(dirfd, archiveName, 0755) == 0)
+        {
+            archiveCreated = true;
+            break;
+        }
+
+        if (errno != EEXIST)
+        {
+            PRINT_MUST("Failed to create retention archive dir '%s/%s': %s\n", dir, archiveName, strerror(errno));
+            close(dirfd);
+            free(entries);
+            return -1;
+        }
+    }
+
+    if (!archiveCreated)
+    {
+        PRINT_MUST("Failed to create unique retention archive dir under '%s'\n", dir);
+        close(dirfd);
+        free(entries);
+        return -1;
+    }
+    int archivefd = openat(dirfd, archiveName, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    if (archivefd == -1)
+    {
+        PRINT_MUST("Failed to open retention archive dir '%s/%s': %s\n", dir, archiveName, strerror(errno));
+        close(dirfd);
+        free(entries);
+        return -1;
+    }
+
+    /* Determine how many newest files to move into retention archive. */
+    size_t keep = ((size_t)retain < count) ? (size_t)retain : count;
+
+    /* Move the newest `keep` files into the archive directory. */
+    for (size_t i = 0; i < keep; i++)
+    {
+        if (renameat(dirfd, entries[i].name, archivefd, entries[i].name) != 0)
+            PRINT_MUST("Retention: failed to archive '%s': %s\n", entries[i].name, strerror(errno));
+    }
+
+    /* Delete files beyond the retention limit. */
+    for (size_t i = keep; i < count; i++)
+    {
+        if (unlinkat(dirfd, entries[i].name, 0) != 0)
+            PRINT_MUST("Retention: failed to remove old report '%s': %s\n", entries[i].name, strerror(errno));
+    }
+
+    PRINT_MUST("Retention (%s): archived %zu report(s) to '%s/%s'", activeExt, keep, dir, archiveName);
+    if (count > keep)
+        PRINT_MUST(", removed %zu older report(s)", count - keep);
+    PRINT_MUST(".\n");
+
+    close(archivefd);
+    close(dirfd);
+    free(entries);
+    return 0;
+}
+
+/**
  * @brief Ensure the output directory exists, creating it if necessary.
  *
- * If the directory already exists its contents are cleared via
- * clear_dir_contents() so each run starts with a clean slate.
+ * If the directory already exists, apply_retention_policy() runs for files
+ * matching the active output format (CSV or JSON). This prepares the directory
+ * for a fresh run while preserving retention history under a timestamped
+ * retention_<epoch>_meminsight subdirectory.
  * If @p dir does not exist a single-level mkdir(2) is attempted.
  *
  * @param[in] dir  Path to the desired output directory.
@@ -334,10 +547,11 @@ static bool ensure_output_dir(const char *dir)
     {
         if (S_ISDIR(st.st_mode)) // Is a directory
         {
-            if (clear_dir_contents(dir) == 0)
-                PRINT_INFO("Output directory '%s' cleared for new run.\n", dir);
-            else
-                PRINT_MUST("Warning: some stale files in '%s' could not be removed.\n", dir);
+            if (apply_retention_policy(dir, g_retention) != 0)
+            {
+                PRINT_MUST("Failed to apply retention policy in '%s'\n", dir);
+                return false;
+            }
             return true;
         }
         PRINT_MUST("Path '%s' exists but is not a directory\n", dir);
@@ -540,37 +754,24 @@ SetupInfo initializeSetupInfo(const char *outDir, Report_Format format)
 /**
  * @brief Probe DDR bandwidth sysfs nodes and update g_bwDataAvailable.
  *
- * Checks the mode control file (BW_DDR_MODE_FILE) and bandwidth data file
- * (BW_DDR_FILE) and updates g_bwDataAvailable. Bandwidth is considered
- * available when BW_DDR_FILE is readable and BW_DDR_MODE_FILE is readable with
- * either write access available or mode already enabled ('1'). Called once at
- * startup.
+ * Checks both the mode control file (BW_DDR_MODE_FILE) for read/write access
+ * and the bandwidth data file (BW_DDR_FILE) for readability. Sets the global
+ * g_bwDataAvailable flag accordingly. Called once at startup.
  */
 static void updateBandwidthAvailability(void)
 {
 #ifdef TESTME
-    if (isTestMode) {
-        g_bwDataAvailable = (testBandwidth[0] != '\0');
+    /* In test mode, fixture availability determines bandwidth support. */
+    if (isTestMode)
+    {
+        g_bwDataAvailable = (testBandwidth[0] != '\0' && access(testBandwidth, R_OK) == 0);
         return;
     }
 #endif
 
+    bool modeAccessible = (access(BW_DDR_MODE_FILE, R_OK | W_OK) == 0);
     bool bwReadable = (access(BW_DDR_FILE, R_OK) == 0);
-    bool modeReadable = (access(BW_DDR_MODE_FILE, R_OK) == 0);
-    bool modeWritable = (access(BW_DDR_MODE_FILE, W_OK) == 0);
-    bool modeEnabled = false;
-
-    if (modeReadable) {
-        FILE *fp = fopen(BW_DDR_MODE_FILE, "r");
-        if (fp) {
-            char modeBuf[16] = {0};
-            if (fgets(modeBuf, sizeof(modeBuf), fp) && modeBuf[0] == '1')
-                modeEnabled = true;
-            fclose(fp);
-        }
-    }
-
-    g_bwDataAvailable = (bwReadable && modeReadable && (modeWritable || modeEnabled));
+    g_bwDataAvailable = (modeAccessible && bwReadable);
 }
 
 /**
@@ -3005,24 +3206,25 @@ void printHelpAndUsage(char *argv[], bool moreInfo, int returnCode)
     printf("A lightweight, configurable tool for collecting detailed system and per-process memory and CPU statistics.\n\n");
 
     printf("Options:\n");
-    printf("  -a, --all                             Include kernel threads for process monitoring\n");
-    printf("  -c, --config <file>                   Path to configuration file with %s extension\n", CONFIG_EXTN);
-    printf("  -o, --output <directory>              Output directory for generated report files (default: %s)\n", DEFAULT_OUT_DIR);
-    printf("      --interval <seconds>              Interval in seconds between iterations (overrides config)\n");
-    printf("      --iterations <count>              Number of iterations to run (overrides config)\n");
-    printf("      --upload-enable                   Enable Cadence based upload\n");
-    printf("      --upload-interval <seconds>       Report Upload Frequency\n");
-    printf("      --frag                            Enable fragmentation data collection (default: disabled)\n");
-    printf("  -s, --smaps               Force /proc/<pid>/smaps (disable auto smaps_rollup detection)\n");
-    printf("  -h, --help                            Show this help message and exit\n");
+    printf("  -a, --all                         Include kernel threads for process monitoring\n");
+    printf("  -c, --config <file>               Path to configuration file with %s extension\n", CONFIG_EXTN);
+    printf("  -h, --help                        Show this help message and exit\n");
+    printf("  -o, --output <directory>          Output directory for generated report files (default: %s)\n", DEFAULT_OUT_DIR);
+    printf("      --interval <seconds>          Interval in seconds between iterations (overrides config)\n");
+    printf("      --iterations <count>          Number of iterations to run (overrides config)\n");
+    printf("      --upload-enable               Enable Cadence based upload\n");
+    printf("      --upload-interval <seconds>   Report Upload Frequency\n");
+    printf("      --frag                        Enable fragmentation data collection (default: disabled)\n");
+    printf("  -r, --retention <count>           Number of report files to retain in pre-run retention (default: 30, max: 100)\n");
+    printf("  -s, --smaps                       Force /proc/<pid>/smaps (disable auto smaps_rollup detection)\n");
 #ifdef TESTME
     printf("  -t, --test <smapsFile> <meminfoFile> [buddyinfoFile] [pagetypeinfoFile] [statFile] [bandwidthFile]\n");
-    printf("                                      Run in test mode using supplied sample files\n\n");
+    printf("                                    Run in test mode using supplied sample files\n\n");
 #endif
 #ifdef ENABLE_CJSON
-    printf("      --fmt <format>                    Specify report format: csv (default) or json\n");
-    printf("                                        (cJSON loaded at runtime via dlopen)\n");
-    printf("      --json-pretty                     Pretty-print JSON output (only with --fmt json)\n\n");
+    printf("      --fmt <format>                Specify report format: csv (default) or json\n");
+    printf("                                    (cJSON loaded at runtime via dlopen)\n");
+    printf("      --json-pretty                 Pretty-print JSON output (only with --fmt json)\n\n");
 #endif
 
     if (moreInfo)
@@ -3129,6 +3331,8 @@ int collectSystemMemoryStats(bool enableKThreads, const char *outDir, int iterat
             g_cjson.AddNumberToObject(g_rootObject, "RUN_ITERATIONS", (double)iterations);
             g_cjson.AddNumberToObject(g_rootObject, "RUN_INTERVAL", (double)interval);
             g_cjson.AddStringToObject(g_rootObject, "RUN_ID", setup.runHash);
+            g_cjson.AddNumberToObject(g_rootObject, "RETENTION_ARG_PASSED", (double)g_retentionArgPassed);
+            g_cjson.AddNumberToObject(g_rootObject, "RETENTION_REPORT", (double)g_retention);
         }
 #endif
 
@@ -3141,7 +3345,7 @@ int collectSystemMemoryStats(bool enableKThreads, const char *outDir, int iterat
                 return -1;
             }
             fprintf(output, "%s\n", CSV_META_HEADER);
-            fprintf(output, "%s,%s,%s,%s,%s,%s,%d,%d,%d,%s\n\n", setup.fwName, setup.mac, ts, uptime, setup.kernelVersion, reportVersion, iter + 1, iterations, interval, setup.runHash);
+            fprintf(output, "%s,%s,%s,%s,%s,%s,%d,%d,%d,%s,%d,%d\n\n", setup.fwName, setup.mac, ts, uptime, setup.kernelVersion, reportVersion, iter + 1, iterations, interval, setup.runHash, g_retentionArgPassed, g_retention);
         }
 
         unsigned long rssTotal = 0, pssTotal = 0, shared_clean_total = 0, private_clean_total = 0, private_dirty_total = 0, swap_pss_total = 0;
@@ -3414,6 +3618,8 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, bool cli_out
             g_cjson.AddNumberToObject(g_rootObject, "RUN_ITERATIONS", (double)final_iterations);
             g_cjson.AddNumberToObject(g_rootObject, "RUN_INTERVAL", (double)final_interval);
             g_cjson.AddStringToObject(g_rootObject, "RUN_ID", setup.runHash);
+            g_cjson.AddNumberToObject(g_rootObject, "RETENTION_ARG_PASSED", (double)g_retentionArgPassed);
+            g_cjson.AddNumberToObject(g_rootObject, "RETENTION_REPORT", (double)g_retention);
         }
 #endif
 
@@ -3429,7 +3635,7 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, bool cli_out
                 return -1;
             }
             fprintf(output, "%s\n", CSV_META_HEADER);
-            fprintf(output, "%s,%s,%s,%s,%s,%s,%d,%d,%d,%s\n\n", setup.fwName, setup.mac, ts, uptime, setup.kernelVersion, reportVersion, iter + 1, final_iterations, final_interval, setup.runHash);
+            fprintf(output, "%s,%s,%s,%s,%s,%s,%d,%d,%d,%s,%d,%d\n\n", setup.fwName, setup.mac, ts, uptime, setup.kernelVersion, reportVersion, iter + 1, final_iterations, final_interval, setup.runHash, g_retentionArgPassed, g_retention);
         }
 
         unsigned long rssTotal = 0, pssTotal = 0, shared_clean_total = 0, private_clean_total = 0, private_dirty_total = 0, swap_pss_total = 0;
@@ -4154,6 +4360,25 @@ int main(int argc, char *argv[])
 #else
             printf("Warning: --json-pretty ignored (cJSON support not compiled in).\n");
 #endif
+        }
+        else if (!strncmp(argv[i], "-r", 3) || !strncmp(argv[i], "--retention", 8))
+        { // retention: number of latest reports to keep
+            if (i + 1 < argc)
+            {
+                g_retention = atoi(argv[i + 1]);
+                g_retentionArgPassed = 1;
+                i++; // skip next arg (retention count)
+                if (g_retention < 1 || g_retention > MAX_RETENTION)
+                {
+                    PRINT_ERROR("Error: --retention value must be between 1 and %d\n", MAX_RETENTION);
+                    printHelpAndUsage(argv, false, 1);
+                }
+            }
+            else
+            {
+                PRINT_ERROR("Error: Missing retention count after %s\n", argv[i]);
+                printHelpAndUsage(argv, false, 1);
+            }
         }
         else
         {

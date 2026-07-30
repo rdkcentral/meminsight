@@ -23,6 +23,12 @@ OpenSpec is the requirements source-of-truth for meminsight behavior and change 
 
 Use exact capability IDs (for example C01, C07, C10) consistently in implementation notes, review comments, and issue breakdowns.
 
+For retention and report metadata behavior, start with:
+
+1. [openspec/specs/01-cli-and-execution-modes.md](../openspec/specs/01-cli-and-execution-modes.md)
+2. [openspec/specs/02-output-directory-and-run-lifecycle.md](../openspec/specs/02-output-directory-and-run-lifecycle.md)
+3. [openspec/specs/10-json-report-output-optional.md](../openspec/specs/10-json-report-output-optional.md)
+
 ### 1. For bug fixes with no behavior change
 
 1. Identify impacted capability file(s) in openspec/specs.
@@ -95,4 +101,4 @@ The openspec/config.yaml file defines:
 ## Prompt and skill entry points
 
 1. Prompt shortcuts: /opsx:propose, /opsx:explore, /opsx:apply, /opsx:archive
-2. Detailed usage: .github/AGENTS_AND_SKILLS_USAGE.md
+2. Detailed usage: [.github/AGENTS_AND_SKILLS_USAGE.md](../.github/AGENTS_AND_SKILLS_USAGE.md)

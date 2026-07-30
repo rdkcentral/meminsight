@@ -21,6 +21,7 @@ This specification defines JSON report behavior when built with optional cJSON s
 Current JSON report includes:
 
 - top-level run metadata fields
+- retention metadata fields: `RETENTION_ARG_PASSED` and `RETENTION_REPORT`
 - meminfo object
 - cpu_stat object (raw aggregate `/proc/stat` fields) when source is available
 - bandwidth object when bandwidth data is available
@@ -35,4 +36,4 @@ Current JSON report includes:
 
 ## Source anchors
 
-loadCjson(), unloadCjson(), saveMeminfo_JSON(), saveSystemCpuStat_JSON(), collectBandwidthData_JSON(), saveFragmentationInfo_JSON(), writeProcessInfo_JSON(), writeJSONToFile(), main() in src/meminsight.c
+- `loadCjson()`, `unloadCjson()`, `saveMeminfo_JSON()`, `saveSystemCpuStat_JSON()`, `collectBandwidthData_JSON()`, `saveFragmentationInfo_JSON()`, `writeProcessInfo_JSON()`, `writeJSONToFile()`, and `main()` in [src/meminsight.c](../../src/meminsight.c)
