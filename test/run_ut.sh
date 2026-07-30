@@ -889,8 +889,8 @@ if $MEM_BIN --help 2>&1 | grep -F -- "--fmt" >/dev/null 2>&1; then
         JSON_FILE=$(ls "$META_OUT3"/*.json 2>/dev/null | head -n 1)
         CSV_FALLBACK_FILE=$(ls "$META_OUT3"/*.csv 2>/dev/null | head -n 1)
         if [ -n "$JSON_FILE" ] && \
-           grep -F '"RETENTION_ARG_PASSED": 1' "$JSON_FILE" >/dev/null 2>&1 && \
-           grep -F '"RETENTION_REPORT": 7' "$JSON_FILE" >/dev/null 2>&1; then
+              grep -Eq '"RETENTION_ARG_PASSED"[[:space:]]*:[[:space:]]*1' "$JSON_FILE" >/dev/null 2>&1 && \
+              grep -Eq '"RETENTION_REPORT"[[:space:]]*:[[:space:]]*7' "$JSON_FILE" >/dev/null 2>&1; then
             echo "✓ $META_DESC3 PASSED"
             record_tc_result "27" "JSON retention metadata" "SUCCESS"
         elif [ -z "$JSON_FILE" ] && [ -n "$CSV_FALLBACK_FILE" ]; then
