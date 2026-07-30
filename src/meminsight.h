@@ -81,7 +81,7 @@ This is used to ensure compatibility with older versions of the binary. */
 /* REPORT_MAJOR_VERSION, REPORT_MINOR_VERSION, and REPORT_PATCH_VERSION are to track the report format, any changes in the report format should increment this version.
 This is used to ensure compatibility with older versions of the report parser. */
 #define REPORT_MAJOR_VERSION "1"
-#define REPORT_MINOR_VERSION "2"
+#define REPORT_MINOR_VERSION "3"
 #define REPORT_PATCH_VERSION "0"
 
 #ifndef DEVICE_INTERFACE_KEY

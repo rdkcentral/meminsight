@@ -382,6 +382,15 @@ static int apply_retention_policy(const char *dir, int retain)
         return -1;
     }
 
+    int scanfd = dirfd(d);
+    if (scanfd == -1)
+    {
+        PRINT_MUST("Failed to get directory fd for retention scan '%s': %s\n", dir, strerror(errno));
+        free(entries);
+        closedir(d);
+        return -1;
+    }
+
     struct dirent *ent;
     while ((ent = readdir(d)) != NULL)
     {
@@ -392,11 +401,8 @@ static int apply_retention_policy(const char *dir, int retain)
         if (nlen <= activeExtLen || strcmp(ent->d_name + nlen - activeExtLen, activeExt) != 0)
             continue;
 
-        char fullpath[PATH_MAX];
-        snprintf(fullpath, sizeof(fullpath), "%s/%s", dir, ent->d_name);
-
         struct stat st;
-        if (stat(fullpath, &st) != 0 || !S_ISREG(st.st_mode))
+        if (fstatat(scanfd, ent->d_name, &st, 0) != 0 || !S_ISREG(st.st_mode))
             continue;
 
         if (count >= capacity)
@@ -769,9 +775,24 @@ static void updateBandwidthAvailability(void)
     }
 #endif
 
-    bool modeAccessible = (access(BW_DDR_MODE_FILE, R_OK | W_OK) == 0);
+    bool modeReadable = (access(BW_DDR_MODE_FILE, R_OK) == 0);
+    bool modeWritable = (access(BW_DDR_MODE_FILE, W_OK) == 0);
     bool bwReadable = (access(BW_DDR_FILE, R_OK) == 0);
-    g_bwDataAvailable = (modeAccessible && bwReadable);
+    bool modeEnabled = false;
+
+    if (modeReadable)
+    {
+        FILE *fp = fopen(BW_DDR_MODE_FILE, "r");
+        if (fp)
+        {
+            char modeBuf[16] = {0};
+            if (fgets(modeBuf, sizeof(modeBuf), fp) && modeBuf[0] == '1')
+                modeEnabled = true;
+            fclose(fp);
+        }
+    }
+
+    g_bwDataAvailable = (bwReadable && modeReadable && (modeWritable || modeEnabled));
 }
 
 /**
@@ -4361,7 +4382,7 @@ int main(int argc, char *argv[])
             printf("Warning: --json-pretty ignored (cJSON support not compiled in).\n");
 #endif
         }
-        else if (!strncmp(argv[i], "-r", 3) || !strncmp(argv[i], "--retention", 8))
+        else if (!strncmp(argv[i], "-r", 3) || !strncmp(argv[i], "--retention", 11))
         { // retention: number of latest reports to keep
             if (i + 1 < argc)
             {
