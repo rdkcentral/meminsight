@@ -51,7 +51,7 @@ MEMINSIGHT_BIN="${MEMINSIGHT_BIN:-${PROJECT_ROOT}/meminsight}"
 LEAK_REPORT_DIR="${LEAK_REPORT_DIR:-/tmp/meminsight-leak-reports}"
 
 # Defaults for runtime cases
-CASE_OUT_BASE="/tmp/meminsight/leak"
+CASE_OUT_BASE="/tmp/meminsight/leak_meminsight"
 CASE_INTERVAL="2"
 CASE_ITERATIONS="5"
 CASE_JSON_PRETTY="0"
@@ -68,10 +68,10 @@ EXAMPLES:
   sh scripts/detect_leak.sh
 
   # Override output/interval/iterations for runtime cases
-  sh scripts/detect_leak.sh -o /tmp/out -i 1 -I 3
+  sh scripts/detect_leak.sh -o /tmp/out_meminsight -i 1 -I 3
 
   # Also enable pretty JSON in the JSON runtime case
-  sh scripts/detect_leak.sh -o /tmp/out -i 1 -I 3 --json-pretty
+  sh scripts/detect_leak.sh -o /tmp/out_meminsight -i 1 -I 3 --json-pretty
 
 OPTIONS:
   -o, --output <dir>      Base output directory for runtime cases
@@ -97,6 +97,8 @@ OUTPUT FILES:
 NOTES:
   - Requires memleakutil to be built first via sh scripts/build_memleak.sh
   - Uses LD_PRELOAD to instrument meminsight process
+  - Runtime output basename must contain 'meminsight'; if not, this script
+    appends '_meminsight' automatically.
   - Runs these cases:
       0) --help
       1) --interval <interval> --iterations <iterations> --output <output>
@@ -147,6 +149,16 @@ while [ "$#" -gt 0 ]; do
   esac
   shift
 done
+
+# Ensure runtime output basename satisfies meminsight CLI validation.
+case_out_base_name="$(basename "$CASE_OUT_BASE")"
+case "$case_out_base_name" in
+  *meminsight*)
+    ;;
+  *)
+    CASE_OUT_BASE="${CASE_OUT_BASE}_meminsight"
+    ;;
+esac
 
 printf "%s\n" "================================================"
 printf "%s\n" "  MemInsight Leak Detection Runner"

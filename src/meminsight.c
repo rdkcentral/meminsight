@@ -623,8 +623,6 @@ static void removeFileIfPresent(const char *filePath)
     (void)unlink(filePath);  /* Silently ignore all errors; file may not exist */
 }
 
-static bool readConfigStoreValue(const char *dir, const char *key, char *value, size_t valueLen);
-
 static bool getPathBasename(const char *path, char *baseBuf, size_t baseBufLen, const char **baseOut)
 {
     if (!path || !*path || !baseBuf || baseBufLen == 0 || !baseOut)
@@ -667,8 +665,6 @@ static bool validateOutputDirOrHelp(const char *dir, char *argv[], bool moreInfo
 
     return true;
 }
-
-static bool readConfigStoreValue(const char *dir, const char *key, char *value, size_t valueLen);
 
 static bool buildConfigStorePath(const char *dir, char *path, size_t pathLen)
 {
@@ -806,10 +802,21 @@ static void writeConfigStore(const SetupInfo *setup, int iterations, int interva
             return; /* All values unchanged — skip write */
     }
 
-    fp = fopen(configStorePath, "w");
-    if (!fp)
+    int cfg_fd = open(configStorePath, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0640);
+    if (cfg_fd == -1)
     {
         PRINT_MUST("Failed to write configstore '%s': %s\n", configStorePath, strerror(errno));
+        return;
+    }
+
+    /* Ensure restrictive permissions even when truncating an existing file. */
+    (void)fchmod(cfg_fd, S_IRUSR | S_IWUSR | S_IRGRP);
+
+    fp = fdopen(cfg_fd, "w");
+    if (!fp)
+    {
+        PRINT_MUST("Failed to open configstore stream '%s': %s\n", configStorePath, strerror(errno));
+        close(cfg_fd);
         return;
     }
     for (int k = 0; k < nkeys; k++)
