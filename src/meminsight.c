@@ -205,6 +205,7 @@ int (*getProcessInfos_ptr)(FILE*);
 
 /* Forward declarations for local helpers used before their definitions. */
 static void trimTrailingWhitespace(char *str);
+static bool readConfigStoreValue(const char *dir, const char *key, char *value, size_t valueLen);
 
 // -----------------------------
 // Utility Functions
@@ -344,8 +345,8 @@ static int cmp_mtime_desc(const void *a, const void *b)
  *
  * Scans @p dir for report files matching the currently selected output format
  * only: .csv in CSV mode, .json in JSON mode. If matching reports exist,
- * creates a timestamped subdirectory named retention_<epoch>_meminsight inside
- * @p dir.
+ * creates a timestamped subdirectory named <timestamp>_<RUN_ID>_<RETENTION_BASE>
+ * inside @p dir.
  *
  * Behavior:
  *  - If report count is <= @p retain: move all matching reports into retention.
@@ -359,7 +360,7 @@ static int cmp_mtime_desc(const void *a, const void *b)
  * @param[in] retain  Retention count (must be >= 1, capped by MAX_RETENTION).
  * @return 0 on success, -1 on scan/allocation/archive-create failure.
  */
-static int apply_retention_policy(const char *dir, int retain)
+static int apply_retention_policy(const char *dir, int retain, const char *runIdFallback)
 {
     const char *activeExt = (g_reportFormat == REPORT_JSON) ? ".json" : ".csv";
     const size_t activeExtLen = strlen(activeExt);
@@ -447,10 +448,19 @@ static int apply_retention_policy(const char *dir, int retain)
     /*
      * Create archive subdirectory inside output directory.
      *
-     * Runs can start within the same second, so retention_<epoch>_meminsight
+    * Runs can start within the same second, so <timestamp>_<RUN_ID>_<RETENTION_BASE>
      * may already exist. In that case retry with a numeric suffix.
      */
-    char archiveName[96];
+    char archiveName[PATH_MAX];
+    char configRunId[32] = {0};
+    const char *runId = runIdFallback;
+
+    if (readConfigStoreValue(dir, "RUN_ID", configRunId, sizeof(configRunId)) && configRunId[0] != '\0')
+        runId = configRunId;
+
+    if (!runId || !*runId)
+        runId = "unknown";
+
     time_t epochNow = time(NULL);
     bool archiveCreated = false;
     for (int suffix = 0; suffix < 1000; suffix++)
@@ -458,13 +468,13 @@ static int apply_retention_policy(const char *dir, int retain)
         int archiveNameLen;
         if (suffix == 0)
         {
-            archiveNameLen = snprintf(archiveName, sizeof(archiveName), "retention_%lld_meminsight",
-                                      (long long)epochNow);
+            archiveNameLen = snprintf(archiveName, sizeof(archiveName), "%lld_%s_%s",
+                                      (long long)epochNow, runId, RETENTION_BASE);
         }
         else
         {
-            archiveNameLen = snprintf(archiveName, sizeof(archiveName), "retention_%lld_%d_meminsight",
-                                      (long long)epochNow, suffix);
+            archiveNameLen = snprintf(archiveName, sizeof(archiveName), "%lld_%s_%s_%d",
+                                      (long long)epochNow, runId, RETENTION_BASE, suffix);
         }
 
         if (archiveNameLen <= 0 || (size_t)archiveNameLen >= sizeof(archiveName))
@@ -540,20 +550,20 @@ static int apply_retention_policy(const char *dir, int retain)
  * If the directory already exists, apply_retention_policy() runs for files
  * matching the active output format (CSV or JSON). This prepares the directory
  * for a fresh run while preserving retention history under a timestamped
- * retention_<epoch>_meminsight subdirectory.
+ * <timestamp>_<RUN_ID>_<basename> subdirectory.
  * If @p dir does not exist a single-level mkdir(2) is attempted.
  *
  * @param[in] dir  Path to the desired output directory.
  * @return true if the directory exists or was successfully created, false otherwise.
  */
-static bool ensure_output_dir(const char *dir)
+static bool ensure_output_dir(const char *dir, const char *runIdFallback)
 {
     struct stat st = {0};
     if (stat(dir, &st) == 0) // Exists
     {
         if (S_ISDIR(st.st_mode)) // Is a directory
         {
-            if (apply_retention_policy(dir, g_retention) != 0)
+            if (apply_retention_policy(dir, g_retention, runIdFallback) != 0)
             {
                 PRINT_MUST("Failed to apply retention policy in '%s'\n", dir);
                 return false;
@@ -613,12 +623,106 @@ static void removeFileIfPresent(const char *filePath)
     (void)unlink(filePath);  /* Silently ignore all errors; file may not exist */
 }
 
+static bool readConfigStoreValue(const char *dir, const char *key, char *value, size_t valueLen);
+
+static bool getPathBasename(const char *path, char *baseBuf, size_t baseBufLen, const char **baseOut)
+{
+    if (!path || !*path || !baseBuf || baseBufLen == 0 || !baseOut)
+        return false;
+
+    size_t len = strlen(path);
+    while (len > 1 && path[len - 1] == '/')
+        len--;
+
+    if (len >= baseBufLen)
+        return false;
+
+    memcpy(baseBuf, path, len);
+    baseBuf[len] = '\0';
+
+    char *slash = strrchr(baseBuf, '/');
+    *baseOut = slash ? slash + 1 : baseBuf;
+    return true;
+}
+
+static bool outputDirHasMeminsightBase(const char *dir)
+{
+    char baseBuf[PATH_MAX];
+    const char *baseName = NULL;
+
+    if (!getPathBasename(dir, baseBuf, sizeof(baseBuf), &baseName))
+        return false;
+
+    return strstr(baseName, "meminsight") != NULL;
+}
+
+static bool validateOutputDirOrHelp(const char *dir, char *argv[], bool moreInfo)
+{
+    if (!outputDirHasMeminsightBase(dir))
+    {
+        PRINT_MUST("Output directory '%s' must have 'meminsight' in the final path component\n", dir);
+        printHelpAndUsage(argv, moreInfo, 1);
+        return false;
+    }
+
+    return true;
+}
+
+static bool readConfigStoreValue(const char *dir, const char *key, char *value, size_t valueLen);
+
+static bool buildConfigStorePath(const char *dir, char *path, size_t pathLen)
+{
+    if (!dir || !path || pathLen == 0)
+        return false;
+
+    int written = snprintf(path, pathLen, "%s/%s", dir, MEMINSIGHT_CONFIGSTORE_NAME);
+    return written > 0 && (size_t)written < pathLen;
+}
+
+static bool readConfigStoreValue(const char *dir, const char *key, char *value, size_t valueLen)
+{
+    if (!dir || !key || !*key || !value || valueLen == 0)
+        return false;
+
+    char configPath[PATH_MAX];
+    if (!buildConfigStorePath(dir, configPath, sizeof(configPath)))
+        return false;
+
+    FILE *fp = fopen(configPath, "r");
+    if (!fp)
+        return false;
+
+    bool found = false;
+    char line[PATH_MAX + 64];
+    while (fgets(line, sizeof(line), fp))
+    {
+        size_t len = strlen(line);
+        while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r'))
+            line[--len] = '\0';
+
+        char *eq = strchr(line, '=');
+        if (!eq)
+            continue;
+
+        *eq = '\0';
+        if (strcmp(line, key) == 0)
+        {
+            snprintf(value, valueLen, "%s", eq + 1);
+            found = true;
+            break;
+        }
+    }
+
+    fclose(fp);
+    return found;
+}
+
 /**
  * @brief Write (or selectively update) the configstore state file.
  *
- * Writes key=value pairs to MEMINSIGHT_CONFIGSTORE_PATH before the capture
- * run begins so that the upload script can read run parameters without
- * needing to re-parse the original command line.
+ * Writes key=value pairs to <output-dir>/.meminsight_configstore before the
+ * capture run begins so that the upload script can read run parameters
+ * without needing to re-parse the original command line.
  *
  * The file is read first; if every key already holds the correct value the
  * file is left untouched. If any value differs, or the file is absent, the
@@ -657,6 +761,13 @@ static void writeConfigStore(const SetupInfo *setup, int iterations, int interva
     snprintf(v_uintv,  sizeof(v_uintv),  "%d", upload_interval);
     snprintf(v_outdir, sizeof(v_outdir), "%s", setup->outputDir);
 
+    char configStorePath[PATH_MAX];
+    if (!buildConfigStorePath(setup->outputDir, configStorePath, sizeof(configStorePath)))
+    {
+        PRINT_MUST("Failed to build configstore path under '%s'\n", setup->outputDir);
+        return;
+    }
+
     const char * const vals[] = {
         v_uptime, v_kver, v_mver, v_rver,
         v_iter, v_intv, v_runid, v_fmt,
@@ -664,7 +775,7 @@ static void writeConfigStore(const SetupInfo *setup, int iterations, int interva
     };
 
     /* Check if existing file already has all matching values */
-    FILE *fp = fopen(MEMINSIGHT_CONFIGSTORE_PATH, "r");
+    FILE *fp = fopen(configStorePath, "r");
     if (fp)
     {
         int matched[11] = {0};
@@ -695,11 +806,10 @@ static void writeConfigStore(const SetupInfo *setup, int iterations, int interva
             return; /* All values unchanged — skip write */
     }
 
-    fp = fopen(MEMINSIGHT_CONFIGSTORE_PATH, "w");
+    fp = fopen(configStorePath, "w");
     if (!fp)
     {
-        PRINT_MUST("Failed to write configstore '%s': %s\n",
-                   MEMINSIGHT_CONFIGSTORE_PATH, strerror(errno));
+        PRINT_MUST("Failed to write configstore '%s': %s\n", configStorePath, strerror(errno));
         return;
     }
     for (int k = 0; k < nkeys; k++)
@@ -727,9 +837,16 @@ SetupInfo initializeSetupInfo(const char *outDir, Report_Format format)
 {
     SetupInfo info = {0};
 
+    unsigned long long epoch = (unsigned long long)time(NULL);
+    unsigned long long pid = (unsigned long long)getpid();
+    srand((unsigned int)(epoch ^ pid));
+    int random2Digit = rand() % 100;
+    PRINT_INFO("Debug: epoch=%llu |  pid=%llu | random2Digit=%02d\n", epoch, pid, random2Digit);
+    snprintf(info.runHash, sizeof(info.runHash), "%llu%llu%02d", epoch, pid, random2Digit);
+
     /* One-time directory and file setup. */
     info.outputDir = (outDir && *outDir) ? outDir : DEFAULT_OUT_DIR;
-    info.dirCreated = ensure_output_dir(info.outputDir);
+    info.dirCreated = ensure_output_dir(info.outputDir, info.runHash);
     info.reportFileName = (format == REPORT_JSON) ? JSON_FILE_NAME : CSV_FILE_NAME;
 
     /* One-time device metadata. */
@@ -747,12 +864,6 @@ SetupInfo initializeSetupInfo(const char *outDir, Report_Format format)
     const char *kv = getKernelVersion();
     strncpy(info.kernelVersion, kv, sizeof(info.kernelVersion) - 1);
     info.kernelVersion[sizeof(info.kernelVersion) - 1] = '\0';
-    unsigned long long epoch = (unsigned long long)time(NULL);
-    unsigned long long pid = (unsigned long long)getpid();
-    srand((unsigned int)(epoch ^ pid));
-    int random2Digit = rand() % 100;
-    PRINT_INFO("Debug: epoch=%llu |  pid=%llu | random2Digit=%02d\n", epoch, pid, random2Digit);
-    snprintf(info.runHash, sizeof(info.runHash), "%llu%llu%02d", epoch, pid, random2Digit);
 
     return info;
 }
@@ -3230,7 +3341,7 @@ void printHelpAndUsage(char *argv[], bool moreInfo, int returnCode)
     printf("  -a, --all                         Include kernel threads for process monitoring\n");
     printf("  -c, --config <file>               Path to configuration file with %s extension\n", CONFIG_EXTN);
     printf("  -h, --help                        Show this help message and exit\n");
-    printf("  -o, --output <directory>          Output directory for generated report files (default: %s)\n", DEFAULT_OUT_DIR);
+    printf("  -o, --output <directory>          Output directory for generated report files (default: %s; basename must contain 'meminsight')\n", DEFAULT_OUT_DIR);
     printf("      --interval <seconds>          Interval in seconds between iterations (overrides config)\n");
     printf("      --iterations <count>          Number of iterations to run (overrides config)\n");
     printf("      --upload-enable               Enable Cadence based upload\n");
@@ -3537,6 +3648,15 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, bool cli_out
     const char *final_out_dir = cli_output_set
                                     ? cli_out_dir
                                     : (config.outputDir[0] ? config.outputDir : DEFAULT_OUT_DIR);
+
+    if (!outputDirHasMeminsightBase(final_out_dir))
+    {
+        PRINT_ERROR("Error: Output directory '%s' must have 'meminsight' in the final path component\n", final_out_dir);
+        for (unsigned j = 0; j < config.whiteListCount; j++)
+            if (config.whitelist[j]) free(config.whitelist[j]);
+        if (config.whitelist) free(config.whitelist);
+        return -1;
+    }
 
     // Initialize setup info (MAC, firmware name, output dir, file extension)
     SetupInfo setup = initializeSetupInfo(final_out_dir, g_reportFormat);
@@ -4275,6 +4395,8 @@ int main(int argc, char *argv[])
             if (i + 1 < argc)
             {
                 strncpy(out_dir, argv[i + 1], PATH_MAX - 1);
+                if (!validateOutputDirOrHelp(out_dir, argv, false))
+                    return 1;
                 cli_output_set = true;
                 i++; // skip next arg (output directory)
             }

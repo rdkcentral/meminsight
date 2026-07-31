@@ -106,7 +106,7 @@ This is used to ensure compatibility with older versions of the report parser. *
 #define PGT_FILE PROC_DIR "/pagetypeinfo"
 #endif
 
-#define MEMINSIGHT_CONFIGSTORE_PATH "/tmp/.meminsight_configstore"
+#define MEMINSIGHT_CONFIGSTORE_NAME ".meminsight_configstore"
 #define MEMINSIGHT_UPLOAD_MARKER_PATH "/tmp/.meminsight_upload"
 #define MEMINSIGHT_INPROGRESS_FILE "/tmp/.meminsight_inprogress"
 
@@ -121,6 +121,7 @@ This is used to ensure compatibility with older versions of the report parser. *
 #define DEFAULT_MAC "000000000000"
 #define DEFAULT_RETENTION 30
 #define MAX_RETENTION 100
+#define RETENTION_BASE "backup"
 #ifndef DEFAULT_OUT_DIR
 #define DEFAULT_OUT_DIR "/opt/meminsight"
 #endif

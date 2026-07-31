@@ -7,14 +7,15 @@ This specification defines how meminsight prepares output directories and manage
 ## Current behavior
 
 1. At run setup, the configured output directory is ensured to exist.
-2. If the output directory exists and is a directory, pre-run retention is applied only to report files that match the active format (`.csv` in CSV mode, `.json` in JSON mode).
-3. If matching report count is less than or equal to retention count, all matching reports are moved to a timestamped retention directory under the output directory.
-4. If matching report count exceeds retention count, newest `N` matching reports are moved to retention and older matching reports are removed.
-5. Non-matching files in the output directory are not modified by retention processing.
-6. If the target path exists but is not a directory, run setup fails.
-7. If the directory does not exist, a single-level create is attempted.
-8. Each run creates an in-progress sentinel file before collection starts.
-9. The in-progress sentinel file is removed on normal completion and on handled error exits.
+2. The final path component of the output directory must contain `meminsight`; otherwise run setup fails.
+3. If the output directory exists and is a directory, pre-run retention is applied only to report files that match the active format (`.csv` in CSV mode, `.json` in JSON mode).
+4. If matching report count is less than or equal to retention count, all matching reports are moved to a timestamped retention directory named `<timestamp>_<RUN_ID>_backup` under the output directory.
+5. If matching report count exceeds retention count, newest `N` matching reports are moved to retention and older matching reports are removed.
+6. Non-matching files in the output directory are not modified by retention processing.
+7. If the target path exists but is not a directory, run setup fails.
+8. If the directory does not exist, a single-level create is attempted.
+9. Each run creates an in-progress sentinel file before collection starts.
+10. The in-progress sentinel file is removed on normal completion and on handled error exits.
 
 ## Safety behavior
 

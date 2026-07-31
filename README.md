@@ -253,7 +253,7 @@ The tool supports automatic report upload signaling via systemd path-triggered u
 
 When `--upload-enable` is passed:
 - A marker file `/tmp/.meminsight_upload` is created immediately before the capture run begins
-- A state file `/tmp/.meminsight_configstore` is written with run parameters
+- A state file `</output-dir>/.meminsight_configstore` is written with run parameters
 - An in-progress sentinel `/tmp/.meminsight_inprogress` is created at run start and removed at completion
 - The systemd `meminsight-upload.path` unit watches for the marker and triggers the upload service
 
@@ -261,7 +261,7 @@ When `--upload-enable` is passed:
 
 Meminsight creates and manages the following state files:
 
-### `/tmp/.meminsight_configstore` (Persistent, Per-Run)
+### `</output-dir>/.meminsight_configstore` (Persistent, Per-Run)
 
 **Purpose**: Store run parameters for the upload script to read.
 
@@ -272,7 +272,7 @@ Meminsight creates and manages the following state files:
 UPTIME=12345.67
 KERNEL_VERSION=5.15.0-91-generic
 MEMINSIGHT_VERSION=1.1.2
-REPORT_VERSION=1.2.0
+REPORT_VERSION=1.3.0
 RUN_ITERATIONS=10
 RUN_INTERVAL=60
 RUN_ID=17014563271234507
@@ -514,11 +514,11 @@ make install
 
 1. **Argument parsing** — Parse CLI options including output directory and upload flags.
 2. **Startup retention preparation** — `ensure_output_dir()` creates the output directory when absent. If present, it applies format-scoped pre-run retention (`.csv` in CSV mode, `.json` in JSON mode):
-   - If report count is `<= retention`, move all matching reports into `retention_<epoch>_meminsight`.
+   - If report count is `<= retention`, move all matching reports into `<timestamp>_<RUN_ID>_backup`.
    - If report count is `> retention`, move the newest `N` matching reports into retention and delete the older matching ones.
    - Non-matching files are untouched.
 3. **Setup initialization** — Cache MAC address, firmware name, kernel version, and generate a per-run `RUN_ID` by concatenating epoch seconds + PID + a randomly generated 2-digit suffix.
-4. **State file creation** — Write `/tmp/.meminsight_configstore` with resolved run parameters. This file persists across runs and is selectively updated.
+4. **State file creation** — Write `</output-dir>/.meminsight_configstore` with resolved run parameters. This file persists across runs and is selectively updated.
 5. **Upload marker creation** — If `--upload-enable` was passed, create `/tmp/.meminsight_upload` to signal the systemd upload service.
 6. **In-progress sentinel** — Create `/tmp/.meminsight_inprogress` to mark an active run.
 7. **Iteration loop** — For each iteration:
@@ -541,7 +541,7 @@ make install
 | `parseConfig()` | Configuration file processing | meminsight.c |
 | `ensure_output_dir()` | Create output dir and apply format-scoped pre-run retention policy | meminsight.c |
 | `initializeSetupInfo()` | Cache device metadata and generate run hash | meminsight.c |
-| `writeConfigStore()` | Write/update persistent state file to `/tmp/.meminsight_configstore` | meminsight.c |
+| `writeConfigStore()` | Write/update persistent state file to `</output-dir>/.meminsight_configstore` | meminsight.c |
 | `touchFile()` | Create or truncate marker files | meminsight.c |
 | `removeFileIfPresent()` | Gracefully remove in-progress sentinel on exit | meminsight.c |
 | `readSystemCpuStat()` | Parse aggregate CPU counters from `/proc/stat` | meminsight.c |
@@ -603,6 +603,8 @@ CPPFLAGS="-DDEVICE_INTERFACE_KEY=\"ESTB_INTERFACE\"" make clean && make
 # 8. Configstore persists for audit and future reference
 ```
 
+Note: the chosen output directory must have `meminsight` in its final path component, and the configstore is written inside that output directory as `.meminsight_configstore`.
+
 ### Example 5: Config File with Upload Settings
 
 ```bash
@@ -646,7 +648,7 @@ Every report file (CSV and JSON) begins with a metadata row containing the follo
 
 The `RUN_ID` groups all report files from the same invocation together, making it possible to correlate data across iterations without relying on timestamps alone.
 
-Current report schema version is `1.2.0`.
+Current report schema version is `1.3.0`.
 
 When available, reports also include a `CPUStat` section in CSV and a `cpu_stat` object in JSON with raw counters in this order:
 `user, nice, system, idle, iowait, irq, softirq, steal, guest, guest_nice`.
@@ -785,11 +787,11 @@ sudo journalctl -u meminsight-upload.service -n 20
 **Issue**: Configstore not found by upload script
 ```bash
 # Check configstore file and permissions
-ls -la /tmp/.meminsight_configstore
-cat /tmp/.meminsight_configstore  # View current run parameters
+ls -la /opt/meminsight/.meminsight_configstore
+cat /opt/meminsight/.meminsight_configstore  # View current run parameters
 
 # Ensure upload script has read permission
-chmod 644 /tmp/.meminsight_configstore
+chmod 644 /opt/meminsight/.meminsight_configstore
 ```
 
 **Issue**: In-progress sentinel not cleaned up

@@ -35,6 +35,7 @@ Supported options in the current implementation:
 8. Without forced smaps, the tool auto-selects smaps_rollup when available, otherwise smaps.
 9. Long-run mode is active by default when no explicit interval/iterations pair is supplied.
 10. `--retention` / `-r` accepts values in range 1..100; out-of-range values trigger usage error output and non-success exit.
+11. `--output` / `-o` requires the final path component to contain `meminsight`; otherwise output-directory setup fails.
 
 ## Defaults and precedence
 
