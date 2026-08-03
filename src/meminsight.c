@@ -358,7 +358,8 @@ static int cmp_mtime_desc(const void *a, const void *b)
  *
  * @param[in] dir     Output directory to apply policy to.
  * @param[in] keepCount  Backup count (must be >= 1, capped by MAX_BACKUP_COUNT).
- * @return 0 on success, -1 on scan/allocation/archive-create failure.
+ * @return 0 on success, -1 on scan/allocation/archive-create failure,
+ *         or when any archive/remove file operation fails.
  */
 static int apply_backup_policy(const char *dir, int keepCount, const char *runIdFallback)
 {
@@ -789,7 +790,7 @@ static void writeConfigStore(const SetupInfo *setup, int iterations, int interva
     snprintf(v_upload, sizeof(v_upload), "%d", upload_enabled ? 1 : 0);
     snprintf(v_uintv,  sizeof(v_uintv),  "%d", upload_interval);
     snprintf(v_outdir, sizeof(v_outdir), "%s", setup->outputDir);
-    snprintf(v_backup_enabled, sizeof(v_backup_enabled), "%d", g_backupArgPassed ? 1 : 0);
+    snprintf(v_backup_enabled, sizeof(v_backup_enabled), "%d", 1);
     snprintf(v_backup_count, sizeof(v_backup_count), "%d", g_backupCount);
     snprintf(v_backup_base, sizeof(v_backup_base), "%s", BACKUP_BASE);
     snprintf(v_frag_enabled, sizeof(v_frag_enabled), "%d", g_CollectFragData ? 1 : 0);
@@ -886,7 +887,9 @@ SetupInfo initializeSetupInfo(const char *outDir, Report_Format format)
     unsigned long long pid = (unsigned long long)getpid();
     srand((unsigned int)(epoch ^ pid));
     int random2Digit = rand() % 100;
+#ifdef TESTME
     PRINT_INFO("Debug: epoch=%llu |  pid=%llu | random2Digit=%02d\n", epoch, pid, random2Digit);
+#endif
     snprintf(info.runHash, sizeof(info.runHash), "%llu%llu%02d", epoch, pid, random2Digit);
 
     /* One-time directory and file setup. */

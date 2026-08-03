@@ -7,7 +7,7 @@ This specification defines the current upload signaling and run-state file behav
 ## Files
 
 - /tmp/.meminsight_upload
-- <output-dir>/.meminsight_configstore
+- `<output-dir>/.meminsight_configstore`
 - /tmp/.meminsight_inprogress
 
 ## Current behavior

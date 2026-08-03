@@ -51,8 +51,7 @@ record_tc_result() {
     if [ -z "$TC_RESULTS" ]; then
         TC_RESULTS="${tc_id}|${tc_summary}|${tc_status}"
     else
-        TC_RESULTS="${TC_RESULTS}
-${tc_id}|${tc_summary}|${tc_status}"
+        TC_RESULTS=$(printf '%s\n%s|%s|%s' "$TC_RESULTS" "$tc_id" "$tc_summary" "$tc_status")
     fi
 }
 
