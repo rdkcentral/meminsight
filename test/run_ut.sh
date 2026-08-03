@@ -595,16 +595,16 @@ else
 fi
 echo ""
 
-# Retention policy tests
+# Backup policy tests
 RET_SMAP_FILE="test/1-non-zero-swap-entry/meminsight_testSmap.txt"
 RET_MEMINFO_FILE="test/1-non-zero-swap-entry/meminsight_testMeminfo.txt"
-RET_BASE="/tmp/meminsight_retention_tests"
-RETENTION_BASE="backup"
+RET_BASE="/tmp/meminsight_backup_tests"
+BACKUP_BASE="backup"
 rm -rf "$RET_BASE"
 mkdir -p "$RET_BASE"
 
 # Test 19: output dir missing -> create and proceed
-RET_DESC1="Test 19: Retention create missing output directory"
+RET_DESC1="Test 19: Backup create missing output directory"
 RET_OUT1="$RET_BASE/meminsight_case1_missing_dir"
 RET_OUT1_BASENAME="$(basename "$RET_OUT1")"
 
@@ -618,21 +618,21 @@ rm -f /tmp/.meminsight_configstore
 if $MEM_BIN -o "$RET_OUT1" -t "$RET_SMAP_FILE" "$RET_MEMINFO_FILE"; then
     if [ -d "$RET_OUT1" ] && [ -f "$RET_OUT1/.meminsight_configstore" ] && ls "$RET_OUT1"/*.csv >/dev/null 2>&1 && [ ! -e /tmp/.meminsight_configstore ]; then
         echo "✓ $RET_DESC1 PASSED"
-        record_tc_result "19" "Retention create missing output directory" "SUCCESS"
+        record_tc_result "19" "Backup create missing output directory" "SUCCESS"
     else
         echo "✗ $RET_DESC1 FAILED (output directory/report/configstore not created as expected)"
         TEST_FAILED=$((TEST_FAILED + 1))
-        record_tc_result "19" "Retention create missing output directory" "FAILURE"
+        record_tc_result "19" "Backup create missing output directory" "FAILURE"
     fi
 else
     echo "✗ $RET_DESC1 FAILED (command execution failed)"
     TEST_FAILED=$((TEST_FAILED + 1))
-    record_tc_result "19" "Retention create missing output directory" "FAILURE"
+    record_tc_result "19" "Backup create missing output directory" "FAILURE"
 fi
 echo ""
 
-# Test 20: output dir exists and empty -> proceed without creating retention dir
-RET_DESC2="Test 20: Retention existing empty output directory"
+# Test 20: output dir exists and empty -> proceed without creating backup dir
+RET_DESC2="Test 20: Backup existing empty output directory"
 RET_OUT2="$RET_BASE/meminsight_case2_empty_dir"
 RET_OUT2_BASENAME="$(basename "$RET_OUT2")"
 
@@ -644,65 +644,65 @@ echo "Command: $MEM_BIN -o $RET_OUT2 -t $RET_SMAP_FILE $RET_MEMINFO_FILE"
 rm -rf "$RET_OUT2"
 mkdir -p "$RET_OUT2"
 if $MEM_BIN -o "$RET_OUT2" -t "$RET_SMAP_FILE" "$RET_MEMINFO_FILE"; then
-    RET_DIR_COUNT=$(find "$RET_OUT2" -maxdepth 1 -type d -name "*_${RETENTION_BASE}*" | wc -l | tr -d ' ')
+    RET_DIR_COUNT=$(find "$RET_OUT2" -maxdepth 1 -type d -name "*_${BACKUP_BASE}*" | wc -l | tr -d ' ')
     if [ "$RET_DIR_COUNT" -eq 0 ] && ls "$RET_OUT2"/*.csv >/dev/null 2>&1; then
         echo "✓ $RET_DESC2 PASSED"
-        record_tc_result "20" "Retention existing empty output directory" "SUCCESS"
+        record_tc_result "20" "Backup existing empty output directory" "SUCCESS"
     else
-        echo "✗ $RET_DESC2 FAILED (unexpected retention dir or missing report)"
+        echo "✗ $RET_DESC2 FAILED (unexpected backup dir or missing report)"
         find "$RET_OUT2" -maxdepth 2 -print
         TEST_FAILED=$((TEST_FAILED + 1))
-        record_tc_result "20" "Retention existing empty output directory" "FAILURE"
+        record_tc_result "20" "Backup existing empty output directory" "FAILURE"
     fi
 else
     echo "✗ $RET_DESC2 FAILED (command execution failed)"
     TEST_FAILED=$((TEST_FAILED + 1))
-    record_tc_result "20" "Retention existing empty output directory" "FAILURE"
+    record_tc_result "20" "Backup existing empty output directory" "FAILURE"
 fi
 echo ""
 
-# Test 21: report count <= retention -> move all matching reports into retention dir
-RET_DESC3="Test 21: Retention move-all when count <= N (CSV)"
-RET_OUT3="$RET_BASE/meminsight_case3_le_retention"
+# Test 21: report count <= configured count -> move all matching reports into backup dir
+RET_DESC3="Test 21: Backup move-all when count <= N (CSV)"
+RET_OUT3="$RET_BASE/meminsight_case3_le_backup"
 RET_OUT3_BASENAME="$(basename "$RET_OUT3")"
 
 echo "------------------------------------------"
 echo "$RET_DESC3"
 echo "------------------------------------------"
-echo "Command: $MEM_BIN -o $RET_OUT3 -r 5 -t $RET_SMAP_FILE $RET_MEMINFO_FILE"
+echo "Command: $MEM_BIN -o $RET_OUT3 -b 5 -t $RET_SMAP_FILE $RET_MEMINFO_FILE"
 
 rm -rf "$RET_OUT3"
 mkdir -p "$RET_OUT3"
 printf 'old1\n' > "$RET_OUT3/old_1.csv"
 printf 'old2\n' > "$RET_OUT3/old_2.csv"
 
-if $MEM_BIN -o "$RET_OUT3" -r 5 -t "$RET_SMAP_FILE" "$RET_MEMINFO_FILE"; then
-    RET_DIR=$(find "$RET_OUT3" -maxdepth 1 -type d -name "*_${RETENTION_BASE}*" | head -n 1)
+if $MEM_BIN -o "$RET_OUT3" -b 5 -t "$RET_SMAP_FILE" "$RET_MEMINFO_FILE"; then
+    RET_DIR=$(find "$RET_OUT3" -mindepth 1 -maxdepth 1 -type d -name "*_${BACKUP_BASE}*" | head -n 1)
     if [ -n "$RET_DIR" ] && [ -f "$RET_DIR/old_1.csv" ] && [ -f "$RET_DIR/old_2.csv" ] && ! ls "$RET_OUT3"/old_*.csv >/dev/null 2>&1; then
         echo "✓ $RET_DESC3 PASSED"
-        record_tc_result "21" "Retention move-all when count <= N (CSV)" "SUCCESS"
+        record_tc_result "21" "Backup move-all when count <= N (CSV)" "SUCCESS"
     else
         echo "✗ $RET_DESC3 FAILED (old csv files not moved as expected)"
         find "$RET_OUT3" -maxdepth 2 -print
         TEST_FAILED=$((TEST_FAILED + 1))
-        record_tc_result "21" "Retention move-all when count <= N (CSV)" "FAILURE"
+        record_tc_result "21" "Backup move-all when count <= N (CSV)" "FAILURE"
     fi
 else
     echo "✗ $RET_DESC3 FAILED (command execution failed)"
     TEST_FAILED=$((TEST_FAILED + 1))
-    record_tc_result "21" "Retention move-all when count <= N (CSV)" "FAILURE"
+    record_tc_result "21" "Backup move-all when count <= N (CSV)" "FAILURE"
 fi
 echo ""
 
-# Test 22: report count > retention -> move newest N and delete older matching reports
-RET_DESC4="Test 22: Retention move-latest-N and delete rest (CSV)"
-RET_OUT4="$RET_BASE/meminsight_case4_gt_retention"
+# Test 22: report count > configured count -> move newest N and delete older matching reports
+RET_DESC4="Test 22: Backup move-latest-N and delete rest (CSV)"
+RET_OUT4="$RET_BASE/meminsight_case4_gt_backup"
 RET_OUT4_BASENAME="$(basename "$RET_OUT4")"
 
 echo "------------------------------------------"
 echo "$RET_DESC4"
 echo "------------------------------------------"
-echo "Command: $MEM_BIN -o $RET_OUT4 -r 3 -t $RET_SMAP_FILE $RET_MEMINFO_FILE"
+echo "Command: $MEM_BIN -o $RET_OUT4 -b 3 -t $RET_SMAP_FILE $RET_MEMINFO_FILE"
 
 rm -rf "$RET_OUT4"
 mkdir -p "$RET_OUT4"
@@ -717,59 +717,59 @@ touch -t 202601010103 "$RET_OUT4/old_3.csv"
 touch -t 202601010104 "$RET_OUT4/old_4.csv"
 touch -t 202601010105 "$RET_OUT4/old_5.csv"
 
-if $MEM_BIN -o "$RET_OUT4" -r 3 -t "$RET_SMAP_FILE" "$RET_MEMINFO_FILE"; then
-    RET_DIR=$(find "$RET_OUT4" -maxdepth 1 -type d -name "*_${RETENTION_BASE}*" | head -n 1)
+if $MEM_BIN -o "$RET_OUT4" -b 3 -t "$RET_SMAP_FILE" "$RET_MEMINFO_FILE"; then
+    RET_DIR=$(find "$RET_OUT4" -mindepth 1 -maxdepth 1 -type d -name "*_${BACKUP_BASE}*" | head -n 1)
     if [ -n "$RET_DIR" ] && [ -f "$RET_DIR/old_3.csv" ] && [ -f "$RET_DIR/old_4.csv" ] && [ -f "$RET_DIR/old_5.csv" ] && [ ! -f "$RET_DIR/old_1.csv" ] && [ ! -f "$RET_DIR/old_2.csv" ] && ! ls "$RET_OUT4"/old_*.csv >/dev/null 2>&1; then
         echo "✓ $RET_DESC4 PASSED"
-        record_tc_result "22" "Retention move-latest-N and delete rest (CSV)" "SUCCESS"
+        record_tc_result "22" "Backup move-latest-N and delete rest (CSV)" "SUCCESS"
     else
-        echo "✗ $RET_DESC4 FAILED (retention latest-N/delete behavior mismatch)"
+        echo "✗ $RET_DESC4 FAILED (backup latest-N/delete behavior mismatch)"
         find "$RET_OUT4" -maxdepth 2 -print
         TEST_FAILED=$((TEST_FAILED + 1))
-        record_tc_result "22" "Retention move-latest-N and delete rest (CSV)" "FAILURE"
+        record_tc_result "22" "Backup move-latest-N and delete rest (CSV)" "FAILURE"
     fi
 else
     echo "✗ $RET_DESC4 FAILED (command execution failed)"
     TEST_FAILED=$((TEST_FAILED + 1))
-    record_tc_result "22" "Retention move-latest-N and delete rest (CSV)" "FAILURE"
+    record_tc_result "22" "Backup move-latest-N and delete rest (CSV)" "FAILURE"
 fi
 echo ""
 
 # Test 23: format scoping (CSV mode should ignore JSON files)
-RET_DESC5="Test 23: Retention format scoping in CSV mode"
+RET_DESC5="Test 23: Backup format scoping in CSV mode"
 RET_OUT5="$RET_BASE/meminsight_case5_csv_scope"
 RET_OUT5_BASENAME="$(basename "$RET_OUT5")"
 
 echo "------------------------------------------"
 echo "$RET_DESC5"
 echo "------------------------------------------"
-echo "Command: $MEM_BIN -o $RET_OUT5 -r 10 -t $RET_SMAP_FILE $RET_MEMINFO_FILE"
+echo "Command: $MEM_BIN -o $RET_OUT5 -b 10 -t $RET_SMAP_FILE $RET_MEMINFO_FILE"
 
 rm -rf "$RET_OUT5"
 mkdir -p "$RET_OUT5"
 printf 'csvold\n' > "$RET_OUT5/only_csv.csv"
 printf '{"old":1}\n' > "$RET_OUT5/only_json.json"
 
-if $MEM_BIN -o "$RET_OUT5" -r 10 -t "$RET_SMAP_FILE" "$RET_MEMINFO_FILE"; then
-    RET_DIR=$(find "$RET_OUT5" -maxdepth 1 -type d -name "*_${RETENTION_BASE}*" | head -n 1)
+if $MEM_BIN -o "$RET_OUT5" -b 10 -t "$RET_SMAP_FILE" "$RET_MEMINFO_FILE"; then
+    RET_DIR=$(find "$RET_OUT5" -mindepth 1 -maxdepth 1 -type d -name "*_${BACKUP_BASE}*" | head -n 1)
     if [ -n "$RET_DIR" ] && [ -f "$RET_DIR/only_csv.csv" ] && [ -f "$RET_OUT5/only_json.json" ]; then
         echo "✓ $RET_DESC5 PASSED"
-        record_tc_result "23" "Retention format scoping in CSV mode" "SUCCESS"
+        record_tc_result "23" "Backup format scoping in CSV mode" "SUCCESS"
     else
-        echo "✗ $RET_DESC5 FAILED (CSV mode retention scope mismatch)"
+        echo "✗ $RET_DESC5 FAILED (CSV mode backup scope mismatch)"
         find "$RET_OUT5" -maxdepth 2 -print
         TEST_FAILED=$((TEST_FAILED + 1))
-        record_tc_result "23" "Retention format scoping in CSV mode" "FAILURE"
+        record_tc_result "23" "Backup format scoping in CSV mode" "FAILURE"
     fi
 else
     echo "✗ $RET_DESC5 FAILED (command execution failed)"
     TEST_FAILED=$((TEST_FAILED + 1))
-    record_tc_result "23" "Retention format scoping in CSV mode" "FAILURE"
+    record_tc_result "23" "Backup format scoping in CSV mode" "FAILURE"
 fi
 echo ""
 
 # Test 24: format scoping (JSON mode should ignore CSV files)
-RET_DESC6="Test 24: Retention format scoping in JSON mode"
+RET_DESC6="Test 24: Backup format scoping in JSON mode"
 RET_OUT6="$RET_BASE/meminsight_case6_json_scope"
 RET_OUT6_BASENAME="$(basename "$RET_OUT6")"
 
@@ -777,79 +777,79 @@ if $MEM_BIN --help 2>&1 | grep -F -- "--fmt" >/dev/null 2>&1; then
     echo "------------------------------------------"
     echo "$RET_DESC6"
     echo "------------------------------------------"
-    echo "Command: $MEM_BIN --fmt json -o $RET_OUT6 -r 10 -t $RET_SMAP_FILE $RET_MEMINFO_FILE"
+    echo "Command: $MEM_BIN --fmt json -o $RET_OUT6 -b 10 -t $RET_SMAP_FILE $RET_MEMINFO_FILE"
 
     rm -rf "$RET_OUT6"
     mkdir -p "$RET_OUT6"
     printf 'csvold\n' > "$RET_OUT6/json_scope_csv.csv"
     printf '{"old":2}\n' > "$RET_OUT6/json_scope_json.json"
 
-    if $MEM_BIN --fmt json -o "$RET_OUT6" -r 10 -t "$RET_SMAP_FILE" "$RET_MEMINFO_FILE"; then
+    if $MEM_BIN --fmt json -o "$RET_OUT6" -b 10 -t "$RET_SMAP_FILE" "$RET_MEMINFO_FILE"; then
         JSON_FILE=$(ls "$RET_OUT6"/*.json 2>/dev/null | grep -v 'json_scope_json.json' | head -n 1)
         CSV_FALLBACK_FILE=$(ls "$RET_OUT6"/*.csv 2>/dev/null | grep -v 'json_scope_csv.csv' | head -n 1)
         if [ -n "$JSON_FILE" ]; then
-            RET_DIR=$(find "$RET_OUT6" -maxdepth 1 -type d -name "*_${RETENTION_BASE}*" | head -n 1)
+            RET_DIR=$(find "$RET_OUT6" -mindepth 1 -maxdepth 1 -type d -name "*_${BACKUP_BASE}*" | head -n 1)
             if [ -n "$RET_DIR" ] && [ -f "$RET_DIR/json_scope_json.json" ] && [ -f "$RET_OUT6/json_scope_csv.csv" ]; then
                 echo "✓ $RET_DESC6 PASSED"
-                record_tc_result "24" "Retention format scoping in JSON mode" "SUCCESS"
+                record_tc_result "24" "Backup format scoping in JSON mode" "SUCCESS"
             else
-                echo "✗ $RET_DESC6 FAILED (JSON mode retention scope mismatch)"
+                echo "✗ $RET_DESC6 FAILED (JSON mode backup scope mismatch)"
                 find "$RET_OUT6" -maxdepth 2 -print
                 TEST_FAILED=$((TEST_FAILED + 1))
-                record_tc_result "24" "Retention format scoping in JSON mode" "FAILURE"
+                record_tc_result "24" "Backup format scoping in JSON mode" "FAILURE"
             fi
         elif [ -n "$CSV_FALLBACK_FILE" ]; then
             echo "- $RET_DESC6 SKIPPED (runtime cJSON unavailable, CSV fallback produced)"
-            record_tc_result "24" "Retention format scoping in JSON mode" "SKIPPED"
+            record_tc_result "24" "Backup format scoping in JSON mode" "SKIPPED"
         else
             echo "✗ $RET_DESC6 FAILED (no JSON output and no CSV fallback detected)"
             TEST_FAILED=$((TEST_FAILED + 1))
-            record_tc_result "24" "Retention format scoping in JSON mode" "FAILURE"
+            record_tc_result "24" "Backup format scoping in JSON mode" "FAILURE"
         fi
     else
         echo "✗ $RET_DESC6 FAILED (command execution failed)"
         TEST_FAILED=$((TEST_FAILED + 1))
-        record_tc_result "24" "Retention format scoping in JSON mode" "FAILURE"
+        record_tc_result "24" "Backup format scoping in JSON mode" "FAILURE"
     fi
     echo ""
 else
-    record_tc_result "24" "Retention format scoping in JSON mode" "SKIPPED"
+    record_tc_result "24" "Backup format scoping in JSON mode" "SKIPPED"
 fi
 
-# Test 25: CSV metadata includes retention fields when --retention is passed
-META_DESC1="Test 25: CSV retention metadata with explicit --retention"
+# Test 25: CSV metadata includes backup fields when --backup is passed
+META_DESC1="Test 25: CSV backup metadata with explicit --backup"
 META_OUT1="$RET_BASE/meminsight_case7_csv_meta_explicit"
 
 echo "------------------------------------------"
 echo "$META_DESC1"
 echo "------------------------------------------"
-echo "Command: $MEM_BIN -o $META_OUT1 -r 42 -t $RET_SMAP_FILE $RET_MEMINFO_FILE"
+echo "Command: $MEM_BIN -o $META_OUT1 -b 42 -t $RET_SMAP_FILE $RET_MEMINFO_FILE"
 
 rm -rf "$META_OUT1"
 mkdir -p "$META_OUT1"
 
-if $MEM_BIN -o "$META_OUT1" -r 42 -t "$RET_SMAP_FILE" "$RET_MEMINFO_FILE"; then
+if $MEM_BIN -o "$META_OUT1" -b 42 -t "$RET_SMAP_FILE" "$RET_MEMINFO_FILE"; then
     CSV_FILE=$(ls "$META_OUT1"/*.csv 2>/dev/null | head -n 1)
     if [ -n "$CSV_FILE" ] && \
-       head -n 1 "$CSV_FILE" | grep -F "RETENTION_ARG_PASSED,RETENTION_REPORT" >/dev/null 2>&1 && \
+       head -n 1 "$CSV_FILE" | grep -F "BACKUP_ARG_PASSED,BACKUP_COUNT" >/dev/null 2>&1 && \
        sed -n '2p' "$CSV_FILE" | grep -E ',1,42$' >/dev/null 2>&1; then
         echo "✓ $META_DESC1 PASSED"
-        record_tc_result "25" "CSV retention metadata with explicit --retention" "SUCCESS"
+        record_tc_result "25" "CSV backup metadata with explicit --backup" "SUCCESS"
     else
-        echo "✗ $META_DESC1 FAILED (CSV retention metadata missing/invalid)"
+        echo "✗ $META_DESC1 FAILED (CSV backup metadata missing/invalid)"
         [ -n "$CSV_FILE" ] && cat "$CSV_FILE"
         TEST_FAILED=$((TEST_FAILED + 1))
-        record_tc_result "25" "CSV retention metadata with explicit --retention" "FAILURE"
+        record_tc_result "25" "CSV backup metadata with explicit --backup" "FAILURE"
     fi
 else
     echo "✗ $META_DESC1 FAILED (command execution failed)"
     TEST_FAILED=$((TEST_FAILED + 1))
-    record_tc_result "25" "CSV retention metadata with explicit --retention" "FAILURE"
+    record_tc_result "25" "CSV backup metadata with explicit --backup" "FAILURE"
 fi
 echo ""
 
-# Test 26: CSV metadata includes default retention fields when --retention is not passed
-META_DESC2="Test 26: CSV retention metadata with default retention"
+# Test 26: CSV metadata includes default backup fields when --backup is not passed
+META_DESC2="Test 26: CSV backup metadata with default backup"
 META_OUT2="$RET_BASE/meminsight_case8_csv_meta_default"
 
 echo "------------------------------------------"
@@ -863,25 +863,25 @@ mkdir -p "$META_OUT2"
 if $MEM_BIN -o "$META_OUT2" -t "$RET_SMAP_FILE" "$RET_MEMINFO_FILE"; then
     CSV_FILE=$(ls "$META_OUT2"/*.csv 2>/dev/null | head -n 1)
     if [ -n "$CSV_FILE" ] && \
-       head -n 1 "$CSV_FILE" | grep -F "RETENTION_ARG_PASSED,RETENTION_REPORT" >/dev/null 2>&1 && \
+       head -n 1 "$CSV_FILE" | grep -F "BACKUP_ARG_PASSED,BACKUP_COUNT" >/dev/null 2>&1 && \
        sed -n '2p' "$CSV_FILE" | grep -E ',0,30$' >/dev/null 2>&1; then
         echo "✓ $META_DESC2 PASSED"
-        record_tc_result "26" "CSV retention metadata with default retention" "SUCCESS"
+        record_tc_result "26" "CSV backup metadata with default backup" "SUCCESS"
     else
-        echo "✗ $META_DESC2 FAILED (default CSV retention metadata missing/invalid)"
+        echo "✗ $META_DESC2 FAILED (default CSV backup metadata missing/invalid)"
         [ -n "$CSV_FILE" ] && cat "$CSV_FILE"
         TEST_FAILED=$((TEST_FAILED + 1))
-        record_tc_result "26" "CSV retention metadata with default retention" "FAILURE"
+        record_tc_result "26" "CSV backup metadata with default backup" "FAILURE"
     fi
 else
     echo "✗ $META_DESC2 FAILED (command execution failed)"
     TEST_FAILED=$((TEST_FAILED + 1))
-    record_tc_result "26" "CSV retention metadata with default retention" "FAILURE"
+    record_tc_result "26" "CSV backup metadata with default backup" "FAILURE"
 fi
 echo ""
 
-# Test 27: JSON metadata includes retention fields (skip if CSV fallback)
-META_DESC3="Test 27: JSON retention metadata"
+# Test 27: JSON metadata includes backup fields (skip if CSV fallback)
+META_DESC3="Test 27: JSON backup metadata"
 META_OUT3="$RET_BASE/meminsight_case9_json_meta"
 META_OUT3_BASENAME="$(basename "$META_OUT3")"
 
@@ -889,52 +889,52 @@ if $MEM_BIN --help 2>&1 | grep -F -- "--fmt" >/dev/null 2>&1; then
     echo "------------------------------------------"
     echo "$META_DESC3"
     echo "------------------------------------------"
-    echo "Command: $MEM_BIN --fmt json -o $META_OUT3 -r 7 -t $RET_SMAP_FILE $RET_MEMINFO_FILE"
+    echo "Command: $MEM_BIN --fmt json -o $META_OUT3 -b 7 -t $RET_SMAP_FILE $RET_MEMINFO_FILE"
 
     rm -rf "$META_OUT3"
     mkdir -p "$META_OUT3"
 
-    if $MEM_BIN --fmt json -o "$META_OUT3" -r 7 -t "$RET_SMAP_FILE" "$RET_MEMINFO_FILE"; then
+    if $MEM_BIN --fmt json -o "$META_OUT3" -b 7 -t "$RET_SMAP_FILE" "$RET_MEMINFO_FILE"; then
         JSON_FILE=$(ls "$META_OUT3"/*.json 2>/dev/null | head -n 1)
         CSV_FALLBACK_FILE=$(ls "$META_OUT3"/*.csv 2>/dev/null | head -n 1)
         if [ -n "$JSON_FILE" ] && \
-              grep -Eq '"RETENTION_ARG_PASSED"[[:space:]]*:[[:space:]]*1' "$JSON_FILE" >/dev/null 2>&1 && \
-              grep -Eq '"RETENTION_REPORT"[[:space:]]*:[[:space:]]*7' "$JSON_FILE" >/dev/null 2>&1; then
+              grep -Eq '"BACKUP_ARG_PASSED"[[:space:]]*:[[:space:]]*1' "$JSON_FILE" >/dev/null 2>&1 && \
+              grep -Eq '"BACKUP_COUNT"[[:space:]]*:[[:space:]]*7' "$JSON_FILE" >/dev/null 2>&1; then
             echo "✓ $META_DESC3 PASSED"
-            record_tc_result "27" "JSON retention metadata" "SUCCESS"
+            record_tc_result "27" "JSON backup metadata" "SUCCESS"
         elif [ -z "$JSON_FILE" ] && [ -n "$CSV_FALLBACK_FILE" ]; then
             echo "- $META_DESC3 SKIPPED (runtime cJSON unavailable, CSV fallback produced)"
-            record_tc_result "27" "JSON retention metadata" "SKIPPED"
+            record_tc_result "27" "JSON backup metadata" "SKIPPED"
         else
-            echo "✗ $META_DESC3 FAILED (JSON retention metadata missing/invalid)"
+            echo "✗ $META_DESC3 FAILED (JSON backup metadata missing/invalid)"
             [ -n "$JSON_FILE" ] && cat "$JSON_FILE"
             TEST_FAILED=$((TEST_FAILED + 1))
-            record_tc_result "27" "JSON retention metadata" "FAILURE"
+            record_tc_result "27" "JSON backup metadata" "FAILURE"
         fi
     else
         echo "✗ $META_DESC3 FAILED (command execution failed)"
         TEST_FAILED=$((TEST_FAILED + 1))
-        record_tc_result "27" "JSON retention metadata" "FAILURE"
+        record_tc_result "27" "JSON backup metadata" "FAILURE"
     fi
     echo ""
 else
-    record_tc_result "27" "JSON retention metadata" "SKIPPED"
+    record_tc_result "27" "JSON backup metadata" "SKIPPED"
 fi
 
-# Test 28: configstore lives in output dir and retention archives use prior RUN_ID
-META_DESC4="Test 28: Configstore path and RUN_ID-based retention archive"
+# Test 28: configstore lives in output dir and backup archives use prior RUN_ID
+META_DESC4="Test 28: Configstore path and RUN_ID-based backup archive"
 META_OUT4="$RET_BASE/meminsight_case10_configstore"
 
 echo "------------------------------------------"
 echo "$META_DESC4"
 echo "------------------------------------------"
-echo "Command: $MEM_BIN -o $META_OUT4 -r 3 -t $RET_SMAP_FILE $RET_MEMINFO_FILE"
+echo "Command: $MEM_BIN -o $META_OUT4 -b 3 -t $RET_SMAP_FILE $RET_MEMINFO_FILE"
 
 rm -rf "$META_OUT4"
 mkdir -p "$META_OUT4"
 rm -f /tmp/.meminsight_configstore
 
-if $MEM_BIN -o "$META_OUT4" -r 3 -t "$RET_SMAP_FILE" "$RET_MEMINFO_FILE"; then
+if $MEM_BIN -o "$META_OUT4" -b 3 -t "$RET_SMAP_FILE" "$RET_MEMINFO_FILE"; then
     CONFIG_FILE="$META_OUT4/.meminsight_configstore"
     if [ -f "$CONFIG_FILE" ] && ! [ -e /tmp/.meminsight_configstore ]; then
         FIRST_RUN_ID=$(grep -E '^RUN_ID=' "$CONFIG_FILE" | head -n 1 | cut -d= -f2)
@@ -943,31 +943,31 @@ if $MEM_BIN -o "$META_OUT4" -r 3 -t "$RET_SMAP_FILE" "$RET_MEMINFO_FILE"; then
         touch -t 202601010101 "$META_OUT4/old_1.csv"
         touch -t 202601010102 "$META_OUT4/old_2.csv"
 
-        if $MEM_BIN -o "$META_OUT4" -r 3 -t "$RET_SMAP_FILE" "$RET_MEMINFO_FILE"; then
-            RET_DIR=$(find "$META_OUT4" -maxdepth 1 -type d -name "*_${FIRST_RUN_ID}_${RETENTION_BASE}*" | head -n 1)
+        if $MEM_BIN -o "$META_OUT4" -b 3 -t "$RET_SMAP_FILE" "$RET_MEMINFO_FILE"; then
+            RET_DIR=$(find "$META_OUT4" -maxdepth 1 -type d -name "*_${FIRST_RUN_ID}_${BACKUP_BASE}*" | head -n 1)
             if [ -n "$RET_DIR" ] && [ -f "$RET_DIR/old_1.csv" ] && [ -f "$RET_DIR/old_2.csv" ] && [ -f "$META_OUT4/.meminsight_configstore" ]; then
                 echo "✓ $META_DESC4 PASSED"
-                record_tc_result "28" "Configstore path and RUN_ID-based retention archive" "SUCCESS"
+                record_tc_result "28" "Configstore path and RUN_ID-based backup archive" "SUCCESS"
             else
                 echo "✗ $META_DESC4 FAILED (archive name or configstore location mismatch)"
                 find "$META_OUT4" -maxdepth 2 -print
                 TEST_FAILED=$((TEST_FAILED + 1))
-                record_tc_result "28" "Configstore path and RUN_ID-based retention archive" "FAILURE"
+                record_tc_result "28" "Configstore path and RUN_ID-based backup archive" "FAILURE"
             fi
         else
             echo "✗ $META_DESC4 FAILED (second command execution failed)"
             TEST_FAILED=$((TEST_FAILED + 1))
-            record_tc_result "28" "Configstore path and RUN_ID-based retention archive" "FAILURE"
+            record_tc_result "28" "Configstore path and RUN_ID-based backup archive" "FAILURE"
         fi
     else
         echo "✗ $META_DESC4 FAILED (configstore not written in output dir or stale /tmp configstore present)"
         TEST_FAILED=$((TEST_FAILED + 1))
-        record_tc_result "28" "Configstore path and RUN_ID-based retention archive" "FAILURE"
+        record_tc_result "28" "Configstore path and RUN_ID-based backup archive" "FAILURE"
     fi
 else
     echo "✗ $META_DESC4 FAILED (command execution failed)"
     TEST_FAILED=$((TEST_FAILED + 1))
-    record_tc_result "28" "Configstore path and RUN_ID-based retention archive" "FAILURE"
+    record_tc_result "28" "Configstore path and RUN_ID-based backup archive" "FAILURE"
 fi
 echo ""
 
@@ -1001,16 +1001,20 @@ fi
 echo ""
 
 # Summary
-echo "=========================================="
+echo "===================================================================================="
 echo "Test Summary"
-echo "=========================================="
+echo "===================================================================================="
 print_tc_summary_table
-echo "=========================================="
+TOTAL_TCS=$(printf '%s\n' "$TC_RESULTS" | awk 'NF {c++} END {print c+0}')
+PASSED_TCS=$(printf '%s\n' "$TC_RESULTS" | awk -F'|' '$3=="SUCCESS" {c++} END {print c+0}')
+FAILED_TCS=$(printf '%s\n' "$TC_RESULTS" | awk -F'|' '$3=="FAILURE" {c++} END {print c+0}')
+SKIPPED_TCS=$(printf '%s\n' "$TC_RESULTS" | awk -F'|' '$3=="SKIPPED" {c++} END {print c+0}')
 if [ $TEST_FAILED -eq 0 ]; then
-    echo "✓ ALL TESTS PASSED"
+    echo "✓ ALL TESTS PASSED | PASSED: $PASSED_TCS/$TOTAL_TCS | FAILED: $FAILED_TCS/$TOTAL_TCS | SKIPPED: $SKIPPED_TCS/$TOTAL_TCS |"
+    echo "===================================================================================="
     exit 0
 else
-    echo "✗ SOME TESTS FAILED"
+    echo "✗ SOME TESTS FAILED | PASSED: $PASSED_TCS/$TOTAL_TCS | FAILED: $FAILED_TCS/$TOTAL_TCS | SKIPPED: $SKIPPED_TCS/$TOTAL_TCS |"
+    echo "===================================================================================="
     exit 1
 fi
-echo "=========================================="

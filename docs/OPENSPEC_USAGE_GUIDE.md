@@ -23,7 +23,7 @@ OpenSpec is the requirements source-of-truth for meminsight behavior and change 
 
 Use exact capability IDs (for example C01, C07, C10) consistently in implementation notes, review comments, and issue breakdowns.
 
-For retention and report metadata behavior, start with:
+For backup handling and report metadata behavior, start with:
 
 1. [openspec/specs/01-cli-and-execution-modes.md](../openspec/specs/01-cli-and-execution-modes.md)
 2. [openspec/specs/02-output-directory-and-run-lifecycle.md](../openspec/specs/02-output-directory-and-run-lifecycle.md)

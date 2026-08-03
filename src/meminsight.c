@@ -168,8 +168,8 @@ bool g_CollectFragData = false;            // Collect fragmentation data only wh
 unsigned smaps_rollup;                     // Effective source for current parse: 1=smaps_rollup, 0=smaps
 unsigned force_smaps = 0;                  // CLI override: force reading /proc/<pid>/smaps
 char gSMAPS_OR_ROLLUP[] = "smaps_rollup";  // Default source for process memory info (may be overridden by --smaps)
-int g_retention = DEFAULT_RETENTION;       // Number of report files retained by pre-run retention (default: 30, max: 100)
-int g_retentionArgPassed = 0;              // 1 when --retention/-r is explicitly provided, else 0
+int g_backupCount = DEFAULT_BACKUP_COUNT;  // Number of report files handled by pre-run backup policy (default: 30, max: 100)
+int g_backupArgPassed = 0;                 // 1 when --backup/-b is explicitly provided, else 0
 
 typedef enum {
     FRAG_SRC_NONE = 0,
@@ -321,7 +321,7 @@ static int clear_dir_contents(const char *dir_path)
 }
 
 /**
- * @brief File entry used for retention sorting.
+ * @brief File entry used for backup sorting.
  */
 typedef struct {
     char name[NAME_MAX + 1];
@@ -341,26 +341,26 @@ static int cmp_mtime_desc(const void *a, const void *b)
 }
 
 /**
- * @brief Apply the retention policy to an existing output directory.
+ * @brief Apply the backup policy to an existing output directory.
  *
  * Scans @p dir for report files matching the currently selected output format
  * only: .csv in CSV mode, .json in JSON mode. If matching reports exist,
- * creates a timestamped subdirectory named <timestamp>_<RUN_ID>_<RETENTION_BASE>
+ * creates a timestamped subdirectory named <timestamp>_<RUN_ID>_<BACKUP_BASE>
  * inside @p dir.
  *
  * Behavior:
- *  - If report count is <= @p retain: move all matching reports into retention.
- *  - If report count is > @p retain: move newest @p retain reports into
- *    retention and delete the rest.
+ *  - If report count is <= @p keepCount: move all matching reports into backup.
+ *  - If report count is > @p keepCount: move newest @p keepCount reports into
+ *    backup and delete the rest.
  *
  * Non-report files/subdirectories are untouched. If no matching reports are
- * found, the function returns immediately without creating a retention dir.
+ * found, the function returns immediately without creating a backup dir.
  *
  * @param[in] dir     Output directory to apply policy to.
- * @param[in] retain  Retention count (must be >= 1, capped by MAX_RETENTION).
+ * @param[in] keepCount  Backup count (must be >= 1, capped by MAX_BACKUP_COUNT).
  * @return 0 on success, -1 on scan/allocation/archive-create failure.
  */
-static int apply_retention_policy(const char *dir, int retain, const char *runIdFallback)
+static int apply_backup_policy(const char *dir, int keepCount, const char *runIdFallback)
 {
     const char *activeExt = (g_reportFormat == REPORT_JSON) ? ".json" : ".csv";
     const size_t activeExtLen = strlen(activeExt);
@@ -368,7 +368,7 @@ static int apply_retention_policy(const char *dir, int retain, const char *runId
     DIR *d = opendir(dir);
     if (!d)
     {
-        PRINT_MUST("Failed to open output dir for retention scan '%s': %s\n", dir, strerror(errno));
+        PRINT_MUST("Failed to open output dir for backup scan '%s': %s\n", dir, strerror(errno));
         return -1;
     }
 
@@ -378,7 +378,7 @@ static int apply_retention_policy(const char *dir, int retain, const char *runId
     RetainEntry *entries = (RetainEntry *)malloc(capacity * sizeof(RetainEntry));
     if (!entries)
     {
-        PRINT_MUST("Failed to allocate memory for retention scan\n");
+        PRINT_MUST("Failed to allocate memory for backup scan\n");
         closedir(d);
         return -1;
     }
@@ -386,7 +386,7 @@ static int apply_retention_policy(const char *dir, int retain, const char *runId
     int scanfd = dirfd(d);
     if (scanfd == -1)
     {
-        PRINT_MUST("Failed to get directory fd for retention scan '%s': %s\n", dir, strerror(errno));
+        PRINT_MUST("Failed to get directory fd for backup scan '%s': %s\n", dir, strerror(errno));
         free(entries);
         closedir(d);
         return -1;
@@ -412,7 +412,7 @@ static int apply_retention_policy(const char *dir, int retain, const char *runId
             RetainEntry *tmp = (RetainEntry *)realloc(entries, capacity * sizeof(RetainEntry));
             if (!tmp)
             {
-                PRINT_MUST("Failed to reallocate memory for retention scan\n");
+                PRINT_MUST("Failed to reallocate memory for backup scan\n");
                 free(entries);
                 closedir(d);
                 return -1;
@@ -440,7 +440,7 @@ static int apply_retention_policy(const char *dir, int retain, const char *runId
     int dirfd = open(dir, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
     if (dirfd == -1)
     {
-        PRINT_MUST("Failed to open output dir for retention operations '%s': %s\n", dir, strerror(errno));
+        PRINT_MUST("Failed to open output dir for backup operations '%s': %s\n", dir, strerror(errno));
         free(entries);
         return -1;
     }
@@ -448,7 +448,7 @@ static int apply_retention_policy(const char *dir, int retain, const char *runId
     /*
      * Create archive subdirectory inside output directory.
      *
-    * Runs can start within the same second, so <timestamp>_<RUN_ID>_<RETENTION_BASE>
+    * Runs can start within the same second, so <timestamp>_<RUN_ID>_<BACKUP_BASE>
      * may already exist. In that case retry with a numeric suffix.
      */
     char archiveName[PATH_MAX];
@@ -469,17 +469,17 @@ static int apply_retention_policy(const char *dir, int retain, const char *runId
         if (suffix == 0)
         {
             archiveNameLen = snprintf(archiveName, sizeof(archiveName), "%lld_%s_%s",
-                                      (long long)epochNow, runId, RETENTION_BASE);
+                                      (long long)epochNow, runId, BACKUP_BASE);
         }
         else
         {
             archiveNameLen = snprintf(archiveName, sizeof(archiveName), "%lld_%s_%s_%d",
-                                      (long long)epochNow, runId, RETENTION_BASE, suffix);
+                                      (long long)epochNow, runId, BACKUP_BASE, suffix);
         }
 
         if (archiveNameLen <= 0 || (size_t)archiveNameLen >= sizeof(archiveName))
         {
-            PRINT_MUST("Failed to build retention archive name for '%s'\n", dir);
+            PRINT_MUST("Failed to build backup archive name for '%s'\n", dir);
             close(dirfd);
             free(entries);
             return -1;
@@ -493,7 +493,7 @@ static int apply_retention_policy(const char *dir, int retain, const char *runId
 
         if (errno != EEXIST)
         {
-            PRINT_MUST("Failed to create retention archive dir '%s/%s': %s\n", dir, archiveName, strerror(errno));
+            PRINT_MUST("Failed to create backup archive dir '%s/%s': %s\n", dir, archiveName, strerror(errno));
             close(dirfd);
             free(entries);
             return -1;
@@ -502,7 +502,7 @@ static int apply_retention_policy(const char *dir, int retain, const char *runId
 
     if (!archiveCreated)
     {
-        PRINT_MUST("Failed to create unique retention archive dir under '%s'\n", dir);
+        PRINT_MUST("Failed to create unique backup archive dir under '%s'\n", dir);
         close(dirfd);
         free(entries);
         return -1;
@@ -510,30 +510,30 @@ static int apply_retention_policy(const char *dir, int retain, const char *runId
     int archivefd = openat(dirfd, archiveName, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
     if (archivefd == -1)
     {
-        PRINT_MUST("Failed to open retention archive dir '%s/%s': %s\n", dir, archiveName, strerror(errno));
+        PRINT_MUST("Failed to open backup archive dir '%s/%s': %s\n", dir, archiveName, strerror(errno));
         close(dirfd);
         free(entries);
         return -1;
     }
 
-    /* Determine how many newest files to move into retention archive. */
-    size_t keep = ((size_t)retain < count) ? (size_t)retain : count;
+    /* Determine how many newest files to move into backup archive. */
+    size_t keep = ((size_t)keepCount < count) ? (size_t)keepCount : count;
 
     /* Move the newest `keep` files into the archive directory. */
     for (size_t i = 0; i < keep; i++)
     {
         if (renameat(dirfd, entries[i].name, archivefd, entries[i].name) != 0)
-            PRINT_MUST("Retention: failed to archive '%s': %s\n", entries[i].name, strerror(errno));
+            PRINT_MUST("Backup: failed to archive '%s': %s\n", entries[i].name, strerror(errno));
     }
 
-    /* Delete files beyond the retention limit. */
+    /* Delete files beyond the backup count limit. */
     for (size_t i = keep; i < count; i++)
     {
         if (unlinkat(dirfd, entries[i].name, 0) != 0)
-            PRINT_MUST("Retention: failed to remove old report '%s': %s\n", entries[i].name, strerror(errno));
+            PRINT_MUST("Backup: failed to remove old report '%s': %s\n", entries[i].name, strerror(errno));
     }
 
-    PRINT_MUST("Retention (%s): archived %zu report(s) to '%s/%s'", activeExt, keep, dir, archiveName);
+    PRINT_MUST("Backup (%s): archived %zu report(s) to '%s/%s'", activeExt, keep, dir, archiveName);
     if (count > keep)
         PRINT_MUST(", removed %zu older report(s)", count - keep);
     PRINT_MUST(".\n");
@@ -547,9 +547,9 @@ static int apply_retention_policy(const char *dir, int retain, const char *runId
 /**
  * @brief Ensure the output directory exists, creating it if necessary.
  *
- * If the directory already exists, apply_retention_policy() runs for files
+ * If the directory already exists, apply_backup_policy() runs for files
  * matching the active output format (CSV or JSON). This prepares the directory
- * for a fresh run while preserving retention history under a timestamped
+ * for a fresh run while preserving backup history under a timestamped
  * <timestamp>_<RUN_ID>_<basename> subdirectory.
  * If @p dir does not exist a single-level mkdir(2) is attempted.
  *
@@ -563,9 +563,9 @@ static bool ensure_output_dir(const char *dir, const char *runIdFallback)
     {
         if (S_ISDIR(st.st_mode)) // Is a directory
         {
-            if (apply_retention_policy(dir, g_retention, runIdFallback) != 0)
+            if (apply_backup_policy(dir, g_backupCount, runIdFallback) != 0)
             {
-                PRINT_MUST("Failed to apply retention policy in '%s'\n", dir);
+                PRINT_MUST("Failed to apply backup policy in '%s'\n", dir);
                 return false;
             }
             return true;
@@ -737,13 +737,15 @@ static void writeConfigStore(const SetupInfo *setup, int iterations, int interva
     const char * const keys[] = {
         "UPTIME", "KERNEL_VERSION", "MEMINSIGHT_VERSION", "REPORT_VERSION",
         "RUN_ITERATIONS", "RUN_INTERVAL", "RUN_ID", "OUTPUT_FORMAT",
-        "UPLOAD_ENABLED", "UPLOAD_INTERVAL", "OUTPUT_DIR"
+        "UPLOAD_ENABLED", "UPLOAD_INTERVAL", "OUTPUT_DIR",
+        "BACKUP_ENABLED", "BACKUP_COUNT", "BACKUP_BASE", "FRAGMENTATION_ENABLED"
     };
     const int nkeys = (int)(sizeof(keys) / sizeof(keys[0]));
 
     char v_uptime[64], v_kver[KERNEL_LEN], v_mver[32], v_rver[32];
     char v_iter[16], v_intv[16], v_runid[32], v_fmt[8];
     char v_upload[4], v_uintv[16], v_outdir[PATH_MAX];
+    char v_backup_enabled[4], v_backup_count[16], v_backup_base[32], v_frag_enabled[4];
 
     snprintf(v_uptime, sizeof(v_uptime), "%s", getSystemUptime());
     snprintf(v_kver,   sizeof(v_kver),   "%s", setup->kernelVersion);
@@ -756,6 +758,10 @@ static void writeConfigStore(const SetupInfo *setup, int iterations, int interva
     snprintf(v_upload, sizeof(v_upload), "%d", upload_enabled ? 1 : 0);
     snprintf(v_uintv,  sizeof(v_uintv),  "%d", upload_interval);
     snprintf(v_outdir, sizeof(v_outdir), "%s", setup->outputDir);
+    snprintf(v_backup_enabled, sizeof(v_backup_enabled), "%d", g_backupArgPassed ? 1 : 0);
+    snprintf(v_backup_count, sizeof(v_backup_count), "%d", g_backupCount);
+    snprintf(v_backup_base, sizeof(v_backup_base), "%s", BACKUP_BASE);
+    snprintf(v_frag_enabled, sizeof(v_frag_enabled), "%d", g_CollectFragData ? 1 : 0);
 
     char configStorePath[PATH_MAX];
     if (!buildConfigStorePath(setup->outputDir, configStorePath, sizeof(configStorePath)))
@@ -767,14 +773,15 @@ static void writeConfigStore(const SetupInfo *setup, int iterations, int interva
     const char * const vals[] = {
         v_uptime, v_kver, v_mver, v_rver,
         v_iter, v_intv, v_runid, v_fmt,
-        v_upload, v_uintv, v_outdir
+        v_upload, v_uintv, v_outdir,
+        v_backup_enabled, v_backup_count, v_backup_base, v_frag_enabled
     };
 
     /* Check if existing file already has all matching values */
     FILE *fp = fopen(configStorePath, "r");
     if (fp)
     {
-        int matched[11] = {0};
+        int matched[15] = {0};
         char line[PATH_MAX + 64];
         while (fgets(line, sizeof(line), fp))
         {
@@ -3354,7 +3361,7 @@ void printHelpAndUsage(char *argv[], bool moreInfo, int returnCode)
     printf("      --upload-enable               Enable Cadence based upload\n");
     printf("      --upload-interval <seconds>   Report Upload Frequency\n");
     printf("      --frag                        Enable fragmentation data collection (default: disabled)\n");
-    printf("  -r, --retention <count>           Number of report files to retain in pre-run retention (default: 30, max: 100)\n");
+    printf("  -b, --backup <count>              Number of report files to keep in pre-run backup handling (default: 30, max: 100)\n");
     printf("  -s, --smaps                       Force /proc/<pid>/smaps (disable auto smaps_rollup detection)\n");
 #ifdef TESTME
     printf("  -t, --test <smapsFile> <meminfoFile> [buddyinfoFile] [pagetypeinfoFile] [statFile] [bandwidthFile]\n");
@@ -3470,8 +3477,8 @@ int collectSystemMemoryStats(bool enableKThreads, const char *outDir, int iterat
             g_cjson.AddNumberToObject(g_rootObject, "RUN_ITERATIONS", (double)iterations);
             g_cjson.AddNumberToObject(g_rootObject, "RUN_INTERVAL", (double)interval);
             g_cjson.AddStringToObject(g_rootObject, "RUN_ID", setup.runHash);
-            g_cjson.AddNumberToObject(g_rootObject, "RETENTION_ARG_PASSED", (double)g_retentionArgPassed);
-            g_cjson.AddNumberToObject(g_rootObject, "RETENTION_REPORT", (double)g_retention);
+            g_cjson.AddNumberToObject(g_rootObject, "BACKUP_ARG_PASSED", (double)g_backupArgPassed);
+            g_cjson.AddNumberToObject(g_rootObject, "BACKUP_COUNT", (double)g_backupCount);
         }
 #endif
 
@@ -3484,7 +3491,7 @@ int collectSystemMemoryStats(bool enableKThreads, const char *outDir, int iterat
                 return -1;
             }
             fprintf(output, "%s\n", CSV_META_HEADER);
-            fprintf(output, "%s,%s,%s,%s,%s,%s,%d,%d,%d,%s,%d,%d\n\n", setup.fwName, setup.mac, ts, uptime, setup.kernelVersion, reportVersion, iter + 1, iterations, interval, setup.runHash, g_retentionArgPassed, g_retention);
+            fprintf(output, "%s,%s,%s,%s,%s,%s,%d,%d,%d,%s,%d,%d\n\n", setup.fwName, setup.mac, ts, uptime, setup.kernelVersion, reportVersion, iter + 1, iterations, interval, setup.runHash, g_backupArgPassed, g_backupCount);
         }
 
         unsigned long rssTotal = 0, pssTotal = 0, shared_clean_total = 0, private_clean_total = 0, private_dirty_total = 0, swap_pss_total = 0;
@@ -3766,8 +3773,8 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, bool cli_out
             g_cjson.AddNumberToObject(g_rootObject, "RUN_ITERATIONS", (double)final_iterations);
             g_cjson.AddNumberToObject(g_rootObject, "RUN_INTERVAL", (double)final_interval);
             g_cjson.AddStringToObject(g_rootObject, "RUN_ID", setup.runHash);
-            g_cjson.AddNumberToObject(g_rootObject, "RETENTION_ARG_PASSED", (double)g_retentionArgPassed);
-            g_cjson.AddNumberToObject(g_rootObject, "RETENTION_REPORT", (double)g_retention);
+            g_cjson.AddNumberToObject(g_rootObject, "BACKUP_ARG_PASSED", (double)g_backupArgPassed);
+            g_cjson.AddNumberToObject(g_rootObject, "BACKUP_COUNT", (double)g_backupCount);
         }
 #endif
 
@@ -3783,7 +3790,7 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, bool cli_out
                 return -1;
             }
             fprintf(output, "%s\n", CSV_META_HEADER);
-            fprintf(output, "%s,%s,%s,%s,%s,%s,%d,%d,%d,%s,%d,%d\n\n", setup.fwName, setup.mac, ts, uptime, setup.kernelVersion, reportVersion, iter + 1, final_iterations, final_interval, setup.runHash, g_retentionArgPassed, g_retention);
+            fprintf(output, "%s,%s,%s,%s,%s,%s,%d,%d,%d,%s,%d,%d\n\n", setup.fwName, setup.mac, ts, uptime, setup.kernelVersion, reportVersion, iter + 1, final_iterations, final_interval, setup.runHash, g_backupArgPassed, g_backupCount);
         }
 
         unsigned long rssTotal = 0, pssTotal = 0, shared_clean_total = 0, private_clean_total = 0, private_dirty_total = 0, swap_pss_total = 0;
@@ -4511,22 +4518,22 @@ int main(int argc, char *argv[])
             printf("Warning: --json-pretty ignored (cJSON support not compiled in).\n");
 #endif
         }
-        else if (!strncmp(argv[i], "-r", 3) || !strncmp(argv[i], "--retention", 11))
-        { // retention: number of latest reports to keep
+        else if (!strcmp(argv[i], "-b") || !strcmp(argv[i], "--backup"))
+        { // backup count: number of latest reports to keep
             if (i + 1 < argc)
             {
-                g_retention = atoi(argv[i + 1]);
-                g_retentionArgPassed = 1;
-                i++; // skip next arg (retention count)
-                if (g_retention < 1 || g_retention > MAX_RETENTION)
+                g_backupCount = atoi(argv[i + 1]);
+                g_backupArgPassed = 1;
+                i++; // skip next arg (backup count)
+                if (g_backupCount < 1 || g_backupCount > MAX_BACKUP_COUNT)
                 {
-                    PRINT_ERROR("Error: --retention value must be between 1 and %d\n", MAX_RETENTION);
+                    PRINT_ERROR("Error: --backup value must be between 1 and %d\n", MAX_BACKUP_COUNT);
                     printHelpAndUsage(argv, false, 1);
                 }
             }
             else
             {
-                PRINT_ERROR("Error: Missing retention count after %s\n", argv[i]);
+                PRINT_ERROR("Error: Missing backup count after %s\n", argv[i]);
                 printHelpAndUsage(argv, false, 1);
             }
         }

@@ -21,7 +21,7 @@ This specification defines JSON report behavior when built with optional cJSON s
 Current JSON report includes:
 
 - top-level run metadata fields
-- retention metadata fields: `RETENTION_ARG_PASSED` and `RETENTION_REPORT`
+- backup metadata fields: `BACKUP_ARG_PASSED` and `BACKUP_COUNT`
 - meminfo object
 - cpu_stat object (raw aggregate `/proc/stat` fields) when source is available
 - bandwidth object when bandwidth data is available

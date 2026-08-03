@@ -23,11 +23,11 @@ This directory contains detailed operational and governance documentation.
 2. [.github/AGENTS_AND_SKILLS_USAGE.md](../.github/AGENTS_AND_SKILLS_USAGE.md)
 3. [.github/prompts/README.md](../.github/prompts/README.md)
 
-## Retention and metadata specs
+## Backup and metadata specs
 
-1. [openspec/specs/01-cli-and-execution-modes.md](../openspec/specs/01-cli-and-execution-modes.md) documents `-r/--retention` and range validation.
-2. [openspec/specs/02-output-directory-and-run-lifecycle.md](../openspec/specs/02-output-directory-and-run-lifecycle.md) documents pre-run retention behavior.
-3. [openspec/specs/10-json-report-output-optional.md](../openspec/specs/10-json-report-output-optional.md) documents JSON retention metadata fields.
+1. [openspec/specs/01-cli-and-execution-modes.md](../openspec/specs/01-cli-and-execution-modes.md) documents `-b/--backup` and range validation.
+2. [openspec/specs/02-output-directory-and-run-lifecycle.md](../openspec/specs/02-output-directory-and-run-lifecycle.md) documents pre-run backup behavior.
+3. [openspec/specs/10-json-report-output-optional.md](../openspec/specs/10-json-report-output-optional.md) documents JSON backup metadata fields.
 
 ## Recommended reading order for new contributors
 
