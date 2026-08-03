@@ -24,4 +24,4 @@ This specification defines how meminsight prepares output directories and manage
 
 ## Source anchors
 
-- `ensure_output_dir()`, `clear_dir_contents()`, `clear_dir_fd()`, `touchFile()`, `removeFileIfPresent()`, and `initializeSetupInfo()` in [src/meminsight.c](../../src/meminsight.c)
+- `ensure_output_dir()`, `apply_backup_policy()`, `touchFile()`, `removeFileIfPresent()`, and `initializeSetupInfo()` in [src/meminsight.c](../../src/meminsight.c)

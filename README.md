@@ -793,11 +793,12 @@ sudo journalctl -u meminsight-upload.service -n 20
 **Issue**: Configstore not found by upload script
 ```bash
 # Check configstore file and permissions
-ls -la /opt/meminsight/.meminsight_configstore
-cat /opt/meminsight/.meminsight_configstore  # View current run parameters
+ls -la <output-dir>/.meminsight_configstore
+cat <output-dir>/.meminsight_configstore  # View current run parameters
 
-# Ensure upload script has read permission
-chmod 644 /opt/meminsight/.meminsight_configstore
+# Expected mode is 0640 (owner read/write, group read)
+# Ensure uploader runs as owner or in the file's group
+chmod 640 <output-dir>/.meminsight_configstore
 ```
 
 **Issue**: In-progress sentinel not cleaned up
