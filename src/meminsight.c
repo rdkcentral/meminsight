@@ -362,6 +362,17 @@ static int cmp_mtime_desc(const void *a, const void *b)
  */
 static int apply_backup_policy(const char *dir, int keepCount, const char *runIdFallback)
 {
+    if (keepCount < 1)
+    {
+        PRINT_MUST("Invalid backup count %d (must be between 1 and %d)\n", keepCount, MAX_BACKUP_COUNT);
+        return -1;
+    }
+    if (keepCount > MAX_BACKUP_COUNT)
+    {
+        PRINT_MUST("Backup count %d exceeds max %d; capping to %d\n", keepCount, MAX_BACKUP_COUNT, MAX_BACKUP_COUNT);
+        keepCount = MAX_BACKUP_COUNT;
+    }
+
     const char *activeExt = (g_reportFormat == REPORT_JSON) ? ".json" : ".csv";
     const size_t activeExtLen = strlen(activeExt);
 
@@ -519,29 +530,49 @@ static int apply_backup_policy(const char *dir, int keepCount, const char *runId
     /* Determine how many newest files to move into backup archive. */
     size_t keep = ((size_t)keepCount < count) ? (size_t)keepCount : count;
 
+    size_t archivedSuccess = 0;
+    size_t removedSuccess = 0;
+    size_t opFailures = 0;
+
     /* Move the newest `keep` files into the archive directory. */
     for (size_t i = 0; i < keep; i++)
     {
         if (renameat(dirfd, entries[i].name, archivefd, entries[i].name) != 0)
+        {
             PRINT_MUST("Backup: failed to archive '%s': %s\n", entries[i].name, strerror(errno));
+            opFailures++;
+        }
+        else
+        {
+            archivedSuccess++;
+        }
     }
 
     /* Delete files beyond the backup count limit. */
     for (size_t i = keep; i < count; i++)
     {
         if (unlinkat(dirfd, entries[i].name, 0) != 0)
+        {
             PRINT_MUST("Backup: failed to remove old report '%s': %s\n", entries[i].name, strerror(errno));
+            opFailures++;
+        }
+        else
+        {
+            removedSuccess++;
+        }
     }
 
-    PRINT_MUST("Backup (%s): archived %zu report(s) to '%s/%s'", activeExt, keep, dir, archiveName);
+    PRINT_MUST("Backup (%s): archived %zu/%zu report(s) to '%s/%s'", activeExt, archivedSuccess, keep, dir, archiveName);
     if (count > keep)
-        PRINT_MUST(", removed %zu older report(s)", count - keep);
+        PRINT_MUST(", removed %zu/%zu older report(s)", removedSuccess, count - keep);
+    if (opFailures > 0)
+        PRINT_MUST(", encountered %zu operation failure(s)", opFailures);
     PRINT_MUST(".\n");
 
     close(archivefd);
     close(dirfd);
     free(entries);
-    return 0;
+    return (opFailures == 0) ? 0 : -1;
 }
 
 /**
@@ -550,7 +581,7 @@ static int apply_backup_policy(const char *dir, int keepCount, const char *runId
  * If the directory already exists, apply_backup_policy() runs for files
  * matching the active output format (CSV or JSON). This prepares the directory
  * for a fresh run while preserving backup history under a timestamped
- * <timestamp>_<RUN_ID>_<basename> subdirectory.
+ * <timestamp>_<RUN_ID>_<BACKUP_BASE> subdirectory.
  * If @p dir does not exist a single-level mkdir(2) is attempted.
  *
  * @param[in] dir  Path to the desired output directory.
@@ -3361,7 +3392,7 @@ void printHelpAndUsage(char *argv[], bool moreInfo, int returnCode)
     printf("      --upload-enable               Enable Cadence based upload\n");
     printf("      --upload-interval <seconds>   Report Upload Frequency\n");
     printf("      --frag                        Enable fragmentation data collection (default: disabled)\n");
-    printf("  -b, --backup <count>              Number of report files to keep in pre-run backup handling (default: 30, max: 100)\n");
+    printf("  -b, --backup <count>              Number of report files to keep in pre-run backup handling (default: %d, max: %d)\n", DEFAULT_BACKUP_COUNT, MAX_BACKUP_COUNT);
     printf("  -s, --smaps                       Force /proc/<pid>/smaps (disable auto smaps_rollup detection)\n");
 #ifdef TESTME
     printf("  -t, --test <smapsFile> <meminfoFile> [buddyinfoFile] [pagetypeinfoFile] [statFile] [bandwidthFile]\n");
@@ -3665,7 +3696,7 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, bool cli_out
 
     if (!outputDirHasMeminsightBase(final_out_dir))
     {
-        PRINT_ERROR("Error: Output directory '%s' must have 'meminsight' in the final path component\n", final_out_dir);
+        PRINT_MUST("Error: Output directory '%s' must have 'meminsight' in the final path component\n", final_out_dir);
         for (unsigned j = 0; j < config.whiteListCount; j++)
             if (config.whitelist[j]) free(config.whitelist[j]);
         if (config.whitelist) free(config.whitelist);
@@ -3675,7 +3706,7 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, bool cli_out
     // Initialize setup info (MAC, firmware name, output dir, file extension)
     SetupInfo setup = initializeSetupInfo(final_out_dir, g_reportFormat);
     if (!setup.dirCreated) {
-        PRINT_ERROR("Failed to create output directory: %s\n", setup.outputDir);
+        PRINT_MUST("Failed to create output directory: %s\n", setup.outputDir);
         for (unsigned j = 0; j < config.whiteListCount; j++)
             if (config.whitelist[j]) free(config.whitelist[j]);
         if (config.whitelist) free(config.whitelist);
@@ -4527,13 +4558,13 @@ int main(int argc, char *argv[])
                 i++; // skip next arg (backup count)
                 if (g_backupCount < 1 || g_backupCount > MAX_BACKUP_COUNT)
                 {
-                    PRINT_ERROR("Error: --backup value must be between 1 and %d\n", MAX_BACKUP_COUNT);
+                    PRINT_MUST("Error: --backup value must be between 1 and %d\n", MAX_BACKUP_COUNT);
                     printHelpAndUsage(argv, false, 1);
                 }
             }
             else
             {
-                PRINT_ERROR("Error: Missing backup count after %s\n", argv[i]);
+                PRINT_MUST("Error: Missing backup count after %s\n", argv[i]);
                 printHelpAndUsage(argv, false, 1);
             }
         }

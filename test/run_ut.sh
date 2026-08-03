@@ -85,7 +85,7 @@ while [ "$i" -le "$NUM_TESTS" ]; do
     echo "------------------------------------------"
     echo "Command: $MEM_BIN -o /tmp/meminsight -t $SMAP_FILE $MEMINFO_FILE"
 
-    TC_STATUS="FAIL"
+    TC_STATUS="FAILURE"
     if $MEM_BIN -o /tmp/meminsight -t "$SMAP_FILE" "$MEMINFO_FILE"; then
         echo "✓ Test $i PASSED"
         echo ""
@@ -678,11 +678,19 @@ printf 'old2\n' > "$RET_OUT3/old_2.csv"
 
 if $MEM_BIN -o "$RET_OUT3" -b 5 -t "$RET_SMAP_FILE" "$RET_MEMINFO_FILE"; then
     RET_DIR=$(find "$RET_OUT3" -mindepth 1 -maxdepth 1 -type d -name "*_${BACKUP_BASE}*" | head -n 1)
-    if [ -n "$RET_DIR" ] && [ -f "$RET_DIR/old_1.csv" ] && [ -f "$RET_DIR/old_2.csv" ] && ! ls "$RET_OUT3"/old_*.csv >/dev/null 2>&1; then
+    ARCHIVED_OLD_COUNT=0
+    ROOT_OLD_COUNT=0
+    ROOT_NEW_REPORT_COUNT=0
+    if [ -n "$RET_DIR" ]; then
+        ARCHIVED_OLD_COUNT=$(find "$RET_DIR" -maxdepth 1 -type f -name 'old_*.csv' | wc -l | tr -d ' ')
+    fi
+    ROOT_OLD_COUNT=$(find "$RET_OUT3" -maxdepth 1 -type f -name 'old_*.csv' | wc -l | tr -d ' ')
+    ROOT_NEW_REPORT_COUNT=$(find "$RET_OUT3" -maxdepth 1 -type f -name '*_meminsight.csv' | wc -l | tr -d ' ')
+    if [ -n "$RET_DIR" ] && [ "$ARCHIVED_OLD_COUNT" -eq 2 ] && [ "$ROOT_OLD_COUNT" -eq 0 ] && [ "$ROOT_NEW_REPORT_COUNT" -ge 1 ]; then
         echo "✓ $RET_DESC3 PASSED"
         record_tc_result "21" "Backup move-all when count <= N (CSV)" "SUCCESS"
     else
-        echo "✗ $RET_DESC3 FAILED (old csv files not moved as expected)"
+        echo "✗ $RET_DESC3 FAILED (old csv files not moved/archived as expected)"
         find "$RET_OUT3" -maxdepth 2 -print
         TEST_FAILED=$((TEST_FAILED + 1))
         record_tc_result "21" "Backup move-all when count <= N (CSV)" "FAILURE"
@@ -719,7 +727,9 @@ touch -t 202601010105 "$RET_OUT4/old_5.csv"
 
 if $MEM_BIN -o "$RET_OUT4" -b 3 -t "$RET_SMAP_FILE" "$RET_MEMINFO_FILE"; then
     RET_DIR=$(find "$RET_OUT4" -mindepth 1 -maxdepth 1 -type d -name "*_${BACKUP_BASE}*" | head -n 1)
-    if [ -n "$RET_DIR" ] && [ -f "$RET_DIR/old_3.csv" ] && [ -f "$RET_DIR/old_4.csv" ] && [ -f "$RET_DIR/old_5.csv" ] && [ ! -f "$RET_DIR/old_1.csv" ] && [ ! -f "$RET_DIR/old_2.csv" ] && ! ls "$RET_OUT4"/old_*.csv >/dev/null 2>&1; then
+    ROOT_OLD_COUNT=$(find "$RET_OUT4" -maxdepth 1 -type f -name 'old_*.csv' | wc -l | tr -d ' ')
+    ROOT_NEW_REPORT_COUNT=$(find "$RET_OUT4" -maxdepth 1 -type f -name '*_meminsight.csv' | wc -l | tr -d ' ')
+    if [ -n "$RET_DIR" ] && [ -f "$RET_DIR/old_3.csv" ] && [ -f "$RET_DIR/old_4.csv" ] && [ -f "$RET_DIR/old_5.csv" ] && [ ! -f "$RET_DIR/old_1.csv" ] && [ ! -f "$RET_DIR/old_2.csv" ] && [ "$ROOT_OLD_COUNT" -eq 0 ] && [ "$ROOT_NEW_REPORT_COUNT" -ge 1 ]; then
         echo "✓ $RET_DESC4 PASSED"
         record_tc_result "22" "Backup move-latest-N and delete rest (CSV)" "SUCCESS"
     else
@@ -1009,12 +1019,12 @@ TOTAL_TCS=$(printf '%s\n' "$TC_RESULTS" | awk 'NF {c++} END {print c+0}')
 PASSED_TCS=$(printf '%s\n' "$TC_RESULTS" | awk -F'|' '$3=="SUCCESS" {c++} END {print c+0}')
 FAILED_TCS=$(printf '%s\n' "$TC_RESULTS" | awk -F'|' '$3=="FAILURE" {c++} END {print c+0}')
 SKIPPED_TCS=$(printf '%s\n' "$TC_RESULTS" | awk -F'|' '$3=="SKIPPED" {c++} END {print c+0}')
-if [ $TEST_FAILED -eq 0 ]; then
-    echo "✓ ALL TESTS PASSED | PASSED: $PASSED_TCS/$TOTAL_TCS | FAILED: $FAILED_TCS/$TOTAL_TCS | SKIPPED: $SKIPPED_TCS/$TOTAL_TCS |"
+if [ "$TEST_FAILED" -eq 0 ]; then
+    echo "✓ ALL TESTS PASSED | PASSED $PASSED_TCS/$TOTAL_TCS | FAILED $FAILED_TCS/$TOTAL_TCS | SKIPPED $SKIPPED_TCS/$TOTAL_TCS |"
     echo "===================================================================================="
     exit 0
 else
-    echo "✗ SOME TESTS FAILED | PASSED: $PASSED_TCS/$TOTAL_TCS | FAILED: $FAILED_TCS/$TOTAL_TCS | SKIPPED: $SKIPPED_TCS/$TOTAL_TCS |"
+    echo "✗ SOME TESTS FAILED | PASSED $PASSED_TCS/$TOTAL_TCS | FAILED $FAILED_TCS/$TOTAL_TCS | SKIPPED $SKIPPED_TCS/$TOTAL_TCS |"
     echo "===================================================================================="
     exit 1
 fi
