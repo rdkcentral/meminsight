@@ -583,6 +583,8 @@ static int apply_backup_policy(const char *dir, int keepCount, const char *runId
  * matching the active output format (CSV or JSON). This prepares the directory
  * for a fresh run while preserving backup history under a timestamped
  * <timestamp>_<RUN_ID>_<BACKUP_BASE> subdirectory.
+ * Backup handling is best-effort; run setup continues if some archive/delete
+ * operations fail and the output directory remains usable.
  * If @p dir does not exist a single-level mkdir(2) is attempted.
  *
  * @param[in] dir  Path to the desired output directory.
@@ -597,8 +599,7 @@ static bool ensure_output_dir(const char *dir, const char *runIdFallback)
         {
             if (apply_backup_policy(dir, g_backupCount, runIdFallback) != 0)
             {
-                PRINT_MUST("Failed to apply backup policy in '%s'\n", dir);
-                return false;
+                PRINT_MUST("Warning: backup policy had partial failures in '%s'; continuing run setup\n", dir);
             }
             return true;
         }
@@ -4443,6 +4444,7 @@ int main(int argc, char *argv[])
             if (i + 1 < argc)
             {
                 strncpy(out_dir, argv[i + 1], PATH_MAX - 1);
+                out_dir[PATH_MAX - 1] = '\0';
                 if (!validateOutputDirOrHelp(out_dir, argv, false))
                     return 1;
                 cli_output_set = true;

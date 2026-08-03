@@ -251,17 +251,19 @@ The tool supports automatic report upload signaling via systemd path-triggered u
 ./meminsight --upload-enable --upload-interval 3600 --iterations 10 --interval 300
 ```
 
+At run startup (always):
+- A state file `<output-dir>/.meminsight_configstore` is written/updated with run parameters
+- An in-progress sentinel `/tmp/.meminsight_inprogress` is created at run start and removed at completion
+
 When `--upload-enable` is passed:
 - A marker file `/tmp/.meminsight_upload` is created immediately before the capture run begins
-- A state file `</output-dir>/.meminsight_configstore` is written with run parameters
-- An in-progress sentinel `/tmp/.meminsight_inprogress` is created at run start and removed at completion
 - The systemd `meminsight-upload.path` unit watches for the marker and triggers the upload service
 
 ## 📁 State Files
 
 Meminsight creates and manages the following state files:
 
-### `</output-dir>/.meminsight_configstore` (Persistent, Per-Run)
+### `<output-dir>/.meminsight_configstore` (Persistent, Per-Run)
 
 **Purpose**: Store run parameters for the upload script to read.
 
@@ -280,7 +282,7 @@ OUTPUT_FORMAT=csv
 UPLOAD_ENABLED=1
 UPLOAD_INTERVAL=3600
 OUTPUT_DIR=/opt/meminsight
-BACKUP_ENABLED=0
+BACKUP_ENABLED=1
 BACKUP_COUNT=30
 BACKUP_BASE=backup
 FRAGMENTATION_ENABLED=0
@@ -522,7 +524,7 @@ make install
    - If report count is `> backup count`, move the newest `N` matching reports into backup and delete the older matching ones.
    - Non-matching files are untouched.
 3. **Setup initialization** — Cache MAC address, firmware name, kernel version, and generate a per-run `RUN_ID` by concatenating epoch seconds + PID + a randomly generated 2-digit suffix.
-4. **State file creation** — Write `</output-dir>/.meminsight_configstore` with resolved run parameters. This file persists across runs and is selectively updated.
+4. **State file creation** — Write `<output-dir>/.meminsight_configstore` with resolved run parameters. This file persists across runs and is selectively updated.
 5. **Upload marker creation** — If `--upload-enable` was passed, create `/tmp/.meminsight_upload` to signal the systemd upload service.
 6. **In-progress sentinel** — Create `/tmp/.meminsight_inprogress` to mark an active run.
 7. **Iteration loop** — For each iteration:
@@ -545,7 +547,7 @@ make install
 | `parseConfig()` | Configuration file processing | meminsight.c |
 | `ensure_output_dir()` | Create output dir and apply format-scoped pre-run backup policy | meminsight.c |
 | `initializeSetupInfo()` | Cache device metadata and generate run hash | meminsight.c |
-| `writeConfigStore()` | Write/update persistent state file to `</output-dir>/.meminsight_configstore` | meminsight.c |
+| `writeConfigStore()` | Write/update persistent state file to `<output-dir>/.meminsight_configstore` | meminsight.c |
 | `touchFile()` | Create or truncate marker files | meminsight.c |
 | `removeFileIfPresent()` | Gracefully remove in-progress sentinel on exit | meminsight.c |
 | `readSystemCpuStat()` | Parse aggregate CPU counters from `/proc/stat` | meminsight.c |
