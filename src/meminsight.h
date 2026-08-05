@@ -148,8 +148,6 @@ This is used to ensure compatibility with older versions of the report parser. *
 #define CSV_FRAGMENTATION_SECTION_HEADER "\nFragmentation"
 #define CSV_STAT_VALUE_HEADER "STAT,VALUE"
 
-#define CSV_CPUSTAT_HEADER "user,nice,system,idle,iowait,irq,softirq,steal"
-
 #define CSV_BANDWIDTH_HEADER "TotalBandwidth,UsagePercentage"
 #define CSV_BANDWIDTH_SECTION_HEADER "\nBandwidth:\n"
 

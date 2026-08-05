@@ -3478,7 +3478,6 @@ void printHelpAndUsage(char *argv[], bool moreInfo, int returnCode)
  * (same pattern as telemetry). Without it, falls back to manual cert paths.
  * -----------------------------------------------------------------------
  */
-#include <curl/curl.h>
 
 #ifdef LIBRDKCERTSEL_BUILD
 #include <rdkcertselector.h>
