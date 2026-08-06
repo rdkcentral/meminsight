@@ -15,6 +15,9 @@
 - [Advanced Features](#-advanced-features)
 - [Build System](#-build-system)
 - [Architecture](#-architecture)
+- [OpenSpec Workflow](#-openspec-workflow)
+- [Role-Based Workflow](#-role-based-workflow)
+- [Agents and Skills](#-agents-and-skills)
 - [Report Metadata](#-report-metadata)
 - [Examples](#-examples)
 - [Troubleshooting](#-troubleshooting)
@@ -30,6 +33,7 @@
 - **Swap PSS** - Proportional swap usage
 - **Major Page Faults** - Hard page faults requiring disk I/O
 - **CPU Time** - Combined user and system CPU usage
+- **System CPU Raw Counters** - Aggregate `/proc/stat` ticks for server-side delta and percentage calculation
 
 ### 🛠️ **Flexible Configuration**
 - **Process Whitelisting** - Monitor specific processes by name or PID
@@ -38,6 +42,7 @@
 - **Kernel Thread Support** - Optional inclusion of kernel threads
 - **Long-running Mode** - Extended monitoring with automatic intervals
 - **Fragmentation Data Capture** - Optional via `--frag`; `/proc/pagetypeinfo` preferred with `/proc/buddyinfo` fallback
+- **Bandwidth Reporting** - Optional DDR bandwidth data in CSV and JSON when platform data is available
 
 ### 🔧 **Advanced Capabilities**
 - **Network Interface Detection** - Automatic MAC address retrieval
@@ -69,6 +74,24 @@
 
 # Enable fragmentation data collection (disabled by default)
 ./meminsight --frag --iterations 5 --interval 60
+```
+
+## 🐳 Docker
+
+The repository includes a multi-stage `Dockerfile` with dedicated targets for build, test, and runtime.
+
+```bash
+# Build runtime image
+docker build -t meminsight:latest .
+
+# Run fixture tests inside the image build
+docker build --target test -t meminsight:test .
+
+# Run meminsight help
+docker run --rm meminsight:latest --help
+
+# Example finite run (writes reports inside container)
+docker run --rm meminsight:latest --iterations 1 --interval 0
 ```
 
 ## 📊 Build & Testing Scripts
@@ -118,7 +141,7 @@ cat /tmp/meminsight-leak-reports/leak_report_*.txt
 
 A comprehensive code audit has been performed identifying memory safety, resource management, and optimization improvements:
 
-📄 **[docs/CODE_AUDIT_AND_HARDENING.md](docs/CODE_AUDIT_AND_HARDENING.md)** - Complete findings including:
+Audit outcomes currently tracked in repository documentation and planning notes include:
 - **3 CRITICAL resource leaks** (file handles, directory handles) with fixes
 - **7 High/Medium issues** (overflow risks, crash possibilities, missing checks)
 - **5 Low-severity optimizations** (code structure, performance)
@@ -184,6 +207,7 @@ OPTIONS:
    -a, --all                   Include kernel threads for process monitoring
    -c, --config FILE           Path to configuration file (must end with .conf)
    -o, --output DIR            Output directory for generated reports (default: /opt/meminsight)
+   -b, --backup N              Pre-run backup count for existing reports (1-100, default: 30)
          --iterations N          Number of iterations to run (overrides config)
          --interval SECONDS      Seconds between iterations (overrides config)
       --fmt FORMAT            Report format: csv (default) or json
@@ -191,7 +215,7 @@ OPTIONS:
       --frag                  Enable fragmentation data collection (default: disabled)
       --upload-enable         Enable upload infrastructure (creates marker file)
       --upload-interval SECS  Upload cadence in seconds (requires --upload-enable)
-   -t, --test SMAPS MEMINFO [BUDDYINFO] [PAGETYPEINFO]
+   -t, --test SMAPS MEMINFO [BUDDYINFO] [PAGETYPEINFO] [STAT] [BANDWIDTH]
                                Run in test mode using supplied sample files (requires TESTME build)
    -h, --help                  Show help message and exit
 ```
@@ -227,17 +251,19 @@ The tool supports automatic report upload signaling via systemd path-triggered u
 ./meminsight --upload-enable --upload-interval 3600 --iterations 10 --interval 300
 ```
 
+At run startup (always):
+- A state file `<output-dir>/.meminsight_configstore` is written/updated with run parameters
+- An in-progress sentinel `/tmp/.meminsight_inprogress` is created at run start and removed at completion
+
 When `--upload-enable` is passed:
 - A marker file `/tmp/.meminsight_upload` is created immediately before the capture run begins
-- A state file `/tmp/.meminsight_configstore` is written with run parameters
-- An in-progress sentinel `/tmp/.meminsight_inprogress` is created at run start and removed at completion
 - The systemd `meminsight-upload.path` unit watches for the marker and triggers the upload service
 
 ## 📁 State Files
 
 Meminsight creates and manages the following state files:
 
-### `/tmp/.meminsight_configstore` (Persistent, Per-Run)
+### `<output-dir>/.meminsight_configstore` (Persistent, Per-Run)
 
 **Purpose**: Store run parameters for the upload script to read.
 
@@ -247,8 +273,8 @@ Meminsight creates and manages the following state files:
 ```
 UPTIME=12345.67
 KERNEL_VERSION=5.15.0-91-generic
-MEMINSIGHT_VERSION=1.1.0
-REPORT_VERSION=1.1.0
+MEMINSIGHT_VERSION=1.1.2
+REPORT_VERSION=1.3.0
 RUN_ITERATIONS=10
 RUN_INTERVAL=60
 RUN_ID=17014563271234507
@@ -256,6 +282,10 @@ OUTPUT_FORMAT=csv
 UPLOAD_ENABLED=1
 UPLOAD_INTERVAL=3600
 OUTPUT_DIR=/opt/meminsight
+BACKUP_ENABLED=1
+BACKUP_COUNT=30
+BACKUP_BASE=backup
+FRAGMENTATION_ENABLED=0
 ```
 
 **Behavior**:
@@ -415,8 +445,8 @@ make clean && make CFLAGS="-DTESTME"
 # Run using sample fixtures (smaps + meminfo)
 ./meminsight --test test/1-non-zero-swap-entry/meminsight_testSmap.txt test/1-non-zero-swap-entry/meminsight_testMeminfo.txt
 
-# Run using sample fixtures including fragmentation (buddyinfo + pagetypeinfo)
-./meminsight --test test/1-non-zero-swap-entry/meminsight_testSmap.txt test/1-non-zero-swap-entry/meminsight_testMeminfo.txt test/6-buddyinfo-sample/meminsight_testBuddyinfo.txt test/7-pagetypeinfo-sample/meminsight_testPagetypeinfo.txt
+# Run using sample fixtures including fragmentation, CPU stat, and bandwidth
+./meminsight --test test/1-non-zero-swap-entry/meminsight_testSmap.txt test/1-non-zero-swap-entry/meminsight_testMeminfo.txt [test/6-buddyinfo-sample/meminsight_testBuddyinfo.txt] [test/7-pagetypeinfo-sample/meminsight_testPagetypeinfo.txt] [test/10-cpu-stat-sample/meminsight_testStat.txt] [test/12-bandwidth-sample/meminsight_testBandwidth.txt]
 
 # Run the repository unit-test runner (executes all fixtures and a negative test)
 sh test/run_ut.sh
@@ -432,6 +462,20 @@ There is also a negative fixture in `test/4-negative-duplicate-meminfo-field/` t
 Fragmentation fixture coverage is also included via:
 - `test/6-buddyinfo-sample/meminsight_testBuddyinfo.txt`
 - `test/7-pagetypeinfo-sample/meminsight_testPagetypeinfo.txt`
+
+CPU stat fixture coverage includes:
+- `test/10-cpu-stat-sample/meminsight_testStat.txt` for a full 10-field aggregate `cpu` line
+- `test/11-cpu-stat-legacy-fields/meminsight_testStat.txt` for older kernels that omit trailing guest fields; meminsight now zero-fills the missing counters instead of skipping CPUStat output
+
+Bandwidth fixture coverage includes:
+- `test/12-bandwidth-sample/meminsight_testBandwidth.txt` for deterministic CSV/JSON bandwidth validation under TESTME without relying on platform sysfs
+
+When JSON output is enabled, the unit tests validate `cpu_stat` content with whitespace-tolerant numeric matching, accept `30543.0`-style rendering, and treat runtime cJSON-to-CSV fallback as a skip instead of a failure.
+
+### CPUStat and Bandwidth Compatibility Notes
+
+- CPUStat collection accepts aggregate `/proc/stat` `cpu` lines with at least the first 4 counters (`user`, `nice`, `system`, `idle`). Missing trailing counters are emitted as `0` so CSV and JSON output keep the same 10-field schema.
+- DDR bandwidth collection enables monitoring mode when needed and still attempts to read a bandwidth sample in the same iteration. If the platform does not provide a parseable sample immediately, the section is skipped without terminating the run.
 
 ## 🏗️ Build System
 
@@ -475,16 +519,19 @@ make install
 ### Execution Flow (Manual and Automatic)
 
 1. **Argument parsing** — Parse CLI options including output directory and upload flags.
-2. **Startup sanitization** — `ensure_output_dir()` recursively wipes all contents of the output directory so each run starts clean. The directory itself is preserved or created if absent.
+2. **Startup backup preparation** — `ensure_output_dir()` creates the output directory when absent. If present, it applies format-scoped pre-run backup handling (`.csv` in CSV mode, `.json` in JSON mode):
+   - If report count is `<= backup count`, move all matching reports into `<timestamp>_<RUN_ID>_backup`.
+   - If report count is `> backup count`, move the newest `N` matching reports into backup and delete the older matching ones.
+   - Non-matching files are untouched.
 3. **Setup initialization** — Cache MAC address, firmware name, kernel version, and generate a per-run `RUN_ID` by concatenating epoch seconds + PID + a randomly generated 2-digit suffix.
-4. **State file creation** — Write `/tmp/.meminsight_configstore` with resolved run parameters. This file persists across runs and is selectively updated.
+4. **State file creation** — Write `<output-dir>/.meminsight_configstore` with resolved run parameters. This file persists across runs and is selectively updated.
 5. **Upload marker creation** — If `--upload-enable` was passed, create `/tmp/.meminsight_upload` to signal the systemd upload service.
 6. **In-progress sentinel** — Create `/tmp/.meminsight_inprogress` to mark an active run.
 7. **Iteration loop** — For each iteration:
    - Capture fresh timestamp and uptime.
-   - Collect system meminfo, process smaps stats.
+   - Collect system meminfo, optional aggregate CPU stat counters, process smaps stats.
    - If `--frag` is active, collect fragmentation data.
-   - Write CSV/JSON report with full metadata row: `FIRMWARE_NAME, MAC_ADDRESS, TIMESTAMP, UPTIME, KERNEL_VERSION, REPORT_VERSION, ITERATION, RUN_ITERATIONS, RUN_INTERVAL, RUN_ID`.
+   - Write CSV/JSON report with full metadata row: `FIRMWARE_NAME, MAC_ADDRESS, TIMESTAMP, UPTIME, KERNEL_VERSION, REPORT_VERSION, ITERATION, RUN_ITERATIONS, RUN_INTERVAL, RUN_ID, BACKUP_ARG_PASSED, BACKUP_COUNT`.
 8. **Cleanup** — Remove in-progress sentinel on completion or error. Configstore persists for upload script reference.
 9. **Automatic run (systemd)** — Service starts meminsight with desired flags; path unit watches for marker and triggers upload service.
 
@@ -498,11 +545,12 @@ make install
 | `addProcessInfo()` | Maintain sorted process list | meminsight.c |
 | `getMacAddress()` | Network interface detection | meminsight.c |
 | `parseConfig()` | Configuration file processing | meminsight.c |
-| `ensure_output_dir()` | Create output dir and wipe stale contents on startup | meminsight.c |
+| `ensure_output_dir()` | Create output dir and apply format-scoped pre-run backup policy | meminsight.c |
 | `initializeSetupInfo()` | Cache device metadata and generate run hash | meminsight.c |
-| `writeConfigStore()` | Write/update persistent state file to `/tmp/.meminsight_configstore` | meminsight.c |
+| `writeConfigStore()` | Write/update persistent state file to `<output-dir>/.meminsight_configstore` | meminsight.c |
 | `touchFile()` | Create or truncate marker files | meminsight.c |
 | `removeFileIfPresent()` | Gracefully remove in-progress sentinel on exit | meminsight.c |
+| `readSystemCpuStat()` | Parse aggregate CPU counters from `/proc/stat` | meminsight.c |
 
 ---
 
@@ -561,6 +609,8 @@ CPPFLAGS="-DDEVICE_INTERFACE_KEY=\"ESTB_INTERFACE\"" make clean && make
 # 8. Configstore persists for audit and future reference
 ```
 
+Note: the chosen output directory must have `meminsight` in its final path component, and the configstore is written inside that output directory as `.meminsight_configstore`.
+
 ### Example 5: Config File with Upload Settings
 
 ```bash
@@ -599,15 +649,27 @@ Every report file (CSV and JSON) begins with a metadata row containing the follo
 | `RUN_ITERATIONS` | Total iterations configured for this run |
 | `RUN_INTERVAL` | Interval in seconds between iterations |
 | `RUN_ID` | Per-run identifier built as `<epoch_seconds><pid><2-digit-random-suffix>` |
+| `BACKUP_ARG_PASSED` | `1` when `--backup/-b` was explicitly provided, otherwise `0` |
+| `BACKUP_COUNT` | Effective backup count used for the run (default `30`, or CLI-provided value) |
 
 The `RUN_ID` groups all report files from the same invocation together, making it possible to correlate data across iterations without relying on timestamps alone.
+
+Current report schema version is `1.3.0`.
+
+When available, reports also include a `CPUStat` section in CSV and a `cpu_stat` object in JSON with raw counters in this order:
+`user, nice, system, idle, iowait, irq, softirq, steal, guest, guest_nice`.
+meminsight does not derive CPU percentages from these values.
+
+When available, reports also include bandwidth data: a `Bandwidth` section in CSV and a `bandwidth` object in JSON.
+
+Current CSV section order is: metadata, meminfo, CPUStat (when available), fragmentation (when enabled), bandwidth (when available), processes, total row.
 
 ## 📦 Integration Samples
 
 - Sample systemd unit file: `deploy/systemd/meminsight.service` (main capture service)
-- Sample systemd upload path unit: `yocto/meminsight-upload.path` (watches for marker)
-- Sample systemd upload service: `yocto/meminsight-upload.service` (triggers upload script)
 - Sample Yocto recipe: `deploy/yocto/meminsight.bb` (includes all units)
+
+Note: upload path/service unit samples are platform-integration artifacts and are not versioned in this repository.
 
 
 
@@ -621,6 +683,73 @@ The repository includes a project-scoped customization layout under `.github/`:
 - Skills: `.github/skills/`
 
 Each directory includes a local README for short usage guidance.
+
+## 📐 OpenSpec Workflow
+
+OpenSpec is the primary behavior source-of-truth for this repository.
+
+- Documentation index: `docs/README.md`
+
+- Directory overview: `openspec/README.md`
+- Configuration reference: `openspec/config.yaml`
+- Architecture baseline: `openspec/architecture/00-baseline-architecture.md`
+- Capability specs usage: `openspec/specs/README.md`
+- Change delta workflow: `openspec/changes/README.md`
+- Detailed guide: `docs/OPENSPEC_USAGE_GUIDE.md`
+
+Use OpenSpec as follows:
+
+1. Read system-level context in `openspec/architecture/` for larger changes.
+2. Read impacted capabilities in `openspec/specs/` before coding.
+3. For behavior changes, create/update a delta under `openspec/changes/` first.
+4. Keep implementation, tests, and capability docs in parity.
+
+OpenSpec lifecycle shortcuts:
+
+1. `/opsx:propose`
+2. `/opsx:explore`
+3. `/opsx:apply`
+4. `/opsx:archive`
+
+## 👥 Role-Based Workflow
+
+Role-specific operating guidance is documented in:
+
+- `docs/ROLE_BASED_WORKFLOW_GUIDE.md`
+
+The guide defines workflows for:
+
+1. Reviewer
+2. Developer/Contributor
+3. Architect Owner
+4. Tester
+5. Technical Documentation Expert
+
+## 🧭 Agents and Skills
+
+Agent and skill usage is documented in:
+
+- `.github/AGENTS_AND_SKILLS_USAGE.md`
+
+Primary agent modes:
+
+- `.github/agents/meminsight-implementer.agent.md`
+- `.github/agents/meminsight-reviewer.agent.md`
+
+Primary skills:
+
+- `.github/skills/openspec-propose/`
+- `.github/skills/openspec-explore/`
+- `.github/skills/openspec-apply-change/`
+- `.github/skills/openspec-archive-change/`
+- `.github/skills/openspec-source-of-truth/`
+- `.github/skills/diagnose/`
+- `.github/skills/tdd/`
+- `.github/skills/to-issues-openspec/`
+- `.github/skills/zoom-out/`
+- `.github/skills/grill-with-docs-openspec/`
+- `.github/skills/proc-fragmentation-compat/`
+- `.github/skills/report-schema-compat/`
 
 ## 🧪 CI Workflows
 
@@ -664,11 +793,12 @@ sudo journalctl -u meminsight-upload.service -n 20
 **Issue**: Configstore not found by upload script
 ```bash
 # Check configstore file and permissions
-ls -la /tmp/.meminsight_configstore
-cat /tmp/.meminsight_configstore  # View current run parameters
+ls -la <output-dir>/.meminsight_configstore
+cat <output-dir>/.meminsight_configstore  # View current run parameters
 
-# Ensure upload script has read permission
-chmod 644 /tmp/.meminsight_configstore
+# Expected mode is 0640 (owner read/write, group read)
+# Ensure uploader runs as owner or in the file's group
+chmod 640 <output-dir>/.meminsight_configstore
 ```
 
 **Issue**: In-progress sentinel not cleaned up
@@ -687,7 +817,7 @@ rm -f /tmp/.meminsight_inprogress
 We welcome contributions! Please follow these guidelines:
 
 1. **Fork the repository**
-2. **Create a feature branch**
+2. **Create a working branch**
 3. **Follow coding standards**
    - Use consistent indentation (4 spaces)
    - Add comprehensive comments

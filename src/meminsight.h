@@ -75,13 +75,13 @@
 /* MEMINSIGHT_MAJOR_VERSION, MEMINSIGHT_MINOR_VERSION, and MEMINSIGHT_PATCH_VERSION are to track the binary version, any changes in the binary version should increment this version.
 This is used to ensure compatibility with older versions of the binary. */
 #define MEMINSIGHT_MAJOR_VERSION "1"
-#define MEMINSIGHT_MINOR_VERSION "1"
-#define MEMINSIGHT_PATCH_VERSION "1"
+#define MEMINSIGHT_MINOR_VERSION "2"
+#define MEMINSIGHT_PATCH_VERSION "0"
 
 /* REPORT_MAJOR_VERSION, REPORT_MINOR_VERSION, and REPORT_PATCH_VERSION are to track the report format, any changes in the report format should increment this version.
 This is used to ensure compatibility with older versions of the report parser. */
 #define REPORT_MAJOR_VERSION "1"
-#define REPORT_MINOR_VERSION "1"
+#define REPORT_MINOR_VERSION "3"
 #define REPORT_PATCH_VERSION "0"
 
 #ifndef DEVICE_INTERFACE_KEY
@@ -93,6 +93,7 @@ This is used to ensure compatibility with older versions of the report parser. *
 #define VERSION_FILE "/version.txt"
 #define DEVICE_PROP_FILE "/etc/device.properties"
 #define MEMINFO_FILE PROC_DIR "/meminfo"
+#define STAT_FILE PROC_DIR "/stat"
 #define UPTIME_FILE PROC_DIR "/uptime"
 #define BW_DDR_MODE_FILE "/sys/class/aml_ddr/mode"
 #ifndef BW_DDR_FILE
@@ -105,7 +106,7 @@ This is used to ensure compatibility with older versions of the report parser. *
 #define PGT_FILE PROC_DIR "/pagetypeinfo"
 #endif
 
-#define MEMINSIGHT_CONFIGSTORE_PATH "/tmp/.meminsight_configstore"
+#define MEMINSIGHT_CONFIGSTORE_NAME ".meminsight_configstore"
 #define MEMINSIGHT_UPLOAD_MARKER_PATH "/tmp/.meminsight_upload"
 #define MEMINSIGHT_INPROGRESS_FILE "/tmp/.meminsight_inprogress"
 
@@ -118,7 +119,9 @@ This is used to ensure compatibility with older versions of the report parser. *
 #define DEFAULT_INTERVAL 5
 #define DEFAULT_LOG_LEVEL "INFO"
 #define DEFAULT_MAC "000000000000"
-
+#define DEFAULT_BACKUP_COUNT 30
+#define MAX_BACKUP_COUNT 100
+#define BACKUP_BASE "backup"
 #ifndef DEFAULT_OUT_DIR
 #define DEFAULT_OUT_DIR "/opt/meminsight"
 #endif
@@ -132,7 +135,7 @@ This is used to ensure compatibility with older versions of the report parser. *
 #define LONG_RUN_INTERVAL 900 // 900 is Default interval for long runs in seconds
 #define LONG_RUN_ITERATIONS 48 // 12-hour capture at 15-minute interval; caller may override via CLI/config
 
-#define CSV_META_HEADER "FIRMWARE_NAME,MAC_ADDRESS,TIMESTAMP,UPTIME,KERNEL_VERSION,REPORT_VERSION,ITERATION,RUN_ITERATIONS,RUN_INTERVAL,RUN_ID"
+#define CSV_META_HEADER "FIRMWARE_NAME,MAC_ADDRESS,TIMESTAMP,UPTIME,KERNEL_VERSION,REPORT_VERSION,ITERATION,RUN_ITERATIONS,RUN_INTERVAL,RUN_ID,BACKUP_ARG_PASSED,BACKUP_COUNT"
 
 #define CSV_PROCESSES_SECTION_HEADER "\nProcesses:\n"
 #define CSV_PROCESS_HEADER "PID,EXE,RSS,PSS,SHARED_CLEAN,PRIVATE_CLEAN,PRIVATE_DIRTY,SWAP_PSS,MIN_FAULTS,MAJ_FAULTS,CPU_TIME"
@@ -142,6 +145,9 @@ This is used to ensure compatibility with older versions of the report parser. *
 
 #define CSV_BANDWIDTH_HEADER "TotalBandwidth,UsagePercentage"
 #define CSV_BANDWIDTH_SECTION_HEADER "\nBandwidth:\n"
+
+#define CSV_CPUSTAT_SECTION_HEADER "\nCPUStat:\n"
+#define CSV_CPUSTAT_HEADER "USER,NICE,SYSTEM,IDLE,IOWAIT,IRQ,SOFTIRQ,STEAL,GUEST,GUEST_NICE"
 
 // -----------------------------
 // Data Structures
@@ -213,6 +219,7 @@ extern bool g_bwDataAvailable;
 extern bool g_CollectFragData;        // Collect fragmentation data only when --frag is passed
 extern Report_Format g_reportFormat;  // Active output format (default: REPORT_CSV)
 extern bool g_jsonPrettyPrint;        // Pretty-print JSON when true
+extern int g_backupCount;             // Number of report files handled by pre-run backup policy (default: 30, max: 100)
 
 #ifdef TESTME
 extern unsigned isTestMode;
@@ -220,6 +227,8 @@ extern char testSmap[128];
 extern char testMeminfo[128];
 extern char testBuddyinfo[128];
 extern char testPagetypeinfo[128];
+extern char testStat[128];
+extern char testBandwidth[128];
 extern Process_Info processInfoTest;
 void checkAndFree();
 void testList();
