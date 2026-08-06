@@ -11,6 +11,7 @@ Supported options in the current implementation:
 - `-a, --all`
 - `-c, --config <file>`
 - `-o, --output <directory>`
+- `-b, --backup <count>`
 - `--interval <seconds>`
 - `--iterations <count>`
 - `--upload-enable`
@@ -33,6 +34,8 @@ Supported options in the current implementation:
 7. `--smaps` forces smaps parsing and disables smaps_rollup auto-selection.
 8. Without forced smaps, the tool auto-selects smaps_rollup when available, otherwise smaps.
 9. Long-run mode is active by default when no explicit interval/iterations pair is supplied.
+10. `--backup` / `-b` accepts values in range 1..100; out-of-range values trigger usage error output and non-success exit.
+11. `--output` / `-o` requires the final path component to contain `meminsight`; otherwise output-directory setup fails.
 
 ## Defaults and precedence
 
@@ -42,4 +45,4 @@ Supported options in the current implementation:
 
 ## Source anchors
 
-main(), printHelpAndUsage() in src/meminsight.c
+- `main()` and `printHelpAndUsage()` in [src/meminsight.c](../../src/meminsight.c)

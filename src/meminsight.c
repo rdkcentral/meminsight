@@ -159,15 +159,17 @@ static void unloadCjson(void)
 // -----------------------------
 // Global Variables
 // -----------------------------
-Process_Info getProcessInfo = {0};    // Temporary struct for collecting process info
-Process_Info *headProcessInfo = NULL; // Head of linked list
-Report_Format g_reportFormat  = REPORT_CSV; // Active output format (default: REPORT_CSV)
-bool g_jsonPrettyPrint         = false;
-bool g_bwDataAvailable = false;
-bool g_CollectFragData = false;
-unsigned smaps_rollup;                // Effective source for current parse: 1=smaps_rollup, 0=smaps
-unsigned force_smaps = 0;             // CLI override: force reading /proc/<pid>/smaps
-char gSMAPS_OR_ROLLUP[] = "smaps_rollup";
+Process_Info getProcessInfo = {0};         // Temporary struct for collecting process info
+Process_Info *headProcessInfo = NULL;      // Head of linked list
+Report_Format g_reportFormat = REPORT_CSV; // Active output format (default: REPORT_CSV)
+bool g_jsonPrettyPrint = false;            // Pretty-print JSON when true
+bool g_bwDataAvailable = false;            // Bandwidth data available
+bool g_CollectFragData = false;            // Collect fragmentation data only when --frag is passed
+unsigned smaps_rollup;                     // Effective source for current parse: 1=smaps_rollup, 0=smaps
+unsigned force_smaps = 0;                  // CLI override: force reading /proc/<pid>/smaps
+char gSMAPS_OR_ROLLUP[] = "smaps_rollup";  // Default source for process memory info (may be overridden by --smaps)
+int g_backupCount = DEFAULT_BACKUP_COUNT;  // Number of report files handled by pre-run backup policy (default: 30, max: 100)
+int g_backupArgPassed = 0;                 // 1 when --backup/-b is explicitly provided, else 0
 
 typedef enum {
     FRAG_SRC_NONE = 0,
@@ -203,6 +205,7 @@ int (*getProcessInfos_ptr)(FILE*);
 
 /* Forward declarations for local helpers used before their definitions. */
 static void trimTrailingWhitespace(char *str);
+static bool readConfigStoreValue(const char *dir, const char *key, char *value, size_t valueLen);
 
 // -----------------------------
 // Utility Functions
@@ -215,129 +218,286 @@ static void trimTrailingWhitespace(char *str);
  */
 
 /**
- * @brief Internal fd-based recursive directory content removal.
- *
- * All stat and removal operations are performed relative to the directory fd,
- * eliminating TOCTOU races: the inode checked and the inode acted upon are
- * always the same object.
- *
- * Ownership of @p d is transferred to this function; it is always closed
- * (via closedir) before returning, whether or not an error occurred.
- *
- * @param[in] d         Open DIR* for the directory to clear (closed on return).
- * @param[in] dir_path  Used only for diagnostic log messages.
- * @return 0 on success, -1 if any removal failed (continues on partial failure).
+ * @brief File entry used for backup sorting.
  */
-static int clear_dir_fd(DIR *d, const char *dir_path)
+typedef struct {
+    char name[NAME_MAX + 1];
+    time_t mtime;
+} RetainEntry;
+
+/**
+ * @brief qsort comparator: sort by mtime descending, then name ascending.
+ */
+static int cmp_mtime_desc(const void *a, const void *b)
 {
-    int ret = 0;
-    int parent_fd = dirfd(d);
-    struct dirent *entry;
-
-    while ((entry = readdir(d)) != NULL)
-    {
-        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0)
-            continue;
-
-        struct stat st;
-        if (fstatat(parent_fd, entry->d_name, &st, AT_SYMLINK_NOFOLLOW) == -1)
-        {
-            PRINT_MUST("Failed to stat '%s/%s': %s\n", dir_path, entry->d_name, strerror(errno));
-            ret = -1;
-            continue;
-        }
-
-        if (S_ISDIR(st.st_mode))
-        {
-            int child_fd = openat(parent_fd, entry->d_name,
-                                  O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
-            if (child_fd == -1)
-            {
-                PRINT_MUST("Failed to open dir '%s/%s': %s\n", dir_path, entry->d_name, strerror(errno));
-                ret = -1;
-                continue;
-            }
-            DIR *child_dir = fdopendir(child_fd);
-            if (!child_dir)
-            {
-                PRINT_MUST("Failed to open dir stream '%s/%s': %s\n", dir_path, entry->d_name, strerror(errno));
-                close(child_fd);
-                ret = -1;
-                continue;
-            }
-            char child_path[PATH_MAX];
-            snprintf(child_path, sizeof(child_path), "%s/%s", dir_path, entry->d_name);
-            if (clear_dir_fd(child_dir, child_path) != 0) /* child_dir closed by callee */
-                ret = -1;
-            if (unlinkat(parent_fd, entry->d_name, AT_REMOVEDIR) == -1)
-            {
-                PRINT_MUST("Failed to remove dir '%s/%s': %s\n", dir_path, entry->d_name, strerror(errno));
-                ret = -1;
-            }
-        }
-        else
-        {
-            if (unlinkat(parent_fd, entry->d_name, 0) == -1)
-            {
-                PRINT_MUST("Failed to remove file '%s/%s': %s\n", dir_path, entry->d_name, strerror(errno));
-                ret = -1;
-            }
-        }
-    }
-
-    closedir(d); /* also closes the underlying fd obtained via fdopendir */
-    return ret;
+    const RetainEntry *ea = (const RetainEntry *)a;
+    const RetainEntry *eb = (const RetainEntry *)b;
+    if (eb->mtime > ea->mtime) return  1;
+    if (eb->mtime < ea->mtime) return -1;
+    return strcmp(ea->name, eb->name);
 }
 
 /**
- * @brief Remove all entries inside @p dir_path without deleting the directory itself.
+ * @brief Apply the backup policy to an existing output directory.
  *
- * Opens the directory with O_DIRECTORY and delegates to clear_dir_fd() which
- * performs all stat/unlink operations relative to the directory file descriptor,
- * eliminating TOCTOU races.
+ * Scans @p dir for report files matching the currently selected output format
+ * only: .csv in CSV mode, .json in JSON mode. If matching reports exist,
+ * creates a timestamped subdirectory named <timestamp>_<RUN_ID>_<BACKUP_BASE>
+ * inside @p dir.
  *
- * @param[in] dir_path  Path to the directory whose contents are to be cleared.
- * @return 0 on success, -1 if any entry could not be removed.
+ * Behavior:
+ *  - If report count is <= @p keepCount: move all matching reports into backup.
+ *  - If report count is > @p keepCount: move newest @p keepCount reports into
+ *    backup and delete the rest.
+ *
+ * Non-report files/subdirectories are untouched. If no matching reports are
+ * found, the function returns immediately without creating a backup dir.
+ *
+ * @param[in] dir     Output directory to apply policy to.
+ * @param[in] keepCount  Backup count (must be >= 1, capped by MAX_BACKUP_COUNT).
+ * @return 0 on success, -1 on scan/allocation/archive-create failure,
+ *         or when any archive/remove file operation fails.
  */
-static int clear_dir_contents(const char *dir_path)
+static int apply_backup_policy(const char *dir, int keepCount, const char *runIdFallback)
 {
-    int dfd = open(dir_path, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
-    if (dfd == -1)
+    if (keepCount < 1)
     {
-        PRINT_MUST("Failed to open output dir for clearing '%s': %s\n", dir_path, strerror(errno));
+        PRINT_MUST("Invalid backup count %d (must be between 1 and %d)\n", keepCount, MAX_BACKUP_COUNT);
         return -1;
     }
-    DIR *d = fdopendir(dfd);
+    if (keepCount > MAX_BACKUP_COUNT)
+    {
+        PRINT_MUST("Backup count %d exceeds max %d; capping to %d\n", keepCount, MAX_BACKUP_COUNT, MAX_BACKUP_COUNT);
+        keepCount = MAX_BACKUP_COUNT;
+    }
+
+    const char *activeExt = (g_reportFormat == REPORT_JSON) ? ".json" : ".csv";
+    const size_t activeExtLen = strlen(activeExt);
+
+    DIR *d = opendir(dir);
     if (!d)
     {
-        PRINT_MUST("Failed to open dir stream for clearing '%s': %s\n", dir_path, strerror(errno));
-        close(dfd);
+        PRINT_MUST("Failed to open output dir for backup scan '%s': %s\n", dir, strerror(errno));
         return -1;
     }
-    return clear_dir_fd(d, dir_path); /* d closed by clear_dir_fd */
+
+    /* Collect report files only for the active format (.csv or .json). */
+    size_t capacity = 32;
+    size_t count = 0;
+    RetainEntry *entries = (RetainEntry *)malloc(capacity * sizeof(RetainEntry));
+    if (!entries)
+    {
+        PRINT_MUST("Failed to allocate memory for backup scan\n");
+        closedir(d);
+        return -1;
+    }
+
+    int scanfd = dirfd(d);
+    if (scanfd == -1)
+    {
+        PRINT_MUST("Failed to get directory fd for backup scan '%s': %s\n", dir, strerror(errno));
+        free(entries);
+        closedir(d);
+        return -1;
+    }
+
+    struct dirent *ent;
+    while ((ent = readdir(d)) != NULL)
+    {
+        if (ent->d_name[0] == '.')
+            continue;
+
+        size_t nlen = strlen(ent->d_name);
+        if (nlen <= activeExtLen || strcmp(ent->d_name + nlen - activeExtLen, activeExt) != 0)
+            continue;
+
+        struct stat st;
+        if (fstatat(scanfd, ent->d_name, &st, 0) != 0 || !S_ISREG(st.st_mode))
+            continue;
+
+        if (count >= capacity)
+        {
+            capacity *= 2;
+            RetainEntry *tmp = (RetainEntry *)realloc(entries, capacity * sizeof(RetainEntry));
+            if (!tmp)
+            {
+                PRINT_MUST("Failed to reallocate memory for backup scan\n");
+                free(entries);
+                closedir(d);
+                return -1;
+            }
+            entries = tmp;
+        }
+
+        strncpy(entries[count].name, ent->d_name, NAME_MAX);
+        entries[count].name[NAME_MAX] = '\0';
+        entries[count].mtime = st.st_mtime;
+        count++;
+    }
+    closedir(d);
+
+    if (count == 0)
+    {
+        free(entries);
+        PRINT_INFO("Output directory '%s' has no existing '%s' reports, proceeding with run.\n", dir, activeExt);
+        return 0;
+    }
+
+    /* Sort newest first. */
+    qsort(entries, count, sizeof(RetainEntry), cmp_mtime_desc);
+
+    int dirfd = open(dir, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    if (dirfd == -1)
+    {
+        PRINT_MUST("Failed to open output dir for backup operations '%s': %s\n", dir, strerror(errno));
+        free(entries);
+        return -1;
+    }
+
+    /*
+     * Create archive subdirectory inside output directory.
+     *
+    * Runs can start within the same second, so <timestamp>_<RUN_ID>_<BACKUP_BASE>
+     * may already exist. In that case retry with a numeric suffix.
+     */
+    char archiveName[PATH_MAX];
+    char configRunId[32] = {0};
+    const char *runId = runIdFallback;
+
+    if (readConfigStoreValue(dir, "RUN_ID", configRunId, sizeof(configRunId)) && configRunId[0] != '\0')
+        runId = configRunId;
+
+    if (!runId || !*runId)
+        runId = "unknown";
+
+    time_t epochNow = time(NULL);
+    bool archiveCreated = false;
+    for (int suffix = 0; suffix < 1000; suffix++)
+    {
+        int archiveNameLen;
+        if (suffix == 0)
+        {
+            archiveNameLen = snprintf(archiveName, sizeof(archiveName), "%lld_%s_%s",
+                                      (long long)epochNow, runId, BACKUP_BASE);
+        }
+        else
+        {
+            archiveNameLen = snprintf(archiveName, sizeof(archiveName), "%lld_%s_%s_%d",
+                                      (long long)epochNow, runId, BACKUP_BASE, suffix);
+        }
+
+        if (archiveNameLen <= 0 || (size_t)archiveNameLen >= sizeof(archiveName))
+        {
+            PRINT_MUST("Failed to build backup archive name for '%s'\n", dir);
+            close(dirfd);
+            free(entries);
+            return -1;
+        }
+
+        if (mkdirat(dirfd, archiveName, 0755) == 0)
+        {
+            archiveCreated = true;
+            break;
+        }
+
+        if (errno != EEXIST)
+        {
+            PRINT_MUST("Failed to create backup archive dir '%s/%s': %s\n", dir, archiveName, strerror(errno));
+            close(dirfd);
+            free(entries);
+            return -1;
+        }
+    }
+
+    if (!archiveCreated)
+    {
+        PRINT_MUST("Failed to create unique backup archive dir under '%s'\n", dir);
+        close(dirfd);
+        free(entries);
+        return -1;
+    }
+    int archivefd = openat(dirfd, archiveName, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    if (archivefd == -1)
+    {
+        PRINT_MUST("Failed to open backup archive dir '%s/%s': %s\n", dir, archiveName, strerror(errno));
+        close(dirfd);
+        free(entries);
+        return -1;
+    }
+
+    /* Determine how many newest files to move into backup archive. */
+    size_t keep = ((size_t)keepCount < count) ? (size_t)keepCount : count;
+
+    size_t archivedSuccess = 0;
+    size_t removedSuccess = 0;
+    size_t opFailures = 0;
+
+    /* Move the newest `keep` files into the archive directory. */
+    for (size_t i = 0; i < keep; i++)
+    {
+        if (renameat(dirfd, entries[i].name, archivefd, entries[i].name) != 0)
+        {
+            PRINT_MUST("Backup: failed to archive '%s': %s\n", entries[i].name, strerror(errno));
+            opFailures++;
+        }
+        else
+        {
+            archivedSuccess++;
+        }
+    }
+
+    /* Delete files beyond the backup count limit. */
+    for (size_t i = keep; i < count; i++)
+    {
+        if (unlinkat(dirfd, entries[i].name, 0) != 0)
+        {
+            PRINT_MUST("Backup: failed to remove old report '%s': %s\n", entries[i].name, strerror(errno));
+            opFailures++;
+        }
+        else
+        {
+            removedSuccess++;
+        }
+    }
+
+    PRINT_MUST("Backup (%s): archived %zu/%zu report(s) to '%s/%s'", activeExt, archivedSuccess, keep, dir, archiveName);
+    if (count > keep)
+        PRINT_MUST(", removed %zu/%zu older report(s)", removedSuccess, count - keep);
+    if (opFailures > 0)
+        PRINT_MUST(", encountered %zu operation failure(s)", opFailures);
+    PRINT_MUST(".\n");
+
+    close(archivefd);
+    close(dirfd);
+    free(entries);
+    return (opFailures == 0) ? 0 : -1;
 }
 
 /**
  * @brief Ensure the output directory exists, creating it if necessary.
  *
- * If the directory already exists its contents are cleared via
- * clear_dir_contents() so each run starts with a clean slate.
+ * If the directory already exists, apply_backup_policy() runs for files
+ * matching the active output format (CSV or JSON). This prepares the directory
+ * for a fresh run while preserving backup history under a timestamped
+ * <timestamp>_<RUN_ID>_<BACKUP_BASE> subdirectory.
+ * Backup handling is best-effort; run setup continues if some archive/delete
+ * operations fail and the output directory remains usable.
  * If @p dir does not exist a single-level mkdir(2) is attempted.
  *
  * @param[in] dir  Path to the desired output directory.
  * @return true if the directory exists or was successfully created, false otherwise.
  */
-static bool ensure_output_dir(const char *dir)
+static bool ensure_output_dir(const char *dir, const char *runIdFallback)
 {
     struct stat st = {0};
     if (stat(dir, &st) == 0) // Exists
     {
         if (S_ISDIR(st.st_mode)) // Is a directory
         {
-            if (clear_dir_contents(dir) == 0)
-                PRINT_INFO("Output directory '%s' cleared for new run.\n", dir);
-            else
-                PRINT_MUST("Warning: some stale files in '%s' could not be removed.\n", dir);
+            if (apply_backup_policy(dir, g_backupCount, runIdFallback) != 0)
+            {
+                PRINT_MUST("Warning: backup policy had partial failures in '%s'; continuing run setup\n", dir);
+            }
             return true;
         }
         PRINT_MUST("Path '%s' exists but is not a directory\n", dir);
@@ -393,12 +553,102 @@ static void removeFileIfPresent(const char *filePath)
     (void)unlink(filePath);  /* Silently ignore all errors; file may not exist */
 }
 
+static bool getPathBasename(const char *path, char *baseBuf, size_t baseBufLen, const char **baseOut)
+{
+    if (!path || !*path || !baseBuf || baseBufLen == 0 || !baseOut)
+        return false;
+
+    size_t len = strlen(path);
+    while (len > 1 && path[len - 1] == '/')
+        len--;
+
+    if (len >= baseBufLen)
+        return false;
+
+    memcpy(baseBuf, path, len);
+    baseBuf[len] = '\0';
+
+    char *slash = strrchr(baseBuf, '/');
+    *baseOut = slash ? slash + 1 : baseBuf;
+    return true;
+}
+
+static bool outputDirHasMeminsightBase(const char *dir)
+{
+    char baseBuf[PATH_MAX];
+    const char *baseName = NULL;
+
+    if (!getPathBasename(dir, baseBuf, sizeof(baseBuf), &baseName))
+        return false;
+
+    return strstr(baseName, "meminsight") != NULL;
+}
+
+static bool validateOutputDirOrHelp(const char *dir, char *argv[], bool moreInfo)
+{
+    if (!outputDirHasMeminsightBase(dir))
+    {
+        PRINT_MUST("Output directory '%s' must have 'meminsight' in the final path component\n", dir);
+        printHelpAndUsage(argv, moreInfo, 1);
+        return false;
+    }
+
+    return true;
+}
+
+static bool buildConfigStorePath(const char *dir, char *path, size_t pathLen)
+{
+    if (!dir || !path || pathLen == 0)
+        return false;
+
+    int written = snprintf(path, pathLen, "%s/%s", dir, MEMINSIGHT_CONFIGSTORE_NAME);
+    return written > 0 && (size_t)written < pathLen;
+}
+
+static bool readConfigStoreValue(const char *dir, const char *key, char *value, size_t valueLen)
+{
+    if (!dir || !key || !*key || !value || valueLen == 0)
+        return false;
+
+    char configPath[PATH_MAX];
+    if (!buildConfigStorePath(dir, configPath, sizeof(configPath)))
+        return false;
+
+    FILE *fp = fopen(configPath, "r");
+    if (!fp)
+        return false;
+
+    bool found = false;
+    char line[PATH_MAX + 64];
+    while (fgets(line, sizeof(line), fp))
+    {
+        size_t len = strlen(line);
+        while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r'))
+            line[--len] = '\0';
+
+        char *eq = strchr(line, '=');
+        if (!eq)
+            continue;
+
+        *eq = '\0';
+        if (strcmp(line, key) == 0)
+        {
+            snprintf(value, valueLen, "%s", eq + 1);
+            found = true;
+            break;
+        }
+    }
+
+    fclose(fp);
+    return found;
+}
+
 /**
  * @brief Write (or selectively update) the configstore state file.
  *
- * Writes key=value pairs to MEMINSIGHT_CONFIGSTORE_PATH before the capture
- * run begins so that the upload script can read run parameters without
- * needing to re-parse the original command line.
+ * Writes key=value pairs to <output-dir>/.meminsight_configstore before the
+ * capture run begins so that the upload script can read run parameters
+ * without needing to re-parse the original command line.
  *
  * The file is read first; if every key already holds the correct value the
  * file is left untouched. If any value differs, or the file is absent, the
@@ -417,13 +667,15 @@ static void writeConfigStore(const SetupInfo *setup, int iterations, int interva
     const char * const keys[] = {
         "UPTIME", "KERNEL_VERSION", "MEMINSIGHT_VERSION", "REPORT_VERSION",
         "RUN_ITERATIONS", "RUN_INTERVAL", "RUN_ID", "OUTPUT_FORMAT",
-        "UPLOAD_ENABLED", "UPLOAD_INTERVAL", "OUTPUT_DIR"
+        "UPLOAD_ENABLED", "UPLOAD_INTERVAL", "OUTPUT_DIR",
+        "BACKUP_ENABLED", "BACKUP_COUNT", "BACKUP_BASE", "FRAGMENTATION_ENABLED"
     };
     const int nkeys = (int)(sizeof(keys) / sizeof(keys[0]));
 
     char v_uptime[64], v_kver[KERNEL_LEN], v_mver[32], v_rver[32];
     char v_iter[16], v_intv[16], v_runid[32], v_fmt[8];
     char v_upload[4], v_uintv[16], v_outdir[PATH_MAX];
+    char v_backup_enabled[4], v_backup_count[16], v_backup_base[32], v_frag_enabled[4];
 
     snprintf(v_uptime, sizeof(v_uptime), "%s", getSystemUptime());
     snprintf(v_kver,   sizeof(v_kver),   "%s", setup->kernelVersion);
@@ -436,18 +688,30 @@ static void writeConfigStore(const SetupInfo *setup, int iterations, int interva
     snprintf(v_upload, sizeof(v_upload), "%d", upload_enabled ? 1 : 0);
     snprintf(v_uintv,  sizeof(v_uintv),  "%d", upload_interval);
     snprintf(v_outdir, sizeof(v_outdir), "%s", setup->outputDir);
+    snprintf(v_backup_enabled, sizeof(v_backup_enabled), "%d", 1);
+    snprintf(v_backup_count, sizeof(v_backup_count), "%d", g_backupCount);
+    snprintf(v_backup_base, sizeof(v_backup_base), "%s", BACKUP_BASE);
+    snprintf(v_frag_enabled, sizeof(v_frag_enabled), "%d", g_CollectFragData ? 1 : 0);
+
+    char configStorePath[PATH_MAX];
+    if (!buildConfigStorePath(setup->outputDir, configStorePath, sizeof(configStorePath)))
+    {
+        PRINT_MUST("Failed to build configstore path under '%s'\n", setup->outputDir);
+        return;
+    }
 
     const char * const vals[] = {
         v_uptime, v_kver, v_mver, v_rver,
         v_iter, v_intv, v_runid, v_fmt,
-        v_upload, v_uintv, v_outdir
+        v_upload, v_uintv, v_outdir,
+        v_backup_enabled, v_backup_count, v_backup_base, v_frag_enabled
     };
 
     /* Check if existing file already has all matching values */
-    FILE *fp = fopen(MEMINSIGHT_CONFIGSTORE_PATH, "r");
+    FILE *fp = fopen(configStorePath, "r");
     if (fp)
     {
-        int matched[11] = {0};
+        int matched[15] = {0};
         char line[PATH_MAX + 64];
         while (fgets(line, sizeof(line), fp))
         {
@@ -475,11 +739,21 @@ static void writeConfigStore(const SetupInfo *setup, int iterations, int interva
             return; /* All values unchanged — skip write */
     }
 
-    fp = fopen(MEMINSIGHT_CONFIGSTORE_PATH, "w");
+    int cfg_fd = open(configStorePath, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0640);
+    if (cfg_fd == -1)
+    {
+        PRINT_MUST("Failed to write configstore '%s': %s\n", configStorePath, strerror(errno));
+        return;
+    }
+
+    /* Ensure restrictive permissions even when truncating an existing file. */
+    (void)fchmod(cfg_fd, S_IRUSR | S_IWUSR | S_IRGRP);
+
+    fp = fdopen(cfg_fd, "w");
     if (!fp)
     {
-        PRINT_MUST("Failed to write configstore '%s': %s\n",
-                   MEMINSIGHT_CONFIGSTORE_PATH, strerror(errno));
+        PRINT_MUST("Failed to open configstore stream '%s': %s\n", configStorePath, strerror(errno));
+        close(cfg_fd);
         return;
     }
     for (int k = 0; k < nkeys; k++)
@@ -507,9 +781,18 @@ SetupInfo initializeSetupInfo(const char *outDir, Report_Format format)
 {
     SetupInfo info = {0};
 
+    unsigned long long epoch = (unsigned long long)time(NULL);
+    unsigned long long pid = (unsigned long long)getpid();
+    srand((unsigned int)(epoch ^ pid));
+    int random2Digit = rand() % 100;
+#ifdef TESTME
+    PRINT_INFO("Debug: epoch=%llu |  pid=%llu | random2Digit=%02d\n", epoch, pid, random2Digit);
+#endif
+    snprintf(info.runHash, sizeof(info.runHash), "%llu%llu%02d", epoch, pid, random2Digit);
+
     /* One-time directory and file setup. */
     info.outputDir = (outDir && *outDir) ? outDir : DEFAULT_OUT_DIR;
-    info.dirCreated = ensure_output_dir(info.outputDir);
+    info.dirCreated = ensure_output_dir(info.outputDir, info.runHash);
     info.reportFileName = (format == REPORT_JSON) ? JSON_FILE_NAME : CSV_FILE_NAME;
 
     /* One-time device metadata. */
@@ -527,12 +810,6 @@ SetupInfo initializeSetupInfo(const char *outDir, Report_Format format)
     const char *kv = getKernelVersion();
     strncpy(info.kernelVersion, kv, sizeof(info.kernelVersion) - 1);
     info.kernelVersion[sizeof(info.kernelVersion) - 1] = '\0';
-    unsigned long long epoch = (unsigned long long)time(NULL);
-    unsigned long long pid = (unsigned long long)getpid();
-    srand((unsigned int)(epoch ^ pid));
-    int random2Digit = rand() % 100;
-    PRINT_INFO("Debug: epoch=%llu |  pid=%llu | random2Digit=%02d\n", epoch, pid, random2Digit);
-    snprintf(info.runHash, sizeof(info.runHash), "%llu%llu%02d", epoch, pid, random2Digit);
 
     return info;
 }
@@ -540,29 +817,31 @@ SetupInfo initializeSetupInfo(const char *outDir, Report_Format format)
 /**
  * @brief Probe DDR bandwidth sysfs nodes and update g_bwDataAvailable.
  *
- * Checks the mode control file (BW_DDR_MODE_FILE) and bandwidth data file
- * (BW_DDR_FILE) and updates g_bwDataAvailable. Bandwidth is considered
- * available when BW_DDR_FILE is readable and BW_DDR_MODE_FILE is readable with
- * either write access available or mode already enabled ('1'). Called once at
- * startup.
+ * Checks both the mode control file (BW_DDR_MODE_FILE) for read/write access
+ * and the bandwidth data file (BW_DDR_FILE) for readability. Sets the global
+ * g_bwDataAvailable flag accordingly. Called once at startup.
  */
 static void updateBandwidthAvailability(void)
 {
 #ifdef TESTME
-    if (isTestMode) {
-        g_bwDataAvailable = (testBandwidth[0] != '\0');
+    /* In test mode, fixture availability determines bandwidth support. */
+    if (isTestMode)
+    {
+        g_bwDataAvailable = (testBandwidth[0] != '\0' && access(testBandwidth, R_OK) == 0);
         return;
     }
 #endif
 
-    bool bwReadable = (access(BW_DDR_FILE, R_OK) == 0);
     bool modeReadable = (access(BW_DDR_MODE_FILE, R_OK) == 0);
     bool modeWritable = (access(BW_DDR_MODE_FILE, W_OK) == 0);
+    bool bwReadable = (access(BW_DDR_FILE, R_OK) == 0);
     bool modeEnabled = false;
 
-    if (modeReadable) {
+    if (modeReadable)
+    {
         FILE *fp = fopen(BW_DDR_MODE_FILE, "r");
-        if (fp) {
+        if (fp)
+        {
             char modeBuf[16] = {0};
             if (fgets(modeBuf, sizeof(modeBuf), fp) && modeBuf[0] == '1')
                 modeEnabled = true;
@@ -3005,24 +3284,25 @@ void printHelpAndUsage(char *argv[], bool moreInfo, int returnCode)
     printf("A lightweight, configurable tool for collecting detailed system and per-process memory and CPU statistics.\n\n");
 
     printf("Options:\n");
-    printf("  -a, --all                             Include kernel threads for process monitoring\n");
-    printf("  -c, --config <file>                   Path to configuration file with %s extension\n", CONFIG_EXTN);
-    printf("  -o, --output <directory>              Output directory for generated report files (default: %s)\n", DEFAULT_OUT_DIR);
-    printf("      --interval <seconds>              Interval in seconds between iterations (overrides config)\n");
-    printf("      --iterations <count>              Number of iterations to run (overrides config)\n");
-    printf("      --upload-enable                   Enable Cadence based upload\n");
-    printf("      --upload-interval <seconds>       Report Upload Frequency\n");
-    printf("      --frag                            Enable fragmentation data collection (default: disabled)\n");
-    printf("  -s, --smaps               Force /proc/<pid>/smaps (disable auto smaps_rollup detection)\n");
-    printf("  -h, --help                            Show this help message and exit\n");
+    printf("  -a, --all                         Include kernel threads for process monitoring\n");
+    printf("  -c, --config <file>               Path to configuration file with %s extension\n", CONFIG_EXTN);
+    printf("  -h, --help                        Show this help message and exit\n");
+    printf("  -o, --output <directory>          Output directory for generated report files (default: %s; basename must contain 'meminsight')\n", DEFAULT_OUT_DIR);
+    printf("      --interval <seconds>          Interval in seconds between iterations (overrides config)\n");
+    printf("      --iterations <count>          Number of iterations to run (overrides config)\n");
+    printf("      --upload-enable               Enable Cadence based upload\n");
+    printf("      --upload-interval <seconds>   Report Upload Frequency\n");
+    printf("      --frag                        Enable fragmentation data collection (default: disabled)\n");
+    printf("  -b, --backup <count>              Number of report files to keep in pre-run backup handling (default: %d, max: %d)\n", DEFAULT_BACKUP_COUNT, MAX_BACKUP_COUNT);
+    printf("  -s, --smaps                       Force /proc/<pid>/smaps (disable auto smaps_rollup detection)\n");
 #ifdef TESTME
     printf("  -t, --test <smapsFile> <meminfoFile> [buddyinfoFile] [pagetypeinfoFile] [statFile] [bandwidthFile]\n");
-    printf("                                      Run in test mode using supplied sample files\n\n");
+    printf("                                    Run in test mode using supplied sample files\n\n");
 #endif
 #ifdef ENABLE_CJSON
-    printf("      --fmt <format>                    Specify report format: csv (default) or json\n");
-    printf("                                        (cJSON loaded at runtime via dlopen)\n");
-    printf("      --json-pretty                     Pretty-print JSON output (only with --fmt json)\n\n");
+    printf("      --fmt <format>                Specify report format: csv (default) or json\n");
+    printf("                                    (cJSON loaded at runtime via dlopen)\n");
+    printf("      --json-pretty                 Pretty-print JSON output (only with --fmt json)\n\n");
 #endif
 
     if (moreInfo)
@@ -3129,6 +3409,8 @@ int collectSystemMemoryStats(bool enableKThreads, const char *outDir, int iterat
             g_cjson.AddNumberToObject(g_rootObject, "RUN_ITERATIONS", (double)iterations);
             g_cjson.AddNumberToObject(g_rootObject, "RUN_INTERVAL", (double)interval);
             g_cjson.AddStringToObject(g_rootObject, "RUN_ID", setup.runHash);
+            g_cjson.AddNumberToObject(g_rootObject, "BACKUP_ARG_PASSED", (double)g_backupArgPassed);
+            g_cjson.AddNumberToObject(g_rootObject, "BACKUP_COUNT", (double)g_backupCount);
         }
 #endif
 
@@ -3141,7 +3423,7 @@ int collectSystemMemoryStats(bool enableKThreads, const char *outDir, int iterat
                 return -1;
             }
             fprintf(output, "%s\n", CSV_META_HEADER);
-            fprintf(output, "%s,%s,%s,%s,%s,%s,%d,%d,%d,%s\n\n", setup.fwName, setup.mac, ts, uptime, setup.kernelVersion, reportVersion, iter + 1, iterations, interval, setup.runHash);
+            fprintf(output, "%s,%s,%s,%s,%s,%s,%d,%d,%d,%s,%d,%d\n\n", setup.fwName, setup.mac, ts, uptime, setup.kernelVersion, reportVersion, iter + 1, iterations, interval, setup.runHash, g_backupArgPassed, g_backupCount);
         }
 
         unsigned long rssTotal = 0, pssTotal = 0, shared_clean_total = 0, private_clean_total = 0, private_dirty_total = 0, swap_pss_total = 0;
@@ -3313,10 +3595,19 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, bool cli_out
                                     ? cli_out_dir
                                     : (config.outputDir[0] ? config.outputDir : DEFAULT_OUT_DIR);
 
+    if (!outputDirHasMeminsightBase(final_out_dir))
+    {
+        PRINT_MUST("Error: Output directory '%s' must have 'meminsight' in the final path component\n", final_out_dir);
+        for (unsigned j = 0; j < config.whiteListCount; j++)
+            if (config.whitelist[j]) free(config.whitelist[j]);
+        if (config.whitelist) free(config.whitelist);
+        return -1;
+    }
+
     // Initialize setup info (MAC, firmware name, output dir, file extension)
     SetupInfo setup = initializeSetupInfo(final_out_dir, g_reportFormat);
     if (!setup.dirCreated) {
-        PRINT_ERROR("Failed to create output directory: %s\n", setup.outputDir);
+        PRINT_MUST("Failed to create output directory: %s\n", setup.outputDir);
         for (unsigned j = 0; j < config.whiteListCount; j++)
             if (config.whitelist[j]) free(config.whitelist[j]);
         if (config.whitelist) free(config.whitelist);
@@ -3414,6 +3705,8 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, bool cli_out
             g_cjson.AddNumberToObject(g_rootObject, "RUN_ITERATIONS", (double)final_iterations);
             g_cjson.AddNumberToObject(g_rootObject, "RUN_INTERVAL", (double)final_interval);
             g_cjson.AddStringToObject(g_rootObject, "RUN_ID", setup.runHash);
+            g_cjson.AddNumberToObject(g_rootObject, "BACKUP_ARG_PASSED", (double)g_backupArgPassed);
+            g_cjson.AddNumberToObject(g_rootObject, "BACKUP_COUNT", (double)g_backupCount);
         }
 #endif
 
@@ -3429,7 +3722,7 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, bool cli_out
                 return -1;
             }
             fprintf(output, "%s\n", CSV_META_HEADER);
-            fprintf(output, "%s,%s,%s,%s,%s,%s,%d,%d,%d,%s\n\n", setup.fwName, setup.mac, ts, uptime, setup.kernelVersion, reportVersion, iter + 1, final_iterations, final_interval, setup.runHash);
+            fprintf(output, "%s,%s,%s,%s,%s,%s,%d,%d,%d,%s,%d,%d\n\n", setup.fwName, setup.mac, ts, uptime, setup.kernelVersion, reportVersion, iter + 1, final_iterations, final_interval, setup.runHash, g_backupArgPassed, g_backupCount);
         }
 
         unsigned long rssTotal = 0, pssTotal = 0, shared_clean_total = 0, private_clean_total = 0, private_dirty_total = 0, swap_pss_total = 0;
@@ -4048,6 +4341,9 @@ int main(int argc, char *argv[])
             if (i + 1 < argc)
             {
                 strncpy(out_dir, argv[i + 1], PATH_MAX - 1);
+                out_dir[PATH_MAX - 1] = '\0';
+                if (!validateOutputDirOrHelp(out_dir, argv, false))
+                    return 1;
                 cli_output_set = true;
                 i++; // skip next arg (output directory)
             }
@@ -4154,6 +4450,25 @@ int main(int argc, char *argv[])
 #else
             printf("Warning: --json-pretty ignored (cJSON support not compiled in).\n");
 #endif
+        }
+        else if (!strcmp(argv[i], "-b") || !strcmp(argv[i], "--backup"))
+        { // backup count: number of latest reports to keep
+            if (i + 1 < argc)
+            {
+                g_backupCount = atoi(argv[i + 1]);
+                g_backupArgPassed = 1;
+                i++; // skip next arg (backup count)
+                if (g_backupCount < 1 || g_backupCount > MAX_BACKUP_COUNT)
+                {
+                    PRINT_MUST("Error: --backup value must be between 1 and %d\n", MAX_BACKUP_COUNT);
+                    printHelpAndUsage(argv, false, 1);
+                }
+            }
+            else
+            {
+                PRINT_MUST("Error: Missing backup count after %s\n", argv[i]);
+                printHelpAndUsage(argv, false, 1);
+            }
         }
         else
         {
