@@ -19,6 +19,9 @@
 #include "config.h"
 #include "meminsight.h"
 
+#define MEMINSIGHT_UPLOAD_URL_ENV "MEMINSIGHT_UPLOAD_URL"
+#define MEMINSIGHT_UPLOAD_URL_MAX 1024
+
 #ifdef ENABLE_CJSON
 #include <dlfcn.h>
 
@@ -752,6 +755,35 @@ static bool readConfigStoreValue(const char *dir, const char *key, char *value, 
 }
 
 /**
+ * @brief Resolve upload URL with CLI-over-environment priority.
+ *
+ * Resolution order is:
+ * 1) explicit CLI --upload-url
+ * 2) MEMINSIGHT_UPLOAD_URL environment variable
+ *
+ * @param[in] cli_upload_url      CLI-provided upload URL buffer.
+ * @param[in] cli_upload_url_set  true when --upload-url was passed.
+ * @return Resolved URL pointer, or NULL when no non-empty source exists.
+ */
+static const char *resolveUploadUrl(const char *cli_upload_url, bool cli_upload_url_set)
+{
+    if (cli_upload_url_set && cli_upload_url && cli_upload_url[0] != '\0')
+    {
+        PRINT_INFO("Upload URL resolved from CLI --upload-url: %s\n", cli_upload_url);
+        return cli_upload_url;
+    }
+
+    const char *env_url = getenv(MEMINSIGHT_UPLOAD_URL_ENV);
+    if (env_url && env_url[0] != '\0')
+    {
+        PRINT_INFO("Upload URL resolved from environment %s: %s\n", MEMINSIGHT_UPLOAD_URL_ENV, env_url);
+        return env_url;
+    }
+
+    return NULL;
+}
+
+/**
  * @brief Write (or selectively update) the configstore state file.
  *
  * Writes key=value pairs to <output-dir>/.meminsight_configstore before the
@@ -768,9 +800,10 @@ static bool readConfigStoreValue(const char *dir, const char *key, char *value, 
  * @param[in] interval        Resolved interval in seconds between iterations.
  * @param[in] upload_enabled  true if --upload-enable was passed.
  * @param[in] upload_interval Upload cadence in seconds (0 if not specified).
+ * @param[in] upload_url      Resolved upload URL, NULL when unavailable.
  */
 static void writeConfigStore(const SetupInfo *setup, int iterations, int interval,
-                             bool upload_enabled, int upload_interval)
+                             bool upload_enabled, int upload_interval, const char *upload_url)
 {
     (void)upload_enabled;
     (void)upload_interval;
@@ -786,7 +819,7 @@ static void writeConfigStore(const SetupInfo *setup, int iterations, int interva
     char v_uptime[64], v_kver[KERNEL_LEN], v_mver[32], v_rver[32];
     char v_iter[16], v_intv[16], v_runid[32], v_fmt[8];
     char v_backup_enabled[4], v_backup_count[16], v_backup_base[32], v_frag_enabled[4];
-    char v_upload[4], v_uintv[16], v_url[512], v_outdir[PATH_MAX];
+    char v_upload[4], v_uintv[16], v_uurl[MEMINSIGHT_UPLOAD_URL_MAX], v_outdir[PATH_MAX];
 
     snprintf(v_uptime, sizeof(v_uptime), "%s", getSystemUptime());
     snprintf(v_kver,   sizeof(v_kver),   "%s", setup->kernelVersion);
@@ -799,11 +832,7 @@ static void writeConfigStore(const SetupInfo *setup, int iterations, int interva
                                              : (g_reportFormat == REPORT_JSON) ? "json" : "csv");
     snprintf(v_upload, sizeof(v_upload), "%d", upload_enabled ? 1 : 0);
     snprintf(v_uintv,  sizeof(v_uintv),  "%d", upload_interval);
-#ifdef ENABLE_HTTP_UPLOAD
-    snprintf(v_url,    sizeof(v_url),    "%s", g_uploadUrl ? g_uploadUrl : "");
-#else
-    v_url[0] = '\0';
-#endif
+    snprintf(v_uurl,   sizeof(v_uurl),   "%s", (upload_url && upload_url[0] != '\0') ? upload_url : "");
     snprintf(v_outdir, sizeof(v_outdir), "%s", setup->outputDir);
     snprintf(v_backup_enabled, sizeof(v_backup_enabled), "%d", 1);
     snprintf(v_backup_count, sizeof(v_backup_count), "%d", g_backupCount);
@@ -821,7 +850,7 @@ static void writeConfigStore(const SetupInfo *setup, int iterations, int interva
         v_uptime, v_kver, v_mver, v_rver,
         v_iter, v_intv, v_runid, v_fmt,
         v_backup_enabled, v_backup_count, v_backup_base, v_frag_enabled
-        v_upload, v_uintv, v_url, v_outdir
+        v_upload, v_uintv, v_uurl, v_outdir
     };
 
     /* Check if existing file already has all matching values */
@@ -3417,10 +3446,7 @@ void printHelpAndUsage(char *argv[], bool moreInfo, int returnCode)
     printf("      --upload-url <url>                Override T2 upload endpoint (default: env or built-in)\n");
 #endif
     printf("      --top-procs <N>                   Limit T2 report to top N processes by PSS (default: 5)\n");
-    printf("      --frag                            Enable fragmentation data collection (default: disabled)\n");
     printf("      --sort-by <field>                 Sort T2 processes by: RSS (default), PSS, CPU_TIME, delta_cpu_time\n");
-    printf("  -s, --smaps               Force /proc/<pid>/smaps (disable auto smaps_rollup detection)\n");
-    printf("  -h, --help                            Show this help message and exit\n");
 #ifdef TESTME
     printf("  -t, --test <smapsFile> <meminfoFile> [buddyinfoFile] [pagetypeinfoFile] [statFile] [bandwidthFile]\n");
     printf("                                    Run in test mode using supplied sample files\n\n");
@@ -3689,9 +3715,11 @@ static int mi_upload_t2_files(const char *outDir)
  * @param[in] long_run        When true, ignore iteration count termination rules.
  * @param[in] upload_enabled  Whether upload signaling is enabled.
  * @param[in] upload_interval Upload cadence in seconds.
+ * @param[in] upload_url      Resolved upload URL, NULL when unavailable.
  * @return 0 on success, -1 on handled failure.
  */
-int collectSystemMemoryStats(bool enableKThreads, const char *outDir, int iterations, int interval, bool long_run, bool upload_enabled, int upload_interval)
+int collectSystemMemoryStats(bool enableKThreads, const char *outDir, int iterations, int interval, bool long_run, 
+                                   bool upload_enabled, int upload_interval, const char *upload_url)
 {
     // Initialize setup info (MAC, firmware name, output dir, file extension)
     SetupInfo setup = initializeSetupInfo(outDir, g_reportFormat);
@@ -3700,7 +3728,7 @@ int collectSystemMemoryStats(bool enableKThreads, const char *outDir, int iterat
         return -1;
     }
 
-    writeConfigStore(&setup, iterations, interval, upload_enabled, upload_interval);
+    writeConfigStore(&setup, iterations, interval, upload_enabled, upload_interval, upload_url);
 
     if (upload_enabled)
         (void)writeUploadMarker(&setup, upload_enabled, upload_interval);
@@ -3931,9 +3959,10 @@ int collectSystemMemoryStats(bool enableKThreads, const char *outDir, int iterat
  * @param[in] long_run         Run indefinitely when true (ignores iteration count).
  * @param[in] upload_enabled   true if --upload-enable was passed.
  * @param[in] upload_interval  Upload cadence in seconds (0 if not specified).
+ * @param[in] upload_url       Resolved upload URL, NULL when unavailable.
  * @return 0 on success, -1 on failure.
  */
-int handleConfigMode(const char *confFile, const char *cli_out_dir, bool cli_output_set, int cli_iterations, int cli_interval, bool enableKThreads, bool long_run, bool upload_enabled, int upload_interval)
+int handleConfigMode(const char *confFile, const char *cli_out_dir, bool cli_output_set, int cli_iterations, int cli_interval, bool enableKThreads, bool long_run, bool upload_enabled, int upload_interval, const char *upload_url)
 {
     Config_Data config = {0};
     if (parseConfig(confFile, &config) != 0)
@@ -4003,7 +4032,7 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, bool cli_out
     config.iterations = final_iterations;
     config.interval = final_interval;
 
-    writeConfigStore(&setup, final_iterations, final_interval, upload_enabled, upload_interval);
+    writeConfigStore(&setup, final_iterations, final_interval, upload_enabled, upload_interval, upload_url);
 
     if (upload_enabled)
         (void)writeUploadMarker(&setup, upload_enabled, upload_interval);
@@ -5138,12 +5167,11 @@ int main(int argc, char *argv[])
     int cli_interval = -1;
     bool cli_fmt_json = false;
     bool cli_upload_enable = false;
+    bool cli_upload_url_set = false;
+    char cli_upload_url[MEMINSIGHT_UPLOAD_URL_MAX] = {0};
     bool cli_upload_interval_set = false;
     int  cli_upload_interval = 0;
     bool cli_json_pretty_set = false;
-#ifdef ENABLE_HTTP_UPLOAD
-    const char *cli_upload_url = NULL;
-#endif
 
     // CLI parsing and initialization
     if (argc == 1)
@@ -5311,6 +5339,26 @@ int main(int argc, char *argv[])
             cli_upload_enable = true;
             /* Compatibility flag: Handled via RFC handlers. */
         }
+        else if (!strncmp(argv[i], "--upload-url", 13))
+        {
+            if (i + 1 < argc)
+            {
+                cli_upload_url_set = true;
+                i++; // skip next arg (upload URL)
+                if (argv[i][0] == '\0')
+                {
+                    PRINT_ERROR("Error: Empty upload URL provided after --upload-url\n");
+                    printHelpAndUsage(argv, false, 1);
+                }
+                strncpy(cli_upload_url, argv[i], sizeof(cli_upload_url) - 1);
+                cli_upload_url[sizeof(cli_upload_url) - 1] = '\0';
+            }
+            else
+            {
+                PRINT_ERROR("Error: Missing upload URL value after %s\n", argv[i]);
+                printHelpAndUsage(argv, false, 1);
+            }
+        }
         else if (!strncmp(argv[i], "--upload-interval", 18))
         {
             cli_upload_interval_set = true;
@@ -5326,21 +5374,6 @@ int main(int argc, char *argv[])
                 printHelpAndUsage(argv, false, 1);
             }
         }
-#ifdef ENABLE_HTTP_UPLOAD
-        else if (!strncmp(argv[i], "--upload-url", 12))
-        {
-            if (i + 1 < argc)
-            {
-                i++;
-                cli_upload_url = argv[i];
-            }
-            else
-            {
-                PRINT_ERROR("Error: Missing URL after --upload-url\n");
-                printHelpAndUsage(argv, false, 1);
-            }
-        }
-#endif
         else if (!strncmp(argv[i], "-s", 3) || !strncmp(argv[i], "--smaps", 8))
         {
             force_smaps = 1;
@@ -5479,6 +5512,14 @@ int main(int argc, char *argv[])
         printHelpAndUsage(argv, false, 1);
     }
 
+    const char *resolved_upload_url = resolveUploadUrl(cli_upload_url, cli_upload_url_set);
+    bool effective_upload_enable = cli_upload_enable;
+    if (cli_upload_enable && !resolved_upload_url)
+    {
+        PRINT_MUST("Upload requested but no URL provided via --upload-url or %s; skipping upload signaling.\n", MEMINSIGHT_UPLOAD_URL_ENV);
+        effective_upload_enable = false;
+    }
+
     printf("\nExecuting: ");
     for (int i = 0; i < argc; i++)
     {
@@ -5520,14 +5561,8 @@ int main(int argc, char *argv[])
 #endif
 
 #ifdef ENABLE_HTTP_UPLOAD
-    /* Resolve upload URL: CLI --upload-url takes priority, otherwise read from dcm.properties each cycle */
-    if (cli_upload_enable) {
-        if (cli_upload_url) {
-            g_uploadUrl = cli_upload_url;
-            printf("[MemInsight] Upload URL (CLI): %s\n", g_uploadUrl);
-        }
-        /* If no CLI URL, g_uploadUrl stays NULL — mi_upload_t2_files will read dcm.properties */
-    }
+    if (effective_upload_enable) {
+        g_uploadUrl = resolved_upload_url;
 #endif
 
     /*
@@ -5537,7 +5572,7 @@ int main(int argc, char *argv[])
      * trigger the background S3 service which deletes files from the output
      * directory before our upload can read them.
      */
-    if (cli_upload_enable)
+    if (effective_upload_enable)
     {
 #ifdef ENABLE_HTTP_UPLOAD
         if (!g_uploadUrl)
@@ -5550,9 +5585,9 @@ int main(int argc, char *argv[])
     if (isConfigPresent)
     {
 #ifdef TESTME
-    return (handleConfigMode(confFile, out_dir, cli_output_set, cli_iterations, cli_interval, enableKThreads, long_run, cli_upload_enable, cli_upload_interval) == 0) ? 0 : 1;
+    return (handleConfigMode(confFile, out_dir, cli_output_set, cli_iterations, cli_interval, enableKThreads, long_run, effective_upload_enable, cli_upload_interval, resolved_upload_url) == 0) ? 0 : 1;
 #else
-    handleConfigMode(confFile, out_dir, cli_output_set, cli_iterations, cli_interval, enableKThreads, long_run, cli_upload_enable, cli_upload_interval);
+    handleConfigMode(confFile, out_dir, cli_output_set, cli_iterations, cli_interval, enableKThreads, long_run, effective_upload_enable, cli_upload_interval, resolved_upload_url);
 #endif
     }
     else if (isSystemWide)
@@ -5569,9 +5604,9 @@ int main(int argc, char *argv[])
         }
         PRINT_MUST("* Running %d iterations with %ds interval (indefinitely?: %s)\n", final_iterations, final_interval, long_run ? "yes" : "no");
 #ifdef TESTME
-        return (collectSystemMemoryStats(enableKThreads, out_dir, final_iterations, final_interval, long_run, cli_upload_enable, cli_upload_interval) == 0) ? 0 : 1;
+        return (collectSystemMemoryStats(enableKThreads, out_dir, final_iterations, final_interval, long_run, effective_upload_enable, cli_upload_interval, resolved_upload_url) == 0) ? 0 : 1;
 #else
-        collectSystemMemoryStats(enableKThreads, out_dir, final_iterations, final_interval, long_run, cli_upload_enable, cli_upload_interval);
+        collectSystemMemoryStats(enableKThreads, out_dir, final_iterations, final_interval, long_run, effective_upload_enable, cli_upload_interval, resolved_upload_url);
 #endif
     }
 
