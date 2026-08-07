@@ -849,8 +849,8 @@ static void writeConfigStore(const SetupInfo *setup, int iterations, int interva
     const char * const vals[] = {
         v_uptime, v_kver, v_mver, v_rver,
         v_iter, v_intv, v_runid, v_fmt,
+        v_upload, v_uintv, v_uurl, v_outdir,
         v_backup_enabled, v_backup_count, v_backup_base, v_frag_enabled
-        v_upload, v_uintv, v_uurl, v_outdir
     };
 
     /* Check if existing file already has all matching values */
@@ -5561,7 +5561,7 @@ int main(int argc, char *argv[])
 #endif
 
 #ifdef ENABLE_HTTP_UPLOAD
-    if (effective_upload_enable) {
+    if (effective_upload_enable)
         g_uploadUrl = resolved_upload_url;
 #endif
 
