@@ -3612,7 +3612,7 @@ static int mi_curl_upload_file_certselector(const char *filepath, const char *ur
  * @brief Scan output directory for *.t2.json files and POST each to T2 via libcurl.
  *
  * Uses rdkcertselector for cert selection and retry (same as telemetry).
- * Files are never deleted regardless of upload outcome.
+ * Files confirmed uploaded (HTTP 2xx) are deleted; failed files are retained locally.
  *
  * @param[in] outDir  Directory to scan for .t2.json files.
  * @return Number of files successfully uploaded (informational only).
@@ -3682,10 +3682,14 @@ static int mi_upload_t2_files(const char *outDir)
         int http_code = 0;
 #endif
 
-        if (http_code >= 200 && http_code < 300) {
+        if (http_code == 200) {
             uploaded++;
             printf("[MemInsight] Upload: %s -> HTTP %d\n", entry->d_name, http_code);
+	    if (remove(filepath) != 0)
+                fprintf(stderr, "[MemInsight] Upload: failed to delete %s after upload: %s\n",
+				filepath, strerror(errno));
         } else {
+            /* retain file locally for manual recovery */
             fprintf(stderr, "[MemInsight] Upload: %s -> HTTP %d\n", entry->d_name, http_code);
         }
     }
