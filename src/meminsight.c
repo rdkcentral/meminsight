@@ -184,53 +184,7 @@ typedef enum {
 static SortByField g_sortBy = SORT_BY_RSS;
 
 #ifdef ENABLE_HTTP_UPLOAD
-#define DCM_PROPERTIES_FILE "/nvram/dcm.properties"
-#define DCM_URL_KEY "T2_UPLOAD_SERVER"
-static const char *g_uploadUrl = NULL; // CLI --upload-url or from dcm.properties
-static char g_dcmUrl[512] = {0};       // Buffer for URL read from dcm.properties
-
-/**
- * @brief Read upload URL from dcm.properties file.
- * @return URL string (points to g_dcmUrl) or NULL if not found.
- */
-static const char *mi_read_dcm_url(void)
-{
-    FILE *fp = fopen(DCM_PROPERTIES_FILE, "r");
-    if (!fp) {
-        fprintf(stderr, "[MemInsight] Upload: Cannot open %s\n", DCM_PROPERTIES_FILE);
-        return NULL;
-    }
-
-    char line[1024];
-    const size_t keylen = strlen(DCM_URL_KEY);
-    g_dcmUrl[0] = '\0';
-
-    while (fgets(line, sizeof(line), fp)) {
-        /* Skip comments and blank lines */
-        if (line[0] == '#' || line[0] == '\n')
-            continue;
-        if (strncmp(line, DCM_URL_KEY, keylen) == 0 && line[keylen] == '=') {
-            const char *val = line + keylen + 1;
-            /* Trim trailing whitespace/newline */
-            size_t len = strlen(val);
-            while (len > 0 && (val[len-1] == '\n' || val[len-1] == '\r' || val[len-1] == ' '))
-                len--;
-            if (len > 0 && len < sizeof(g_dcmUrl)) {
-                memcpy(g_dcmUrl, val, len);
-                g_dcmUrl[len] = '\0';
-            }
-            break;
-        }
-    }
-    fclose(fp);
-
-    if (g_dcmUrl[0]) {
-        printf("[MemInsight] Upload: URL from %s: %s\n", DCM_PROPERTIES_FILE, g_dcmUrl);
-        return g_dcmUrl;
-    }
-    fprintf(stderr, "[MemInsight] Upload: %s not found in %s\n", DCM_URL_KEY, DCM_PROPERTIES_FILE);
-    return NULL;
-}
+static const char *g_uploadUrl = NULL;
 #endif
 
 typedef enum {
@@ -946,6 +900,10 @@ SetupInfo initializeSetupInfo(const char *outDir, Report_Format format)
     char interfaceName[IFNAMSIZ] = {0};
     if (getDeviceProperty(deviceInterfaceKey, interfaceName, sizeof(interfaceName)) && interfaceName[0] != '\0') {
         (void)getMacAddress(interfaceName, info.mac, sizeof(info.mac));
+    }
+    /* Fallback: try eth0 when ESTB_INTERFACE is absent from device.properties */
+    if (info.mac[0] == '\0') {
+        (void)getMacAddress("eth0", info.mac, sizeof(info.mac));
     }
     if (info.mac[0] == '\0') {
         strncpy(info.mac, DEFAULT_MAC, sizeof(info.mac) - 1);
@@ -3497,165 +3455,56 @@ void printHelpAndUsage(char *argv[], bool moreInfo, int returnCode)
 #ifdef ENABLE_HTTP_UPLOAD
 /*
  * -----------------------------------------------------------------------
- * HTTP UPLOAD — libcurl (linked) + rdkcertselector (linked, optional)
+ * * HTTP UPLOAD — shell curl + GetConfigFile mTLS pattern
  * -----------------------------------------------------------------------
- * libcurl is linked directly at build time.
- * rdkcertselector is linked directly when LIBRDKCERTSEL_BUILD is defined
- * (same pattern as telemetry). Without it, falls back to manual cert paths.
+ * Constructs a shell pipeline per file:
+ * GetConfigFile <pass_file> stdout | awk '{print "--pass " $0}' |
+ * curl --cert-type P12 --cert <cert> --config /dev/stdin ...
+ * This keeps the cert passphrase out of the process table (ps output).
  * -----------------------------------------------------------------------
  */
-#include <curl/curl.h>
-
-#ifdef LIBRDKCERTSEL_BUILD
-#include <rdkcertselector.h>
-#endif
-
-#ifdef LIBRDKCERTSEL_BUILD
-/* Constants used in retry logic */
-#define TRY_ANOTHER        101
-#endif
-
-static size_t mi_curl_discard_cb(void *ptr, size_t size, size_t nmemb, void *userdata)
-{
-    (void)ptr; (void)userdata;
-    return size * nmemb;
-}
 
 /**
- * @brief Upload a single file via libcurl with mTLS using certselector retry loop.
+ * @brief Scan output directory for *.t2.json files and POST each to T2.
  *
- * @return HTTP response code (e.g. 200) or 0 on failure.
- */
-#ifdef LIBRDKCERTSEL_BUILD
-static int mi_curl_upload_file_certselector(const char *filepath, const char *url,
-                                            rdkcertselector_h certsel)
-{
-    /* Read file into memory */
-    FILE *fp = fopen(filepath, "r");
-    if (!fp) return 0;
-
-    fseek(fp, 0, SEEK_END);
-    long fsize = ftell(fp);
-    fseek(fp, 0, SEEK_SET);
-    if (fsize <= 0 || fsize > 2 * 1024 * 1024) { fclose(fp); return 0; }
-
-    char *payload = (char *)malloc((size_t)fsize + 1);
-    if (!payload) { fclose(fp); return 0; }
-    size_t nread = fread(payload, 1, (size_t)fsize, fp);
-    fclose(fp);
-    payload[nread] = '\0';
-
-    long http_code = 0;
-    CURLcode curl_code;
-
-    /* Certificate retry loop — same pattern as telemetry */
-    do {
-        char *pCertURI = NULL;
-        char *pCertPC = NULL;
-
-        rdkcertselectorStatus_t status = rdkcertselector_getCert(certsel, &pCertURI, &pCertPC);
-        if (status != 0) {
-            fprintf(stderr, "[MemInsight] Upload: rdkcertselector_getCert failed (%d)\n", status);
-            free(payload);
-            return 0;
-        }
-
-        /* Strip file:// scheme if present */
-        const char *certFile = pCertURI;
-        if (pCertURI && strncmp(pCertURI, "file://", 7) == 0)
-            certFile = pCertURI + 7;
-
-        CURL *easy = curl_easy_init();
-        if (!easy) { free(payload); return 0; }
-
-        struct curl_slist *headers = NULL;
-        headers = curl_slist_append(headers, "Accept: application/json");
-        headers = curl_slist_append(headers, "Content-type: application/json");
-
-        curl_easy_setopt(easy, CURLOPT_URL, url);
-        curl_easy_setopt(easy, CURLOPT_POST, 1L);
-        curl_easy_setopt(easy, CURLOPT_POSTFIELDS, payload);
-        curl_easy_setopt(easy, CURLOPT_POSTFIELDSIZE, (long)nread);
-        curl_easy_setopt(easy, CURLOPT_HTTPHEADER, headers);
-
-        curl_easy_setopt(easy, CURLOPT_SSLCERTTYPE, "P12");
-        curl_easy_setopt(easy, CURLOPT_SSLCERT, certFile);
-        if (pCertPC && pCertPC[0])
-            curl_easy_setopt(easy, CURLOPT_KEYPASSWD, pCertPC);
-        curl_easy_setopt(easy, CURLOPT_SSL_VERIFYPEER, 1L);
-        curl_easy_setopt(easy, CURLOPT_SSLVERSION, (long)CURL_SSLVERSION_TLSv1_2);
-        curl_easy_setopt(easy, CURLOPT_CONNECTTIMEOUT, 30L);
-        curl_easy_setopt(easy, CURLOPT_TIMEOUT, 30L);
-        curl_easy_setopt(easy, CURLOPT_NOSIGNAL, 1L);
-        curl_easy_setopt(easy, CURLOPT_WRITEFUNCTION, mi_curl_discard_cb);
-
-        curl_code = curl_easy_perform(easy);
-
-        http_code = 0;
-        if (curl_code == CURLE_OK)
-            curl_easy_getinfo(easy, CURLINFO_RESPONSE_CODE, &http_code);
-        else
-            fprintf(stderr, "[MemInsight] Upload: curl error (%d): %s\n",
-                    curl_code, curl_easy_strerror(curl_code));
-
-        curl_slist_free_all(headers);
-        curl_easy_cleanup(easy);
-
-    } while (rdkcertselector_setCurlStatus(certsel, (unsigned int)curl_code, url) == TRY_ANOTHER);
-
-    free(payload);
-    return (int)http_code;
-}
-#endif /* LIBRDKCERTSEL_BUILD */
-
-/**
- * @brief Scan output directory for *.t2.json files and POST each to T2 via libcurl.
- *
- * Uses rdkcertselector for cert selection and retry (same as telemetry).
- * Files confirmed uploaded (HTTP 2xx) are deleted; failed files are retained locally.
- *
+ * Uses GetConfigFile pipe + system curl for mTLS (same pattern as T2 telemetry).
+ * Files confirmed uploaded (HTTP 200) are deleted; failed files are retained locally.
  * @param[in] outDir  Directory to scan for .t2.json files.
  * @return Number of files successfully uploaded (informational only).
  */
 static int mi_upload_t2_files(const char *outDir)
 {
-    if (!outDir)
+    if (!g_uploadUrl || !outDir)
         return 0;
 
-    /* Resolve URL: CLI takes priority, otherwise read from dcm.properties each cycle */
-    const char *url = g_uploadUrl;
-    if (!url)
-        url = mi_read_dcm_url();
-    if (!url) {
-        fprintf(stderr, "[MemInsight] Upload: No upload URL available, skipping.\n");
+    /* Prefer dynamic xPKI cert; fall back to static xPKI cert */
+    const char *cert_path = NULL;
+    const char *pass_file = NULL;
+    if (access("/opt/certs/devicecert_1.pk12", F_OK) == 0) {
+        cert_path = "/opt/certs/devicecert_1.pk12";
+        pass_file = "/tmp/.cfgDynamicxpki";
+    } else if (access("/etc/ssl/certs/staticXpkiCrt.pk12", F_OK) == 0) {
+        cert_path = "/etc/ssl/certs/staticXpkiCrt.pk12";
+        pass_file = "/tmp/.cfgStaticxpki";
+    }
+    if (!cert_path) {
+        fprintf(stderr, "[MemInsight] Upload: No device cert available, skipping upload.\n");
         return 0;
     }
 
-    /* Initialize libcurl */
-    curl_global_init(CURL_GLOBAL_DEFAULT);
+    printf("[MemInsight] Upload: Using cert %s (pass via %s)\n", cert_path, pass_file);
 
-#ifdef LIBRDKCERTSEL_BUILD
-    rdkcertselector_h certsel = rdkcertselector_new(NULL, NULL, "MTLS");
-    if (!certsel) {
-        fprintf(stderr, "[MemInsight] Upload: rdkcertselector_new failed, skipping upload.\n");
-        curl_global_cleanup();
-        return 0;
-    }
-    printf("[MemInsight] Upload: Using rdkcertselector for mTLS.\n");
-#else
-    fprintf(stderr, "[MemInsight] Upload: No cert selector available (not built with --enable-certselector), skipping.\n");
-    curl_global_cleanup();
-    return 0;
-#endif
+    /*
+     * HTTP code is written to a temp file; system() avoids fd conflicts with
+     * curl's --config /dev/stdin that popen() would introduce.
+     */
+    char http_out[PATH_MAX];
+    snprintf(http_out, sizeof(http_out), "%s/.mi_http_out_%d", outDir, (int)getpid());
 
-    /* Scan directory for .t2.json files and upload each */
     DIR *dir = opendir(outDir);
     if (!dir) {
         fprintf(stderr, "[MemInsight] Upload: Cannot open directory %s: %s\n",
                 outDir, strerror(errno));
-#ifdef LIBRDKCERTSEL_BUILD
-        rdkcertselector_free(&certsel);
-#endif
         curl_global_cleanup();
         return 0;
     }
@@ -3669,38 +3518,67 @@ static int mi_upload_t2_files(const char *outDir)
             continue;
 
         char filepath[PATH_MAX];
-        int n = snprintf(filepath, sizeof(filepath), "%s/%s", outDir, entry->d_name);
-        if (n < 0 || (size_t)n >= sizeof(filepath))
+	int np = snprintf(filepath, sizeof(filepath), "%s/%s", outDir, entry->d_name);
+        if (np < 0 || (size_t)np >= sizeof(filepath))
             continue;
         if (access(filepath, R_OK) != 0)
             continue;
 
         found++;
-#ifdef LIBRDKCERTSEL_BUILD
-        int http_code = mi_curl_upload_file_certselector(filepath, url, certsel);
-#else
-        int http_code = 0;
-#endif
+        char err_out[PATH_MAX];
+        snprintf(err_out, sizeof(err_out), "%s/.mi_curl_err_%d", outDir, (int)getpid());
 
-        if (http_code == 200) {
+        char cmd[PATH_MAX * 2 + 512];
+        int n = snprintf(cmd, sizeof(cmd),
+            "/usr/bin/GetConfigFile \"%s\" stdout 2>/dev/null | "
+            "awk '{print \"--pass \" $0}' | "
+            "curl --cert-type P12 --cert \"%s\" --config /dev/stdin "
+            "--tlsv1.2 -H \"Content-type: application/json\" "
+            "-X POST -d @\"%s\" \"%s\" "
+            "--connect-timeout 30 -m 30 -w '%%{http_code}' -s -o /dev/null >\"%s\" 2>\"%s\"",
+            pass_file, cert_path, filepath, g_uploadUrl, http_out, err_out);
+
+        if (n < 0 || (size_t)n >= sizeof(cmd)) {
+            fprintf(stderr, "[MemInsight] Upload: Command too long for %s\n", entry->d_name);
+            continue;
+        }
+
+        int status = system(cmd);
+        int curl_exit = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+
+        char http_code_str[16] = {0};
+        FILE *fp = fopen(http_out, "r");
+        if (fp) {
+            if (fgets(http_code_str, sizeof(http_code_str), fp) != NULL)
+                http_code_str[strcspn(http_code_str, "\n")] = '\0';
+            fclose(fp);
+        }
+
+        int code = atoi(http_code_str);
+        if (code == 200) {
             uploaded++;
-            printf("[MemInsight] Upload: %s -> HTTP %d\n", entry->d_name, http_code);
-	    if (remove(filepath) != 0)
+	    printf("[MemInsight] Upload: %s -> HTTP %d\n", entry->d_name, code);
+            if (remove(filepath) != 0)
                 fprintf(stderr, "[MemInsight] Upload: failed to delete %s after upload: %s\n",
-				filepath, strerror(errno));
+                        filepath, strerror(errno));
         } else {
             /* retain file locally for manual recovery */
-            fprintf(stderr, "[MemInsight] Upload: %s -> HTTP %d\n", entry->d_name, http_code);
+            fprintf(stderr, "[MemInsight] Upload: %s -> HTTP %s (curl_exit=%d), retaining for manual backup\n",
+                    entry->d_name, http_code_str[0] ? http_code_str : "0", curl_exit);
+            char errbuf[256] = {0};
+            FILE *ef = fopen(err_out, "r");
+            if (ef) {
+                if (fgets(errbuf, sizeof(errbuf), ef) != NULL)
+                    fprintf(stderr, "[MemInsight] Upload: curl stderr: %s\n", errbuf);
+                fclose(ef);
+            }
         }
+        unlink(err_out);
     }
     closedir(dir);
 
-#ifdef LIBRDKCERTSEL_BUILD
-    rdkcertselector_free(&certsel);
-#endif
-    curl_global_cleanup();
-
-    printf("[MemInsight] Upload: %d/%d file(s) uploaded to %s\n", uploaded, found, url);
+    unlink(http_out);
+    printf("[MemInsight] Upload: %d/%d file(s) uploaded to %s\n", uploaded, found, g_uploadUrl);
     return uploaded;
 }
 #endif /* ENABLE_HTTP_UPLOAD */
