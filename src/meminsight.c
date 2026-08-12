@@ -901,10 +901,6 @@ SetupInfo initializeSetupInfo(const char *outDir, Report_Format format)
     if (getDeviceProperty(deviceInterfaceKey, interfaceName, sizeof(interfaceName)) && interfaceName[0] != '\0') {
         (void)getMacAddress(interfaceName, info.mac, sizeof(info.mac));
     }
-    /* Fallback: try eth0 when ESTB_INTERFACE is absent from device.properties */
-    if (info.mac[0] == '\0') {
-        (void)getMacAddress("eth0", info.mac, sizeof(info.mac));
-    }
     if (info.mac[0] == '\0') {
         strncpy(info.mac, DEFAULT_MAC, sizeof(info.mac) - 1);
         info.mac[sizeof(info.mac) - 1] = '\0';
@@ -4360,7 +4356,7 @@ void saveCpuStat(FILE *out)
  * @brief Add meminfo key/value fields to a JSON root object.
  *
  * Reads /proc/meminfo (or the test fixture when TESTME is set) and
- * writes each needed field as a numeric member of @p root.
+ * writes each needed field as numeric number of @p root.
  * Uses the same field list as the CSV saveMeminfo() for consistency.
  */
 void saveMeminfo_JSON(cJSON_t *root)
@@ -4378,7 +4374,6 @@ void saveMeminfo_JSON(cJSON_t *root)
         PRINT_ERROR("Failed to create meminfo JSON object\n");
         return;
     }
-
 #ifdef TESTME
     FILE *meminfo = fopen((isTestMode) ? testMeminfo : MEMINFO_FILE, "r");
 #else
@@ -4392,6 +4387,8 @@ void saveMeminfo_JSON(cJSON_t *root)
 
     char tmp[128];
     char name[64];
+    char key[96];
+    char valueStr[32];
     unsigned long value;
 
     while (fgets(tmp, sizeof(tmp), meminfo)) {
@@ -4628,6 +4625,20 @@ int writeT2Report(const char *filepath, const SetupInfo *setup, int iteration, i
     } \
 } while(0)
 
+/* Helper macro: add a single {key: "unsigned_long_as_string"} object */
+#define T2_ADD_ULONG_STRING(key, v) do { \
+    char _t2_num_buf[32]; \
+    snprintf(_t2_num_buf, sizeof(_t2_num_buf), "%lu", (unsigned long)(v)); \
+    T2_ADD_STRING((key), _t2_num_buf); \
+} while(0)
+
+    /* Helper macro: add a single {key: "double_as_string"} object */
+#define T2_ADD_DOUBLE_STRING(key, v) do { \
+    char _t2_dbl_buf[32]; \
+    snprintf(_t2_dbl_buf, sizeof(_t2_dbl_buf), "%.2f", (double)(v)); \
+    T2_ADD_STRING((key), _t2_dbl_buf); \
+} while(0)
+
     /* --- Standard T2 metadata --- */
     T2_ADD_STRING("Profile_Name", "MEMINSIGHT_REPORT");
     T2_ADD_STRING("Profile",      "RDKB");
@@ -4679,23 +4690,24 @@ int writeT2Report(const char *filepath, const SetupInfo *setup, int iteration, i
         T2_ADD_STRING("Iteration", iterStr);
     }
 
-    /* --- meminfo as nested object --- */
+    /* --- meminfo as flattened key-value entries --- */
     {
         static const char *meminfoNeeded[] = {
             "MemTotal", "MemFree", "MemAvailable", "Buffers", "Cached",
             "SwapCached", "Active(anon)", "Inactive(anon)", "Active(file)",
-            "Inactive(file)", "SwapTotal", "SwapFree"
+            "Inactive(file)", "SwapTotal", "SwapFree", "AnonPages", "Mapped", "Shmem", "Slab",
+	    "KernelStack", "VmallocUsed", "CmaFree", "CmaTotal"
         };
         const int fieldCount = (int)(sizeof(meminfoNeeded) / sizeof(meminfoNeeded[0]));
 
-        cJSON_t *meminfoObj = g_cjson.CreateObject();
 #ifdef TESTME
         FILE *meminfo = fopen((isTestMode) ? testMeminfo : MEMINFO_FILE, "r");
 #else
         FILE *meminfo = fopen(MEMINFO_FILE, "r");
 #endif
-        if (meminfo && meminfoObj) {
+        if (meminfo) {
             char tmp[128], name[64];
+	    char key[96], valueStr[32];
             unsigned long value;
             while (fgets(tmp, sizeof(tmp), meminfo)) {
                 if (sscanf(tmp, "%63s %lu kB", name, &value) == 2) {
@@ -4704,43 +4716,33 @@ int writeT2Report(const char *filepath, const SetupInfo *setup, int iteration, i
                         name[len - 1] = '\0';
                     for (int i = 0; i < fieldCount; i++) {
                         if (strcmp(name, meminfoNeeded[i]) == 0) {
-                            g_cjson.AddNumberToObject(meminfoObj, name, (double)value);
+                            snprintf(key, sizeof(key), "meminfo.%s", name);
+                            snprintf(valueStr, sizeof(valueStr), "%lu", value);
+                            T2_ADD_STRING(key, valueStr);
                             break;
                         }
                     }
                 }
             }
             fclose(meminfo);
-        } else if (meminfo) {
-            fclose(meminfo);
-        }
-        if (meminfoObj) {
-            cJSON_t *wrapper = g_cjson.CreateObject();
-            if (wrapper) {
-                g_cjson.AddItemToObject(wrapper, "meminfo", meminfoObj);
-                g_cjson.AddItemToArray(reportArray, wrapper);
-            } else {
-                g_cjson.Delete(meminfoObj);
-            }
         }
     }
 
     /* --- cpu_stats as nested object with deltas --- */
     {
         static const int outputIdx[] = {0, 2, 3, 4}; /* user, system, idle, iowait */
-        static const char *outputNames[] = {"user", "system", "idle", "iowait"};
+        static const char *outputNames[] = {"user", "system", "idle", "iowait", "nice", "irq", "softirq", "steal", "guest", "guest_nice", "cpu_stat"};
         const int fieldCount = 8;
         const int outputCount = 4;
         static unsigned long prevCpu[8] = {0};
         static int hasPrev = 0;
 
-        cJSON_t *cpuObj = g_cjson.CreateObject();
 #ifdef TESTME
         FILE *fp = fopen((isTestMode && testProcStat[0]) ? testProcStat : PROC_STAT_FILE, "r");
 #else
         FILE *fp = fopen(PROC_STAT_FILE, "r");
 #endif
-        if (fp && cpuObj) {
+        if (fp) {
             char line[256];
             unsigned long fields[8] = {0};
             int parsed = 0;
@@ -4755,7 +4757,9 @@ int writeT2Report(const char *filepath, const SetupInfo *setup, int iteration, i
             fclose(fp);
             if (parsed >= 1) {
                 for (int i = 0; i < outputCount; i++) {
-                    g_cjson.AddNumberToObject(cpuObj, outputNames[i], (double)fields[outputIdx[i]]);
+                    char key[64];
+                    snprintf(key, sizeof(key), "cpu_stats.%s", outputNames[i]);
+		    T2_ADD_ULONG_STRING(key, fields[outputIdx[i]]);
                 }
 
                 /* Compute deltas */
@@ -4767,60 +4771,147 @@ int writeT2Report(const char *filepath, const SetupInfo *setup, int iteration, i
                     for (int i = 0; i < fieldCount; i++)
                         delta_total += (fields[i] - prevCpu[i]);
                 }
-                g_cjson.AddNumberToObject(cpuObj, "delta_user", (double)delta_user);
-                g_cjson.AddNumberToObject(cpuObj, "delta_system", (double)delta_system);
-                g_cjson.AddNumberToObject(cpuObj, "delta_idle", (double)delta_idle);
-                g_cjson.AddNumberToObject(cpuObj, "delta_total", (double)delta_total);
+                T2_ADD_ULONG_STRING("cpu_stats.delta_user", delta_user);
+                T2_ADD_ULONG_STRING("cpu_stats.delta_system", delta_system);
+                T2_ADD_ULONG_STRING("cpu_stats.delta_idle", delta_idle);
+                T2_ADD_ULONG_STRING("cpu_stats.delta_total", delta_total);
 
                 double cpu_percent = 0.0;
                 if (delta_total > 0)
                     cpu_percent = (double)(delta_user + delta_system) / (double)delta_total * 100.0;
-                g_cjson.AddNumberToObject(cpuObj, "cpu_percent", cpu_percent);
+                T2_ADD_DOUBLE_STRING("cpu_stats.cpu_percent", cpu_percent);
 
                 /* Save current as previous for next iteration */
                 for (int i = 0; i < fieldCount; i++)
                     prevCpu[i] = fields[i];
                 hasPrev = 1;
             }
-        } else if (fp) {
-            fclose(fp);
-        }
-        if (cpuObj) {
-            cJSON_t *wrapper = g_cjson.CreateObject();
-            if (wrapper) {
-                g_cjson.AddItemToObject(wrapper, "cpu_stats", cpuObj);
-                g_cjson.AddItemToArray(reportArray, wrapper);
-            } else {
-                g_cjson.Delete(cpuObj);
-            }
         }
     }
 
-    /* --- Fragmentation as nested object (when --frag is enabled) --- */
+    /* --- Fragmentation as flattened key-value entries (when --frag is enabled) --- */
     if (g_CollectFragData) {
-        cJSON_t *fragObj = g_cjson.CreateObject();
-        if (fragObj) {
-            if (g_fragSource == FRAG_SRC_PAGETYPEINFO) {
-                g_cjson.AddStringToObject(fragObj, "source", "pagetypeinfo");
-                g_cjson.AddStringToObject(fragObj, "path", PGT_FILE);
-                if (addPagetypeInfoJSON(fragObj) != 0)
-                    g_cjson.AddStringToObject(fragObj, "parse_status", "source_unavailable_or_parse_error");
-            } else if (g_fragSource == FRAG_SRC_BUDDYINFO) {
-                g_cjson.AddStringToObject(fragObj, "source", "buddyinfo");
-                g_cjson.AddStringToObject(fragObj, "path", BUDDYINFO_FILE);
-                if (addBuddyinfoJSON(fragObj) != 0)
-                    g_cjson.AddStringToObject(fragObj, "parse_status", "source_unavailable_or_parse_error");
+        if (g_fragSource == FRAG_SRC_PAGETYPEINFO) {
+            T2_ADD_STRING("fragmentation.source", "pagetypeinfo");
+            T2_ADD_STRING("fragmentation.path", PGT_FILE);
+
+            FILE *fp = NULL;
+#ifdef TESTME
+            if (isTestMode) {
+                if (testPagetypeinfo[0])
+                    fp = fopen(testPagetypeinfo, "r");
             } else {
-                g_cjson.AddStringToObject(fragObj, "source", "none");
-                g_cjson.AddStringToObject(fragObj, "parse_status", "source_unavailable");
+                fp = fopen(PGT_FILE, "r");
             }
-            cJSON_t *wrapper = g_cjson.CreateObject();
-            if (wrapper) {
-                g_cjson.AddItemToObject(wrapper, "fragmentation", fragObj);
-                g_cjson.AddItemToArray(reportArray, wrapper);
+#else
+            fp = fopen(PGT_FILE, "r");
+#endif
+            if (!fp) {
+                T2_ADD_STRING("fragmentation.parse_status", "source_unavailable_or_parse_error");
             } else {
-                g_cjson.Delete(fragObj);
+                char line[1024];
+                int pageBlockOrder = -1;
+                int pagesPerBlock = -1;
+                int rowCount = 0;
+
+                while (fgets(line, sizeof(line), fp)) {
+                    if (pageBlockOrder < 0 && sscanf(line, "Page block order: %d", &pageBlockOrder) == 1)
+                        continue;
+                    if (pagesPerBlock < 0 && sscanf(line, "Pages per block: %d", &pagesPerBlock) == 1)
+                        continue;
+
+                    unsigned node = 0;
+                    char zone[64] = {0};
+                    char type[64] = {0};
+                    int consumed = 0;
+                    int matched = sscanf(line, "Node %u, zone %63[^,], type %63s %n", &node, zone, type, &consumed);
+                    if (matched != 3 || consumed <= 0)
+                        continue;
+
+                    char *zonePtr = zone;
+                    trimLeadingWhitespace(&zonePtr);
+                    trimTrailingWhitespace(zonePtr);
+
+                    unsigned long values[32] = {0};
+                    int valueCount = parseUnsignedSeries(line + consumed, values, 32);
+                    if (valueCount <= 0)
+                        continue;
+
+                    char key[128];
+                    snprintf(key, sizeof(key), "fragmentation.rows.%d.node", rowCount);
+                    T2_ADD_ULONG_STRING(key, node);
+                    snprintf(key, sizeof(key), "fragmentation.rows.%d.zone", rowCount);
+                    T2_ADD_STRING(key, zonePtr);
+                    snprintf(key, sizeof(key), "fragmentation.rows.%d.type", rowCount);
+                    T2_ADD_STRING(key, type);
+                    for (int i = 0; i < valueCount; i++) {
+                        snprintf(key, sizeof(key), "fragmentation.rows.%d.order_%d", rowCount, i);
+                        T2_ADD_ULONG_STRING(key, values[i]);
+                    }
+                    rowCount++;
+                }
+                fclose(fp);
+
+                if (pageBlockOrder >= 0)
+                    T2_ADD_ULONG_STRING("fragmentation.page_block_order", pageBlockOrder);
+                if (pagesPerBlock >= 0)
+                    T2_ADD_ULONG_STRING("fragmentation.pages_per_block", pagesPerBlock);
+                T2_ADD_ULONG_STRING("fragmentation.row_count", rowCount);
+                if (rowCount <= 0)
+                    T2_ADD_STRING("fragmentation.parse_status", "source_unavailable_or_parse_error");
             }
+        } else if (g_fragSource == FRAG_SRC_BUDDYINFO) {
+            T2_ADD_STRING("fragmentation.source", "buddyinfo");
+            T2_ADD_STRING("fragmentation.path", BUDDYINFO_FILE);
+
+            FILE *fp = NULL;
+#ifdef TESTME
+            if (isTestMode) {
+                if (testBuddyinfo[0])
+                    fp = fopen(testBuddyinfo, "r");
+            } else {
+                fp = fopen(BUDDYINFO_FILE, "r");
+            }
+#else
+            fp = fopen(BUDDYINFO_FILE, "r");
+#endif
+            if (!fp) {
+                T2_ADD_STRING("fragmentation.parse_status", "source_unavailable_or_parse_error");
+            } else {
+                char line[1024];
+                int rowCount = 0;
+                while (fgets(line, sizeof(line), fp)) {
+                    unsigned node = 0;
+                    char zone[64] = {0};
+                    int consumed = 0;
+                    int matched = sscanf(line, "Node %u, zone %63s %n", &node, zone, &consumed);
+                    if (matched != 2 || consumed <= 0)
+                        continue;
+
+                    unsigned long values[32] = {0};
+                    int valueCount = parseUnsignedSeries(line + consumed, values, 32);
+                    if (valueCount <= 0)
+                        continue;
+
+                    char key[128];
+                    snprintf(key, sizeof(key), "fragmentation.rows.%d.node", rowCount);
+                    T2_ADD_ULONG_STRING(key, node);
+                    snprintf(key, sizeof(key), "fragmentation.rows.%d.zone", rowCount);
+                    T2_ADD_STRING(key, zone);
+                    for (int i = 0; i < valueCount; i++) {
+                        snprintf(key, sizeof(key), "fragmentation.rows.%d.order_%d", rowCount, i);
+                        T2_ADD_ULONG_STRING(key, values[i]);
+                    }
+                    rowCount++;
+                }
+                fclose(fp);
+                T2_ADD_ULONG_STRING("fragmentation.row_count", rowCount);
+                if (rowCount <= 0)
+                    T2_ADD_STRING("fragmentation.parse_status", "source_unavailable_or_parse_error");
+            }
+        } else {
+            T2_ADD_STRING("fragmentation.source", "none");
+            T2_ADD_STRING("fragmentation.parse_status", "source_unavailable");
         }
     }
 
@@ -4915,21 +5006,33 @@ int writeT2Report(const char *filepath, const SetupInfo *setup, int iteration, i
 
             for (int i = 0; i < limit; i++) {
                 Process_Info *p = sortArr[i];
-                cJSON_t *pObj = g_cjson.CreateObject();
-                if (!pObj) continue;
+                char key[320];
+                snprintf(key, sizeof(key), "process.%s.PID", p->name);
+                T2_ADD_ULONG_STRING(key, p->pid);
+                snprintf(key, sizeof(key), "process.%s.RSS", p->name);
+                T2_ADD_ULONG_STRING(key, p->rssTotal);
+                snprintf(key, sizeof(key), "process.%s.PSS", p->name);
+                T2_ADD_ULONG_STRING(key, p->pssTotal);
+                snprintf(key, sizeof(key), "process.%s.SHARED_CLEAN", p->name);
+                T2_ADD_ULONG_STRING(key, p->shared_clean_total);
+                snprintf(key, sizeof(key), "process.%s.PRIVATE_CLEAN", p->name);
+                T2_ADD_ULONG_STRING(key, p->private_clean_total);
+                snprintf(key, sizeof(key), "process.%s.PRIVATE_DIRTY", p->name);
+                T2_ADD_ULONG_STRING(key, p->private_dirty_total);
+                snprintf(key, sizeof(key), "process.%s.SWAP_PSS", p->name);
+                T2_ADD_ULONG_STRING(key, p->swap_pss_total);
+                snprintf(key, sizeof(key), "process.%s.CPU_TIME", p->name);
+                T2_ADD_ULONG_STRING(key, p->cputime);
+		snprintf(key, sizeof(key), "process.%s.MIN_FAULTS", p->name);
+                T2_ADD_ULONG_STRING(key, p->minFaults);
+                snprintf(key, sizeof(key), "process.%s.MAJ_FAULTS", p->name);
+                T2_ADD_ULONG_STRING(key, p->majFaults);
 
-                g_cjson.AddNumberToObject(pObj, "PID", (double)p->pid);
-                g_cjson.AddNumberToObject(pObj, "RSS", (double)p->rssTotal);
-                g_cjson.AddNumberToObject(pObj, "PSS", (double)p->pssTotal);
-                g_cjson.AddNumberToObject(pObj, "SHARED_CLEAN", (double)p->shared_clean_total);
-                g_cjson.AddNumberToObject(pObj, "PRIVATE_CLEAN", (double)p->private_clean_total);
-                g_cjson.AddNumberToObject(pObj, "PRIVATE_DIRTY", (double)p->private_dirty_total);
-                g_cjson.AddNumberToObject(pObj, "SWAP_PSS", (double)p->swap_pss_total);
-
-                g_cjson.AddNumberToObject(pObj, "CPU_TIME", (double)p->cputime);
 
                 /* Compute deltas from previous iteration */
                 unsigned long delta_cpu = 0;
+		unsigned long delta_min_faults = 0;
+		unsigned long delta_maj_faults = 0;
                 if (deltaArr && g_sortBy == SORT_BY_DELTA_CPU_TIME) {
                     delta_cpu = deltaArr[i];
                 } else {
@@ -4937,21 +5040,23 @@ int writeT2Report(const char *filepath, const SetupInfo *setup, int iteration, i
                     while (pp) {
                         if (strcmp(pp->name, p->name) == 0 && pp->pid == p->pid) {
                             delta_cpu = p->cputime - pp->cputime;
+                            delta_min_faults = (p->minFaults >= pp->minFaults)
+                                               ? (p->minFaults - pp->minFaults)
+                                               : 0;
+                            delta_maj_faults = (p->majFaults >= pp->majFaults)
+                                               ? (p->majFaults - pp->majFaults)
+                                               : 0;
                             break;
                         }
                         pp = pp->next;
                     }
                 }
-                g_cjson.AddNumberToObject(pObj, "delta_cpu_time", (double)delta_cpu);
-
-
-                cJSON_t *wrapper = g_cjson.CreateObject();
-                if (wrapper) {
-                    g_cjson.AddItemToObject(wrapper, p->name, pObj);
-                    g_cjson.AddItemToArray(reportArray, wrapper);
-                } else {
-                    g_cjson.Delete(pObj);
-                }
+                snprintf(key, sizeof(key), "process.%s.delta_cpu_time", p->name);
+                T2_ADD_ULONG_STRING(key, delta_cpu);
+		snprintf(key, sizeof(key), "process.%s.delta_min_faults", p->name);
+                T2_ADD_ULONG_STRING(key, delta_min_faults);
+                snprintf(key, sizeof(key), "process.%s.delta_maj_faults", p->name);
+                T2_ADD_ULONG_STRING(key, delta_maj_faults);
             }
             free(deltaArr);
             free(sortArr);
@@ -5022,6 +5127,8 @@ int writeT2Report(const char *filepath, const SetupInfo *setup, int iteration, i
 
 #undef T2_ADD_STRING
 #undef T2_ADD_NUMBER
+#undef T2_ADD_ULONG_STRING
+#undef T2_ADD_DOUBLE_STRING
     return rc;
 }
 
