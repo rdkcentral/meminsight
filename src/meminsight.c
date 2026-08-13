@@ -3400,6 +3400,7 @@ void printHelpAndUsage(char *argv[], bool moreInfo, int returnCode)
     printf("      --upload-url <url>                Override T2 upload endpoint (default: env or built-in)\n");
 #endif
     printf("      --top-procs <N>                   Limit T2 report to top N processes by PSS (default: 5)\n");
+    printf("      --upload-url <url>                Upload destination URL (CLI overrides %s)\n", MEMINSIGHT_UPLOAD_URL_ENV);
     printf("      --sort-by <field>                 Sort T2 processes by: RSS (default), PSS, CPU_TIME, delta_cpu_time\n");
 #ifdef TESTME
     printf("  -t, --test <smapsFile> <meminfoFile> [buddyinfoFile] [pagetypeinfoFile] [statFile] [bandwidthFile]\n");
@@ -5007,25 +5008,25 @@ int writeT2Report(const char *filepath, const SetupInfo *setup, int iteration, i
             for (int i = 0; i < limit; i++) {
                 Process_Info *p = sortArr[i];
                 char key[320];
-                snprintf(key, sizeof(key), "process.%s.PID", p->name);
+                snprintf(key, sizeof(key), "%s.PID", p->name);
                 T2_ADD_ULONG_STRING(key, p->pid);
-                snprintf(key, sizeof(key), "process.%s.RSS", p->name);
+                snprintf(key, sizeof(key), "%s.RSS", p->name);
                 T2_ADD_ULONG_STRING(key, p->rssTotal);
-                snprintf(key, sizeof(key), "process.%s.PSS", p->name);
+                snprintf(key, sizeof(key), "%s.PSS", p->name);
                 T2_ADD_ULONG_STRING(key, p->pssTotal);
-                snprintf(key, sizeof(key), "process.%s.SHARED_CLEAN", p->name);
+                snprintf(key, sizeof(key), "%s.SHARED_CLEAN", p->name);
                 T2_ADD_ULONG_STRING(key, p->shared_clean_total);
-                snprintf(key, sizeof(key), "process.%s.PRIVATE_CLEAN", p->name);
+                snprintf(key, sizeof(key), "%s.PRIVATE_CLEAN", p->name);
                 T2_ADD_ULONG_STRING(key, p->private_clean_total);
-                snprintf(key, sizeof(key), "process.%s.PRIVATE_DIRTY", p->name);
+                snprintf(key, sizeof(key), "%s.PRIVATE_DIRTY", p->name);
                 T2_ADD_ULONG_STRING(key, p->private_dirty_total);
-                snprintf(key, sizeof(key), "process.%s.SWAP_PSS", p->name);
+                snprintf(key, sizeof(key), "%s.SWAP_PSS", p->name);
                 T2_ADD_ULONG_STRING(key, p->swap_pss_total);
-                snprintf(key, sizeof(key), "process.%s.CPU_TIME", p->name);
+                snprintf(key, sizeof(key), "%s.CPU_TIME", p->name);
                 T2_ADD_ULONG_STRING(key, p->cputime);
-		snprintf(key, sizeof(key), "process.%s.MIN_FAULTS", p->name);
+		snprintf(key, sizeof(key), "%s.MIN_FAULTS", p->name);
                 T2_ADD_ULONG_STRING(key, p->minFaults);
-                snprintf(key, sizeof(key), "process.%s.MAJ_FAULTS", p->name);
+                snprintf(key, sizeof(key), "%s.MAJ_FAULTS", p->name);
                 T2_ADD_ULONG_STRING(key, p->majFaults);
 
 
@@ -5051,11 +5052,11 @@ int writeT2Report(const char *filepath, const SetupInfo *setup, int iteration, i
                         pp = pp->next;
                     }
                 }
-                snprintf(key, sizeof(key), "process.%s.delta_cpu_time", p->name);
+                snprintf(key, sizeof(key), "%s.delta_cpu_time", p->name);
                 T2_ADD_ULONG_STRING(key, delta_cpu);
-		snprintf(key, sizeof(key), "process.%s.delta_min_faults", p->name);
+		snprintf(key, sizeof(key), "%s.delta_min_faults", p->name);
                 T2_ADD_ULONG_STRING(key, delta_min_faults);
-                snprintf(key, sizeof(key), "process.%s.delta_maj_faults", p->name);
+                snprintf(key, sizeof(key), "%s.delta_maj_faults", p->name);
                 T2_ADD_ULONG_STRING(key, delta_maj_faults);
             }
             free(deltaArr);
