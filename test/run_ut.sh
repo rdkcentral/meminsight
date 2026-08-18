@@ -1009,6 +1009,45 @@ else
 fi
 echo ""
 
+# Test 30: upload marker carries upload settings; configstore carries persistent state
+META_DESC6="Test 30: Upload marker and configstore key separation"
+META_OUT6="$RET_BASE/meminsight_case11_upload_handoff"
+META_MARKER="/tmp/.meminsight_upload"
+
+echo "------------------------------------------"
+echo "$META_DESC6"
+echo "------------------------------------------"
+echo "Command: $MEM_BIN --upload-enable --upload-interval 1800 -o $META_OUT6 -t $RET_SMAP_FILE $RET_MEMINFO_FILE"
+
+rm -rf "$META_OUT6"
+rm -f "$META_MARKER" /tmp/.meminsight_configstore
+if $MEM_BIN --upload-enable --upload-interval 1800 -o "$META_OUT6" -t "$RET_SMAP_FILE" "$RET_MEMINFO_FILE" >/tmp/meminsight_upload_handoff.log 2>&1; then
+    META_CONFIG="$META_OUT6/.meminsight_configstore"
+    if [ -f "$META_CONFIG" ] && [ -s "$META_MARKER" ] && [ ! -e /tmp/.meminsight_configstore ] && \
+       grep -F "RUN_ID=" "$META_CONFIG" >/dev/null 2>&1 && \
+       ! grep -E '^(UPLOAD_ENABLED|UPLOAD_INTERVAL)=' "$META_CONFIG" >/dev/null 2>&1 && \
+       grep -F "CONFIGSTORE_PATH=$META_CONFIG" "$META_MARKER" >/dev/null 2>&1 && \
+       grep -E '^RUN_ID=' "$META_MARKER" >/dev/null 2>&1 && \
+       grep -F "UPLOAD_ENABLED=1" "$META_MARKER" >/dev/null 2>&1 && \
+       grep -F "UPLOAD_INTERVAL=1800" "$META_MARKER" >/dev/null 2>&1; then
+        echo "✓ $META_DESC6 PASSED"
+        record_tc_result "30" "Upload marker/configstore key separation" "SUCCESS"
+    else
+        echo "✗ $META_DESC6 FAILED (marker/configstore ownership mismatch)"
+        [ -f "$META_CONFIG" ] && cat "$META_CONFIG"
+        [ -f "$META_MARKER" ] && cat "$META_MARKER"
+        TEST_FAILED=$((TEST_FAILED + 1))
+        record_tc_result "30" "Upload marker/configstore key separation" "FAILURE"
+    fi
+else
+    echo "✗ $META_DESC6 FAILED (command execution failed)"
+    cat /tmp/meminsight_upload_handoff.log
+    TEST_FAILED=$((TEST_FAILED + 1))
+    record_tc_result "30" "Upload marker/configstore key separation" "FAILURE"
+fi
+rm -f "$META_MARKER"
+echo ""
+
 # Summary
 echo "===================================================================================="
 echo "Test Summary"

@@ -256,7 +256,8 @@ At run startup (always):
 - An in-progress sentinel `/tmp/.meminsight_inprogress` is created at run start and removed at completion
 
 When `--upload-enable` is passed:
-- A marker file `/tmp/.meminsight_upload` is created immediately before the capture run begins
+- A marker file `/tmp/.meminsight_upload` is atomically written after the configstore and before the capture run begins
+- The marker contains `CONFIGSTORE_PATH`, `RUN_ID`, `UPLOAD_ENABLED`, and `UPLOAD_INTERVAL`
 - The systemd `meminsight-upload.path` unit watches for the marker and triggers the upload service
 
 ## 📁 State Files
@@ -265,7 +266,7 @@ Meminsight creates and manages the following state files:
 
 ### `<output-dir>/.meminsight_configstore` (Persistent, Per-Run)
 
-**Purpose**: Store run parameters for the upload script to read.
+**Purpose**: Store persistent run and collection state in the configured output directory.
 
 **Format**: Key=value pairs (one per line).
 
@@ -279,8 +280,6 @@ RUN_ITERATIONS=10
 RUN_INTERVAL=60
 RUN_ID=17014563271234507
 OUTPUT_FORMAT=csv
-UPLOAD_ENABLED=1
-UPLOAD_INTERVAL=3600
 OUTPUT_DIR=/opt/meminsight
 BACKUP_ENABLED=1
 BACKUP_COUNT=30
@@ -307,12 +306,24 @@ This path is defined in code as `MEMINSIGHT_INPROGRESS_FILE`.
 
 ### `/tmp/.meminsight_upload` (Temporary, Upload Trigger)
 
-**Purpose**: Trigger the systemd path-activated upload service.
+**Purpose**: Trigger the systemd path-activated upload service and carry upload-specific handoff data.
+
+**Format**: Key=value pairs (one per line).
+
+Example:
+```
+CONFIGSTORE_PATH=/opt/meminsight/.meminsight_configstore
+RUN_ID=17014563271234507
+UPLOAD_ENABLED=1
+UPLOAD_INTERVAL=3600
+```
 
 **Behavior**:
-- Created immediately before the capture run begins (if `--upload-enable` is passed)
+- Created atomically after the output-directory configstore is written (if `--upload-enable` is passed)
 - Watched by `meminsight-upload.path` systemd unit
 - When detected, systemd triggers `meminsight-upload.service` to run the upload script
+- Removed by the upload script after its service cycle completes
+- Not read or created when upload is disabled
 
 ## ⚙️ Configuration
 
@@ -403,8 +414,8 @@ Meminsight integrates with systemd path-triggered units for autonomous report up
    ```
 
 2. **Before capture**:
-   - Configstore written with all run parameters
-   - Upload marker `/tmp/.meminsight_upload` created
+   - Configstore written with persistent run and collection state
+   - Upload marker `/tmp/.meminsight_upload` written with `CONFIGSTORE_PATH`, `RUN_ID`, `UPLOAD_ENABLED`, and `UPLOAD_INTERVAL`
    - In-progress sentinel created in output directory
 
 3. **Systemd detects marker**:
@@ -412,9 +423,10 @@ Meminsight integrates with systemd path-triggered units for autonomous report up
    - Triggers `meminsight-upload.service`
 
 4. **Upload script runs**:
-   - Reads configstore to determine upload parameters and report location
+   - Reads the marker for upload settings and the configstore path
+   - Reads `OUTPUT_DIR` and persistent state from the configured-directory configstore
    - Collects reports using `RUN_ID` for correlation
-   - Implements cadence-based uploads (e.g., every `UPLOAD_INTERVAL` seconds)
+   - Implements cadence-based uploads using marker `UPLOAD_INTERVAL`
 
 5. **After capture**:
    - In-progress sentinel removed
@@ -599,12 +611,12 @@ CPPFLAGS="-DDEVICE_INTERFACE_KEY=\"ESTB_INTERFACE\"" make clean && make
              --fmt json --json-pretty
 
 # What happens:
-# 1. Before any capture, configstore is written with run parameters
-# 2. Upload marker /tmp/.meminsight_upload is created (triggers systemd service)
+# 1. Before any capture, configstore is written with persistent run parameters
+# 2. Upload marker /tmp/.meminsight_upload is written with upload-specific settings
 # 3. In-progress sentinel created at /tmp/.meminsight_inprogress
 # 4. Systemd service detects marker and begins monitoring for reports
 # 5. Every 15 minutes a JSON report is written with RUN_ID in the filename
-# 6. Upload service reads configstore, finds UPLOAD_INTERVAL=3600, and uploads accordingly
+# 6. Upload service reads UPLOAD_INTERVAL=3600 from the marker and uploads accordingly
 # 7. After 48 iterations (12 hours), in-progress sentinel is removed
 # 8. Configstore persists for audit and future reference
 ```
@@ -625,12 +637,16 @@ interval=300
              --upload-enable \
              --upload-interval 1800  # Upload every 30 minutes
 
-# Configstore will contain:
+# Configstore will contain persistent state:
 # RUN_ITERATIONS=24
 # RUN_INTERVAL=300
+# OUTPUT_DIR=/var/log/meminsight
+
+# The upload marker will contain:
+# CONFIGSTORE_PATH=/var/log/meminsight/.meminsight_configstore
+# RUN_ID=<run-id>
 # UPLOAD_ENABLED=1
 # UPLOAD_INTERVAL=1800
-# OUTPUT_DIR=/var/log/meminsight
 ```
 
 ## 📊 Report Metadata

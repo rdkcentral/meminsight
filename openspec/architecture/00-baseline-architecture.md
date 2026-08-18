@@ -114,7 +114,7 @@ flowchart LR
 - Two major capture flows:
   - collectSystemMemoryStats() for system-wide process enumeration
   - handleConfigMode() for whitelist/PID targeted capture
-- Both flows write run metadata into configstore and create/remove in-progress marker.
+- Both flows write persistent run metadata into the configured output-directory configstore; when upload is enabled they publish the upload marker and create/remove the in-progress marker.
 
 ### Inferences
 - The CLI is the primary contract surface; config mode is a policy overlay for controlled process targeting.
@@ -247,7 +247,7 @@ flowchart TD
 - Output/report subsystem:
   - CSV writers and JSON object serialization path
 - State and lifecycle subsystem:
-  - ensure_output_dir(), clear_dir_contents(), writeConfigStore(), touchFile(), removeFileIfPresent()
+  - ensure_output_dir(), apply_backup_policy(), writeConfigStore(), writeUploadMarker(), touchFile(), removeFileIfPresent()
 
 ### Inferences
 - The codebase is single-file but behaviorally split into clear subsystems with stable functional boundaries suitable for OpenSpec capability ownership.
