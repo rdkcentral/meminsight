@@ -14,7 +14,7 @@ This document records the current implementation-to-spec parity verification for
 | Capability ID | Spec file | Implementation anchors |
 |---|---|---|
 | C01 | 01-cli-and-execution-modes.md | main(), printHelpAndUsage() |
-| C02 | 02-output-directory-and-run-lifecycle.md | ensure_output_dir(), clear_dir_contents(), touchFile(), removeFileIfPresent(), initializeSetupInfo() |
+| C02 | 02-output-directory-and-run-lifecycle.md | ensure_output_dir(), apply_backup_policy(), touchFile(), removeFileIfPresent(), initializeSetupInfo() |
 | C03 | 03-config-mode-and-whitelist-capture.md | parseConfig(), getPIDByProcessName(), handleConfigMode() |
 | C04 | 04-process-discovery-and-filtering.md | collectSystemMemoryStats(), fillProcessStatFields(), addULSaturating(), addProcessInfo(), writeProcessInfo() |
 | C05 | 05-smaps-and-smaps-rollup-parsing.md | getProcessInfos(), getProcessInfos_initial(), getProcessInfos_learnt(), getProcessInfos_rollup(), getProcessInfos_rollup_learnt() |
@@ -23,7 +23,7 @@ This document records the current implementation-to-spec parity verification for
 | C08 | 08-ddr-bandwidth-collection.md | updateBandwidthAvailability(), readBandwidthData(), collectBandwidthData(), collectBandwidthData_JSON() |
 | C09 | 09-csv-report-output.md | collectSystemMemoryStats(), handleConfigMode(), writeProcessInfo(), saveMeminfo(), saveSystemCpuStat(), saveFragmentationInfo(), collectBandwidthData() |
 | C10 | 10-json-report-output-optional.md | loadCjson(), unloadCjson(), saveMeminfo_JSON(), saveSystemCpuStat_JSON(), collectBandwidthData_JSON(), saveFragmentationInfo_JSON(), writeProcessInfo_JSON(), writeJSONToFile(), main() |
-| C11 | 11-upload-and-state-files.md | writeConfigStore(), touchFile(), removeFileIfPresent(), main(), collectSystemMemoryStats(), handleConfigMode() |
+| C11 | 11-upload-and-state-files.md | writeConfigStore(), writeUploadMarker(), touchFile(), removeFileIfPresent(), main(), collectSystemMemoryStats(), handleConfigMode() |
 | C12 | 12-testme-fixture-mode.md | main(), testGetProcessInfos_Parse(), testGetProcessInfos(), getProcessInfos(), saveMeminfo(), selectFragmentationSource(), collectSystemMemoryStats() |
 | C13 | 14-system-cpu-stat-raw-collection.md | readSystemCpuStat(), saveSystemCpuStat(), saveSystemCpuStat_JSON(), main() |
 

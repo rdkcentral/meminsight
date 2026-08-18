@@ -67,7 +67,7 @@
 > SRS Feature: Pre-capture cleanup — **Partial** (implemented in `scripts/detect_leak.sh` for CI; not in product path)
 
 - [ ] Implement rotation/cleanup policy that runs on startup and by configurable retention cadence. `[FR-052]`
-- [x] Add pre-capture cleanup in the MemInsight product path: `ensure_output_dir()` calls `clear_dir_contents()` on startup to recursively wipe stale reports before any new data is written. `[FR-052]`
+- [x] Add pre-capture backup handling in the MemInsight product path: `ensure_output_dir()` applies format-scoped `apply_backup_policy()` handling before new data is written. `[FR-052]`
 - [ ] Implement archive compression (tar/gzip) before deletion. `[FR-053]`
 - [ ] Add configurable retention limits: max age (hours), max size (MB), max file count. `[FR-054]`
 - [ ] Expose retention config via CLI flags: `--retention-max-age`, `--retention-max-size`, `--retention-max-files`. `[FR-054, §11.1]`
