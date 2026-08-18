@@ -605,6 +605,55 @@ static bool buildConfigStorePath(const char *dir, char *path, size_t pathLen)
     return written > 0 && (size_t)written < pathLen;
 }
 
+static bool writeUploadMarker(const SetupInfo *setup, bool uploadEnabled, int uploadInterval)
+{
+    if (!setup || !setup->outputDir)
+        return false;
+
+    char configStorePath[PATH_MAX];
+    char markerTempPath[PATH_MAX];
+    if (!buildConfigStorePath(setup->outputDir, configStorePath, sizeof(configStorePath)))
+        return false;
+
+    int written = snprintf(markerTempPath, sizeof(markerTempPath), "%s.tmp",
+                            MEMINSIGHT_UPLOAD_MARKER_PATH);
+    if (written <= 0 || (size_t)written >= sizeof(markerTempPath))
+        return false;
+
+    int markerFd = open(markerTempPath, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
+    if (markerFd == -1)
+    {
+        PRINT_MUST("Failed to write upload marker '%s': %s\n", markerTempPath, strerror(errno));
+        return false;
+    }
+
+    FILE *marker = fdopen(markerFd, "w");
+    if (!marker)
+    {
+        PRINT_MUST("Failed to open upload marker stream '%s': %s\n", markerTempPath, strerror(errno));
+        close(markerFd);
+        unlink(markerTempPath);
+        return false;
+    }
+
+    bool success = fprintf(marker,
+                           "CONFIGSTORE_PATH=%s\nRUN_ID=%s\nUPLOAD_ENABLED=%d\nUPLOAD_INTERVAL=%d\n",
+                           configStorePath, setup->runHash,
+                           uploadEnabled ? 1 : 0, uploadInterval) >= 0;
+    if (fclose(marker) != 0)
+        success = false;
+
+    if (!success || rename(markerTempPath, MEMINSIGHT_UPLOAD_MARKER_PATH) != 0)
+    {
+        PRINT_MUST("Failed to publish upload marker '%s': %s\n",
+                   MEMINSIGHT_UPLOAD_MARKER_PATH, strerror(errno));
+        unlink(markerTempPath);
+        return false;
+    }
+
+    return true;
+}
+
 static bool readConfigStoreValue(const char *dir, const char *key, char *value, size_t valueLen)
 {
     if (!dir || !key || !*key || !value || valueLen == 0)
@@ -664,17 +713,20 @@ static bool readConfigStoreValue(const char *dir, const char *key, char *value, 
 static void writeConfigStore(const SetupInfo *setup, int iterations, int interval,
                              bool upload_enabled, int upload_interval)
 {
+    (void)upload_enabled;
+    (void)upload_interval;
+
     const char * const keys[] = {
         "UPTIME", "KERNEL_VERSION", "MEMINSIGHT_VERSION", "REPORT_VERSION",
         "RUN_ITERATIONS", "RUN_INTERVAL", "RUN_ID", "OUTPUT_FORMAT",
-        "UPLOAD_ENABLED", "UPLOAD_INTERVAL", "OUTPUT_DIR",
+        "OUTPUT_DIR",
         "BACKUP_ENABLED", "BACKUP_COUNT", "BACKUP_BASE", "FRAGMENTATION_ENABLED"
     };
     const int nkeys = (int)(sizeof(keys) / sizeof(keys[0]));
 
     char v_uptime[64], v_kver[KERNEL_LEN], v_mver[32], v_rver[32];
     char v_iter[16], v_intv[16], v_runid[32], v_fmt[8];
-    char v_upload[4], v_uintv[16], v_outdir[PATH_MAX];
+    char v_outdir[PATH_MAX];
     char v_backup_enabled[4], v_backup_count[16], v_backup_base[32], v_frag_enabled[4];
 
     snprintf(v_uptime, sizeof(v_uptime), "%s", getSystemUptime());
@@ -685,8 +737,6 @@ static void writeConfigStore(const SetupInfo *setup, int iterations, int interva
     snprintf(v_intv,   sizeof(v_intv),   "%d", interval);
     snprintf(v_runid,  sizeof(v_runid),  "%s", setup->runHash);
     snprintf(v_fmt,    sizeof(v_fmt),    "%s", (g_reportFormat == REPORT_JSON) ? "json" : "csv");
-    snprintf(v_upload, sizeof(v_upload), "%d", upload_enabled ? 1 : 0);
-    snprintf(v_uintv,  sizeof(v_uintv),  "%d", upload_interval);
     snprintf(v_outdir, sizeof(v_outdir), "%s", setup->outputDir);
     snprintf(v_backup_enabled, sizeof(v_backup_enabled), "%d", 1);
     snprintf(v_backup_count, sizeof(v_backup_count), "%d", g_backupCount);
@@ -703,7 +753,7 @@ static void writeConfigStore(const SetupInfo *setup, int iterations, int interva
     const char * const vals[] = {
         v_uptime, v_kver, v_mver, v_rver,
         v_iter, v_intv, v_runid, v_fmt,
-        v_upload, v_uintv, v_outdir,
+        v_outdir,
         v_backup_enabled, v_backup_count, v_backup_base, v_frag_enabled
     };
 
@@ -711,7 +761,7 @@ static void writeConfigStore(const SetupInfo *setup, int iterations, int interva
     FILE *fp = fopen(configStorePath, "r");
     if (fp)
     {
-        int matched[15] = {0};
+        int matched[13] = {0};
         char line[PATH_MAX + 64];
         while (fgets(line, sizeof(line), fp))
         {
@@ -3366,6 +3416,9 @@ int collectSystemMemoryStats(bool enableKThreads, const char *outDir, int iterat
 
     writeConfigStore(&setup, iterations, interval, upload_enabled, upload_interval);
 
+    if (upload_enabled)
+        (void)writeUploadMarker(&setup, upload_enabled, upload_interval);
+
     (void)touchFile(MEMINSIGHT_INPROGRESS_FILE);
 
     PRINT_MUST("Capturing System wide stats into directory %s\n", setup.outputDir);
@@ -3652,6 +3705,9 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, bool cli_out
     config.interval = final_interval;
 
     writeConfigStore(&setup, final_iterations, final_interval, upload_enabled, upload_interval);
+
+    if (upload_enabled)
+        (void)writeUploadMarker(&setup, upload_enabled, upload_interval);
 
     (void)touchFile(MEMINSIGHT_INPROGRESS_FILE);
 
@@ -4528,11 +4584,6 @@ int main(int argc, char *argv[])
         }
     }
 #endif
-
-    if (cli_upload_enable)
-    {
-        (void)touchFile(MEMINSIGHT_UPLOAD_MARKER_PATH);
-    }
 
     if (isConfigPresent)
     {
