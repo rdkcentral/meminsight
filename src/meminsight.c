@@ -3502,7 +3502,6 @@ static int mi_upload_t2_files(const char *outDir)
     if (!dir) {
         fprintf(stderr, "[MemInsight] Upload: Cannot open directory %s: %s\n",
                 outDir, strerror(errno));
-        curl_global_cleanup();
         return 0;
     }
 
@@ -4638,7 +4637,7 @@ int writeT2Report(const char *filepath, const SetupInfo *setup, int iteration, i
         static int hasPrev = 0;
 
 #ifdef TESTME
-        FILE *fp = fopen((isTestMode && testStat[0]) ? testProcStat : PROC_STAT_FILE, "r");
+        FILE *fp = fopen((isTestMode && testStat[0]) ? testStat : STAT_FILE, "r");
 #else
         FILE *fp = fopen(STAT_FILE, "r");
 #endif
