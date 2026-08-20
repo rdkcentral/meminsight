@@ -251,7 +251,6 @@ int getProcessInfos(unsigned pid);
 void printHelp(char *argv[]);
 void printHelpAndUsage(char *argv[], bool moreInfo, int returnCode);
 void saveMeminfo(FILE *out);
-void saveCpuStat(FILE *out);
 void saveFragmentationInfo(FILE *out);
 void collectBandwidthData(FILE *out);
 int getDeviceProperty(const char *key, char *value, size_t valueLen);
@@ -276,7 +275,6 @@ typedef struct cJSON cJSON_t;
  * No cjson/cJSON.h include is needed at build time.
  */
 void saveMeminfo_JSON(cJSON_t *root);
-void saveCpuStat_JSON(cJSON_t *root);
 void saveFragmentationInfo_JSON(cJSON_t *root);
 void writeProcessInfo_JSON(cJSON_t *processesArray);
 int writeJSONToFile(const char *filepath, const SetupInfo *setup);
