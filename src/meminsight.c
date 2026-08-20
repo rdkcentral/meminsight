@@ -765,7 +765,7 @@ static void writeConfigStore(const SetupInfo *setup, int iterations, int interva
     const char * const keys[] = {
         "UPTIME", "KERNEL_VERSION", "MEMINSIGHT_VERSION", "REPORT_VERSION",
         "RUN_ITERATIONS", "RUN_INTERVAL", "RUN_ID", "OUTPUT_FORMAT",
-        "BACKUP_ENABLED", "BACKUP_COUNT", "BACKUP_BASE", "FRAGMENTATION_ENABLED"
+        "BACKUP_ENABLED", "BACKUP_COUNT", "BACKUP_BASE", "FRAGMENTATION_ENABLED",
         "UPLOAD_ENABLED", "UPLOAD_INTERVAL", "UPLOAD_URL", "OUTPUT_DIR"
     };
     const int nkeys = (int)(sizeof(keys) / sizeof(keys[0]));

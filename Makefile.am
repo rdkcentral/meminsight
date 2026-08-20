@@ -29,12 +29,6 @@ AM_CPPFLAGS = @CPPFLAGS@
 AM_LDFLAGS = @LDFLAGS@
 
 meminsight_LDADD = -ldl
-if ENABLE_HTTP_UPLOAD
-meminsight_LDADD += -lcurl
-endif
-if ENABLE_CERTSELECTOR
-meminsight_LDADD += -lRdkCertSelector -lrdkconfig -lrdkloggers -lsecure_wrapper
-endif
 
 # Add clean targets for better cleanup
 CLEANFILES = *.o *.lo *.la *.al *.so *.a
