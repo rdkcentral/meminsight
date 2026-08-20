@@ -1018,11 +1018,11 @@ META_MARKER="/tmp/.meminsight_upload"
 echo "------------------------------------------"
 echo "$META_DESC6"
 echo "------------------------------------------"
-echo "Command: $MEM_BIN --upload-enable --upload-interval 1800 -o $META_OUT6 -t $RET_SMAP_FILE $RET_MEMINFO_FILE"
+echo "Command: $MEM_BIN --upload-enable --upload-interval 1800 --upload-url https://example.test/upload -o $META_OUT6 -t $RET_SMAP_FILE $RET_MEMINFO_FILE"
 
 rm -rf "$META_OUT6"
 rm -f "$META_MARKER" /tmp/.meminsight_configstore
-if $MEM_BIN --upload-enable --upload-interval 1800 -o "$META_OUT6" -t "$RET_SMAP_FILE" "$RET_MEMINFO_FILE" >/tmp/meminsight_upload_handoff.log 2>&1; then
+if $MEM_BIN --upload-enable --upload-interval 1800 --upload-url https://example.test/upload -o "$META_OUT6" -t "$RET_SMAP_FILE" "$RET_MEMINFO_FILE" >/tmp/meminsight_upload_handoff.log 2>&1; then
     META_CONFIG="$META_OUT6/.meminsight_configstore"
     if [ -f "$META_CONFIG" ] && [ -s "$META_MARKER" ] && [ ! -e /tmp/.meminsight_configstore ] && \
        grep -F "RUN_ID=" "$META_CONFIG" >/dev/null 2>&1 && \
