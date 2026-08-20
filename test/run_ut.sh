@@ -283,7 +283,7 @@ if $MEM_BIN --help 2>&1 | grep -F -- "--fmt" >/dev/null 2>&1; then
         JSON_FILE=$(ls /tmp/meminsight/*.json 2>/dev/null | head -n 1)
         if [ -n "$JSON_FILE" ] && [ -f "$JSON_FILE" ] && \
            grep -F '"meminfo"' "$JSON_FILE" >/dev/null 2>&1 && \
-           grep -F '"cpustat"' "$JSON_FILE" >/dev/null 2>&1 && \
+           grep -F '"cpu_stat"' "$JSON_FILE" >/dev/null 2>&1 && \
            grep -F '"processes"' "$JSON_FILE" >/dev/null 2>&1 && \
            grep -F '"fragmentation"' "$JSON_FILE" >/dev/null 2>&1; then
             echo "✓ $JSON_DESC PASSED"
@@ -330,7 +330,7 @@ if [ -w "/etc" ] || [ -w "$DEVPROP_FILE" ] || [ ! -e "$DEVPROP_FILE" ]; then
     rm -rf /tmp/meminsight/*.csv
     if $MEM_BIN -o /tmp/meminsight -t "$DEVPROP_SMAP_FILE" "$DEVPROP_MEMINFO_FILE" >"$DEVPROP_LOG" 2>&1; then
         CSV_FILE=$(ls /tmp/meminsight/*.csv 2>/dev/null | head -n 1)
-        if [ -n "$CSV_FILE" ] && grep -E '^[^,]+,00:00:00:00:00:00,' "$CSV_FILE" >/dev/null 2>&1; then
+        if [ -n "$CSV_FILE" ] && grep -E '^[^,]+,000000000000,' "$CSV_FILE" >/dev/null 2>&1; then
             echo "✓ $DEVPROP_DESC PASSED"
             record_tc_result "14" "Invalid interface -> DEFAULT_MAC" "SUCCESS"
         else

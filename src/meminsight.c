@@ -761,19 +761,19 @@ static void writeConfigStore(const SetupInfo *setup, int iterations, int interva
 {
     (void)upload_enabled;
     (void)upload_interval;
+    (void)upload_url;
 
     const char * const keys[] = {
         "UPTIME", "KERNEL_VERSION", "MEMINSIGHT_VERSION", "REPORT_VERSION",
-        "RUN_ITERATIONS", "RUN_INTERVAL", "RUN_ID", "OUTPUT_FORMAT",
-        "BACKUP_ENABLED", "BACKUP_COUNT", "BACKUP_BASE", "FRAGMENTATION_ENABLED",
-        "UPLOAD_ENABLED", "UPLOAD_INTERVAL", "UPLOAD_URL", "OUTPUT_DIR"
+        "RUN_ITERATIONS", "RUN_INTERVAL", "RUN_ID", "OUTPUT_FORMAT", "OUTPUT_DIR",
+        "BACKUP_ENABLED", "BACKUP_COUNT", "BACKUP_BASE", "FRAGMENTATION_ENABLED"
     };
     const int nkeys = (int)(sizeof(keys) / sizeof(keys[0]));
 
     char v_uptime[64], v_kver[KERNEL_LEN], v_mver[32], v_rver[32];
     char v_iter[16], v_intv[16], v_runid[32], v_fmt[8];
     char v_backup_enabled[4], v_backup_count[16], v_backup_base[32], v_frag_enabled[4];
-    char v_upload[4], v_uintv[16], v_uurl[MEMINSIGHT_UPLOAD_URL_MAX], v_outdir[PATH_MAX];
+    char v_outdir[PATH_MAX];
 
     snprintf(v_uptime, sizeof(v_uptime), "%s", getSystemUptime());
     snprintf(v_kver,   sizeof(v_kver),   "%s", setup->kernelVersion);
@@ -784,9 +784,6 @@ static void writeConfigStore(const SetupInfo *setup, int iterations, int interva
     snprintf(v_runid,  sizeof(v_runid),  "%s", setup->runHash);
     snprintf(v_fmt,    sizeof(v_fmt),    "%s", (g_reportFormat == REPORT_T2) ? "t2"
                                              : (g_reportFormat == REPORT_JSON) ? "json" : "csv");
-    snprintf(v_upload, sizeof(v_upload), "%d", upload_enabled ? 1 : 0);
-    snprintf(v_uintv,  sizeof(v_uintv),  "%d", upload_interval);
-    snprintf(v_uurl,   sizeof(v_uurl),   "%s", (upload_url && upload_url[0] != '\0') ? upload_url : "");
     snprintf(v_outdir, sizeof(v_outdir), "%s", setup->outputDir);
     snprintf(v_backup_enabled, sizeof(v_backup_enabled), "%d", 1);
     snprintf(v_backup_count, sizeof(v_backup_count), "%d", g_backupCount);
@@ -802,8 +799,7 @@ static void writeConfigStore(const SetupInfo *setup, int iterations, int interva
 
     const char * const vals[] = {
         v_uptime, v_kver, v_mver, v_rver,
-        v_iter, v_intv, v_runid, v_fmt,
-        v_upload, v_uintv, v_uurl, v_outdir,
+        v_iter, v_intv, v_runid, v_fmt, v_outdir,
         v_backup_enabled, v_backup_count, v_backup_base, v_frag_enabled
     };
 
