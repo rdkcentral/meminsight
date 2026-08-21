@@ -735,6 +735,7 @@ static const char *resolveUploadUrl(const char *cli_upload_url, bool cli_upload_
     {
 #ifdef TESTME
         fprintf(stderr, "Upload URL resolved from environment \n");
+#endif
         PRINT_INFO("Upload URL resolved from environment\n");
         return env_url;
     }
