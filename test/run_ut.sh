@@ -1068,8 +1068,8 @@ if $MEM_BIN --help 2>&1 | grep -F "t2" >/dev/null 2>&1; then
            grep -F '"Report"' "$T2_FILE" >/dev/null 2>&1 && \
 	   grep -F '"meminfo.MemTotal"' "$T2_FILE" >/dev/null 2>&1 && \
 	   grep -F '"cpu_stats.user"' "$T2_FILE" >/dev/null 2>&1 && \
-           grep -F '"PID"' "$T2_FILE" >/dev/null 2>&1 && \
-           grep -F '"PSS"' "$T2_FILE" >/dev/null 2>&1 && \
+           grep -F '"tail.PID"' "$T2_FILE" >/dev/null 2>&1 && \
+           grep -F '"tail.PSS"' "$T2_FILE" >/dev/null 2>&1 && \
 	   grep -F '"mac"' "$T2_FILE" >/dev/null 2>&1 && \
 	   grep -F '"device.model"' "$T2_FILE" >/dev/null 2>&1; then
             echo "✓ $T2_DESC PASSED"
