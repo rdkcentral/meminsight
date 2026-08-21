@@ -1050,7 +1050,7 @@ rm -f "$META_MARKER"
 echo ""
 
 # T2 JSON output test (runs only when JSON support is compiled in)
-T2_DESC="Test 16: T2 format produces Report array with nested objects"
+T2_DESC="Test 16: T2 format produces Report array with flattened notation"
 T2_SMAP_FILE="test/1-non-zero-swap-entry/meminsight_testSmap.txt"
 T2_MEMINFO_FILE="test/1-non-zero-swap-entry/meminsight_testMeminfo.txt"
 
@@ -1066,18 +1066,18 @@ if $MEM_BIN --help 2>&1 | grep -F "t2" >/dev/null 2>&1; then
         T2_FILE=$(ls /tmp/meminsight/*.t2.json 2>/dev/null | head -n 1)
         if [ -n "$T2_FILE" ] && [ -f "$T2_FILE" ] && \
            grep -F '"Report"' "$T2_FILE" >/dev/null 2>&1 && \
-           grep -F '"meminfo"' "$T2_FILE" >/dev/null 2>&1 && \
-           grep -F '"MemTotal"' "$T2_FILE" >/dev/null 2>&1 && \
-           grep -F '"cpu_stats"' "$T2_FILE" >/dev/null 2>&1 && \
+	   grep -F '"meminfo.MemTotal"' "$T2_FILE" >/dev/null 2>&1 && \
+	   grep -F '"cpu_stats.user"' "$T2_FILE" >/dev/null 2>&1 && \
            grep -F '"PID"' "$T2_FILE" >/dev/null 2>&1 && \
            grep -F '"PSS"' "$T2_FILE" >/dev/null 2>&1 && \
-           grep -F '"mac"' "$T2_FILE" >/dev/null 2>&1; then
+	   grep -F '"mac"' "$T2_FILE" >/dev/null 2>&1 && \
+	   grep -F '"device.model"' "$T2_FILE" >/dev/null 2>&1; then
             echo "✓ $T2_DESC PASSED"
             echo "Output sample:"
             head -5 "$T2_FILE"
             echo "..."
         else
-            echo "✗ $T2_DESC FAILED (missing nested structure)"
+            echo "✗ $T2_DESC FAILED (missing flattened T2 structure)"
             [ -n "$T2_FILE" ] && cat "$T2_FILE"
             TEST_FAILED=$((TEST_FAILED + 1))
         fi
@@ -1137,14 +1137,15 @@ if $MEM_BIN --help 2>&1 | grep -F "t2" >/dev/null 2>&1; then
     if $MEM_BIN --fmt t2 --frag -o /tmp/meminsight -t "$T2_FRAG_SMAP_FILE" "$T2_FRAG_MEMINFO_FILE" "$T2_FRAG_BUDDY_FILE" "$T2_FRAG_PGT_FILE"; then
         T2_FRAG_FILE=$(ls /tmp/meminsight/*.t2.json 2>/dev/null | head -n 1)
         if [ -n "$T2_FRAG_FILE" ] && [ -f "$T2_FRAG_FILE" ] && \
-           grep -F '"fragmentation"' "$T2_FRAG_FILE" >/dev/null 2>&1 && \
+           grep -F '"fragmentation.source"' "$T2_FRAG_FILE" >/dev/null 2>&1 && \
+	   grep -F '"fragmentation.row_count"' "$T2_FRAG_FILE" >/dev/null 2>&1 && \
            grep -F '"Report"' "$T2_FRAG_FILE" >/dev/null 2>&1; then
             echo "✓ $T2_FRAG_DESC PASSED"
             echo "Output sample:"
             head -10 "$T2_FRAG_FILE"
             echo "..."
         else
-            echo "✗ $T2_FRAG_DESC FAILED (missing fragmentation object in T2 output)"
+            echo "✗ $T2_FRAG_DESC FAILED (missing flattened fragmentation entries in T2 output)"
             [ -n "$T2_FRAG_FILE" ] && cat "$T2_FRAG_FILE"
             TEST_FAILED=$((TEST_FAILED + 1))
         fi

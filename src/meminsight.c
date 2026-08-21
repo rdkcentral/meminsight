@@ -4164,7 +4164,7 @@ void saveMeminfo(FILE *out)
         "MemTotal","MemFree","MemAvailable","Buffers","Cached","SwapCached",
         "Active(anon)","Inactive(anon)","Active(file)","Inactive(file)",
         "SwapTotal","SwapFree","AnonPages","Mapped","Shmem","Slab","KernelStack",
-        "VmallocUsed","CmaFree","CmaTotal"};
+	"VmallocUsed","CmaTotal","CmaFree"};
     static char meminfoHeader[MEMINFO_HEADER_TOTAL] = {0};
     static char meminfoValue[MEMINFO_HEADER_TOTAL] = {0};
     static int skipMemTotal = 0;
