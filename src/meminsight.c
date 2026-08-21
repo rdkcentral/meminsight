@@ -723,17 +723,19 @@ static const char *resolveUploadUrl(const char *cli_upload_url, bool cli_upload_
 {
     if (cli_upload_url_set && cli_upload_url && cli_upload_url[0] != '\0')
     {
-        fprintf(stderr, "Upload URL resolved from CLI --upload-url: %s\n", cli_upload_url);
-        PRINT_INFO("Upload URL resolved from CLI --upload-url: %s\n", cli_upload_url);
+#ifdef TESTME
+        fprintf(stderr, "Upload URL resolved from CLI\n");
+#endif
+        PRINT_INFO("Upload URL resolved from CLI\n");
         return cli_upload_url;
     }
 
     const char *env_url = getenv(MEMINSIGHT_UPLOAD_URL_ENV);
     if (env_url && env_url[0] != '\0')
     {
-        fprintf(stderr, "Upload URL resolved from environment %s: %s\n",
-                MEMINSIGHT_UPLOAD_URL_ENV, env_url);
-        PRINT_INFO("Upload URL resolved from environment %s: %s\n", MEMINSIGHT_UPLOAD_URL_ENV, env_url);
+#ifdef TESTME
+        fprintf(stderr, "Upload URL resolved from environment \n");
+        PRINT_INFO("Upload URL resolved from environment\n");
         return env_url;
     }
 
