@@ -101,7 +101,7 @@ This is used to ensure compatibility with older versions of the report parser. *
 #define BW_DDR_FILE "/sys/class/aml_ddr/bandwidth"
 #endif
 #ifndef PROC_STAT_FILE
-#define PROC_STAT_FILE PROC_DIR "/stat"
+#define PROC_STAT_FILE STAT_FILE
 #endif
 #ifndef BUDDYINFO_FILE
 #define BUDDYINFO_FILE PROC_DIR "/buddyinfo"

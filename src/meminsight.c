@@ -3403,7 +3403,6 @@ void printHelpAndUsage(char *argv[], bool moreInfo, int returnCode)
     printf("      --upload-url <url>                Override T2 upload endpoint (default: env or built-in)\n");
 #endif
     printf("      --top-procs <N>                   Limit T2 report to top N processes by PSS (default: 5)\n");
-    printf("      --upload-url <url>                Upload destination URL (CLI overrides %s)\n", MEMINSIGHT_UPLOAD_URL_ENV);
     printf("      --sort-by <field>                 Sort T2 processes by: RSS (default), PSS, CPU_TIME, delta_cpu_time\n");
 #ifdef TESTME
     printf("  -t, --test <smapsFile> <meminfoFile> [buddyinfoFile] [pagetypeinfoFile] [statFile] [bandwidthFile]\n");
@@ -3423,9 +3422,9 @@ void printHelpAndUsage(char *argv[], bool moreInfo, int returnCode)
 
         printf("Default behavior (no flags):\n");
         printf("  - Runs indefinite number of iterations, with an interval of 15 minutes, monitors all processes with log level INFO\n");
-        printf("  - Output: /tmp/<MAC>_<timestamp>_iter<iteration>_%s (CSV format)\n", CSV_FILE_NAME);
-        printf("  - Output: /tmp/<MAC>_<timestamp>_iter<iteration>_%s (JSON format, with --fmt json)\n", JSON_FILE_NAME);
-        printf("  - Output: /tmp/<MAC>_<timestamp>_iter<iteration>_%s (T2 format, with --fmt t2)\n\n", T2_FILE_NAME);
+	printf("  - Output: %s/<MAC>_<timestamp>_iter<iteration>_%s (CSV format)\n", DEFAULT_OUT_DIR, CSV_FILE_NAME);
+        printf("  - Output: %s/<MAC>_<timestamp>_iter<iteration>_%s (JSON format, with --fmt json)\n", DEFAULT_OUT_DIR, JSON_FILE_NAME);
+        printf("  - Output: %s/<MAC>_<timestamp>_iter<iteration>_%s (T2 format, with --fmt t2)\n\n", DEFAULT_OUT_DIR, T2_FILE_NAME);
 
         printf("Example:\n");
         printf("  %s\n", argv[0]);
@@ -3526,6 +3525,12 @@ static int mi_upload_t2_files(const char *outDir)
         found++;
         char err_out[PATH_MAX];
         snprintf(err_out, sizeof(err_out), "%s/.mi_curl_err_%d", outDir, (int)getpid());
+
+        /* Reject characters that can break shell quoting and lead to command injection. */
+         if (strpbrk(g_uploadUrl, "\"'`$\\\n\r") != NULL) {
+             fprintf(stderr, "[MemInsight] Upload: Invalid characters in upload URL; skipping upload.\n");
+             continue;
+         }
 
         char cmd[PATH_MAX * 2 + 512];
         int n = snprintf(cmd, sizeof(cmd),
@@ -4312,7 +4317,7 @@ void saveMeminfo(FILE *out)
  * @brief Add meminfo key/value fields to a JSON root object.
  *
  * Reads /proc/meminfo (or the test fixture when TESTME is set) and
- * writes each needed field as numeric number of @p root.
+ * writes each needed field as numeric member of @p root.
  * Uses the same field list as the CSV saveMeminfo() for consistency.
  */
 void saveMeminfo_JSON(cJSON_t *root)
@@ -4657,11 +4662,11 @@ int writeT2Report(const char *filepath, const SetupInfo *setup, int iteration, i
             /* Compute deltas */
             uint64_t delta_user = 0, delta_system = 0, delta_idle = 0, delta_total = 0;
             if (hasPrev) {
-                delta_user = cpu.values[0] - prevCpu[0];
-                delta_system = cpu.values[2] - prevCpu[2];
-                delta_idle = cpu.values[3] - prevCpu[3];
+                delta_user = (cpu.values[0] >= prevCpu[0]) ? (cpu.values[0] - prevCpu[0]) : 0;
+                delta_system = (cpu.values[2] >= prevCpu[2]) ? (cpu.values[2] - prevCpu[2]) : 0;
+                delta_idle = (cpu.values[3] >= prevCpu[3]) ? (cpu.values[3] - prevCpu[3]) : 0;
                 for (int i = 0; i < fieldCount; i++)
-                    delta_total += (cpu.values[i] - prevCpu[i]);
+                    delta_total += (cpu.values[i] >= prevCpu[i]) ? (cpu.values[i] - prevCpu[i]) : 0;
             }
             T2_ADD_U64_STRING("cpu_stats.delta_user", delta_user);
             T2_ADD_U64_STRING("cpu_stats.delta_system", delta_system);

@@ -18,7 +18,7 @@ The system SHALL read the first (aggregate) `cpu` line from `/proc/stat` on ever
 
 ### Requirement: CPU stats section in CSV output
 
-The system SHALL emit a `/proc/stat:` CSV section containing a header row and a value row with the 8 CPU fields.
+The system SHALL emit a `/proc/stat:` CSV section containing a header row and a value row with the 10 CPU fields.
 
 #### Scenario: CSV format output with CPU stats
 - **WHEN** output format is CSV (default)
@@ -30,7 +30,7 @@ The system SHALL emit a `/proc/stat:` CSV section containing a header row and a 
 
 ### Requirement: CPU stats in JSON output
 
-The system SHALL emit a `cpustat` object in the JSON report containing the 8 CPU fields as numeric values.
+The system SHALL emit a `cpustat` object in the JSON report containing the 10 CPU fields as numeric values.
 
 #### Scenario: JSON format output with CPU stats
 - **WHEN** output format is JSON and cJSON is loaded
