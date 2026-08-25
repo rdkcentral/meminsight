@@ -53,6 +53,18 @@ The implementation must follow meminsight's defensive, embedded-safe patterns: f
 
 **Alternative considered**: Direct sscanf without the learned-offset wrapper. Acceptable alternative; the implementation may simplify to a direct parse since there's only one target line.
 
+### D6: T2 format includes delta computation and CPU percentage
+
+**Rationale**: The T2 telemetry format (`--fmt t2`) maintains state between iterations to compute deltas for CPU user/system/idle/total time and derives a CPU percentage metric. This enables T2 consumers to detect CPU saturation trends without requiring client-side delta computation.
+
+CSV and JSON formats emit raw tick values only; T2 format augments this with:
+- `cpu_stats.delta_user`, `cpu_stats.delta_system`, `cpu_stats.delta_idle`, `cpu_stats.delta_total` (deltas from previous iteration)
+- `cpu_stats.cpu_percent` (derived: (delta_user + delta_system) / delta_total * 100.0)
+
+**Implementation detail**: T2 uses a module-level static array `prevCpu[8]` to track the prior iteration's values. The first iteration has no delta (all zeros); subsequent iterations compute deltas and derive percentages.
+
+**Alternative considered**: Emit raw values in all formats uniformly. Rejected because T2 format already maintains state for meminfo and process deltas; CPU state tracking is consistent with existing T2 patterns.
+
 ## Risks / Trade-offs
 
 - **[Risk] Kernel versions with fewer CPU fields** → Mitigation: If sscanf parses fewer than 8 fields (e.g., older kernels without `steal`), zero-fill the missing fields and log a warning. The parser tolerates partial data.

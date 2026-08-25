@@ -28,6 +28,16 @@ meminsight reads the aggregate `cpu` line and captures raw values in Linux kerne
 5. Under TESTME, an optional stat fixture path can be provided to inject deterministic CPU data.
 6. CPU counters are parsed and stored as 64-bit values to avoid rollover on long-uptime 32-bit environments.
 
+## T2 format behavior
+
+When `--fmt t2` is selected:
+1. T2 format maintains state between iterations to compute CPU deltas and derived metrics.
+2. Individual fields emitted as `cpu_stats.user`, `cpu_stats.system`, `cpu_stats.idle`, `cpu_stats.iowait` (select 4 fields for brevity).
+3. Deltas computed from prior iteration: `cpu_stats.delta_user`, `cpu_stats.delta_system`, `cpu_stats.delta_idle`, `cpu_stats.delta_total`.
+4. Derived metric: `cpu_stats.cpu_percent = (delta_user + delta_system) / delta_total * 100.0` (when delta_total > 0; otherwise 0).
+5. First iteration has no prior state, so all deltas are emitted as `0`.
+6. State is module-level static and persists across iterations within a single run.
+
 ## Source anchors
 
-readSystemCpuStat(), saveSystemCpuStat(), saveSystemCpuStat_JSON(), main() in src/meminsight.c
+readSystemCpuStat(), saveSystemCpuStat(), saveSystemCpuStat_JSON(), writeT2Report() in src/meminsight.c

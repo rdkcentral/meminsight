@@ -3466,8 +3466,9 @@ void printHelpAndUsage(char *argv[], bool moreInfo, int returnCode)
 /**
  * @brief Scan output directory for *.t2.json files and POST each to T2.
  *
- * Uses GetConfigFile pipe + system curl for mTLS (same pattern as T2 telemetry).
- * Files confirmed uploaded (HTTP 200) are deleted; failed files are retained locally.
+ * Uses libcurl directly so the upload URL is passed as a request argument,
+ * not interpolated into a shell command. Files confirmed uploaded (HTTP 200)
+ * are deleted; failed files are retained locally.
  * @param[in] outDir  Directory to scan for .t2.json files.
  * @return Number of files successfully uploaded (informational only).
  */
@@ -3493,13 +3494,6 @@ static int mi_upload_t2_files(const char *outDir)
 
     printf("[MemInsight] Upload: Using cert %s (pass via %s)\n", cert_path, pass_file);
 
-    /*
-     * HTTP code is written to a temp file; system() avoids fd conflicts with
-     * curl's --config /dev/stdin that popen() would introduce.
-     */
-    char http_out[PATH_MAX];
-    snprintf(http_out, sizeof(http_out), "%s/.mi_http_out_%d", outDir, (int)getpid());
-
     DIR *dir = opendir(outDir);
     if (!dir) {
         fprintf(stderr, "[MemInsight] Upload: Cannot open directory %s: %s\n",
@@ -3516,66 +3510,100 @@ static int mi_upload_t2_files(const char *outDir)
             continue;
 
         char filepath[PATH_MAX];
-	int np = snprintf(filepath, sizeof(filepath), "%s/%s", outDir, entry->d_name);
+        int np = snprintf(filepath, sizeof(filepath), "%s/%s", outDir, entry->d_name);
         if (np < 0 || (size_t)np >= sizeof(filepath))
             continue;
         if (access(filepath, R_OK) != 0)
             continue;
 
         found++;
-        char err_out[PATH_MAX];
-        snprintf(err_out, sizeof(err_out), "%s/.mi_curl_err_%d", outDir, (int)getpid());
 
-        char cmd[PATH_MAX * 2 + 512];
-        int n = snprintf(cmd, sizeof(cmd),
-            "/usr/bin/GetConfigFile \"%s\" stdout 2>/dev/null | "
-            "awk '{print \"--pass \" $0}' | "
-            "curl --cert-type P12 --cert \"%s\" --config /dev/stdin "
-            "--tlsv1.2 -H \"Content-type: application/json\" "
-            "-X POST -d @\"%s\" \"%s\" "
-            "--connect-timeout 30 -m 30 -w '%%{http_code}' -s -o /dev/null >\"%s\" 2>\"%s\"",
-            pass_file, cert_path, filepath, g_uploadUrl, http_out, err_out);
+        char password[256] = {0};
+        FILE *pass_proc = popen("/usr/bin/GetConfigFile " MEMINSIGHT_UPLOAD_MARKER_PATH " stdout 2>/dev/null", "r");
+        if (!pass_proc || !fgets(password, sizeof(password), pass_proc)) {
+            if (pass_proc) pclose(pass_proc);
+            fprintf(stderr, "[MemInsight] Upload: Failed to get password from GetConfigFile\n");
+            continue;
+        }
+        if (pass_proc) pclose(pass_proc);
+        password[strcspn(password, "\r\n")] = '\0';
 
-        if (n < 0 || (size_t)n >= sizeof(cmd)) {
-            fprintf(stderr, "[MemInsight] Upload: Command too long for %s\n", entry->d_name);
+        FILE *fp = fopen(filepath, "rb");
+        if (!fp) {
+            fprintf(stderr, "[MemInsight] Upload: Failed to open %s for upload: %s\n",
+                    filepath, strerror(errno));
             continue;
         }
 
-        int status = system(cmd);
-        int curl_exit = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
-
-        char http_code_str[16] = {0};
-        FILE *fp = fopen(http_out, "r");
-        if (fp) {
-            if (fgets(http_code_str, sizeof(http_code_str), fp) != NULL)
-                http_code_str[strcspn(http_code_str, "\n")] = '\0';
+        if (fseek(fp, 0, SEEK_END) != 0) {
             fclose(fp);
+            fprintf(stderr, "[MemInsight] Upload: Failed to seek %s\n", filepath);
+            continue;
         }
 
-        int code = atoi(http_code_str);
-        if (code == 200) {
+        long upload_buffer_size = ftell(fp);
+        if (upload_buffer_size < 0 || fseek(fp, 0, SEEK_SET) != 0) {
+            fclose(fp);
+            fprintf(stderr, "[MemInsight] Upload: Failed to read length of %s\n", filepath);
+            continue;
+        }
+
+        char *upload_buffer = malloc((size_t)upload_buffer_size ? (size_t)upload_buffer_size : 1);
+        if (!upload_buffer) {
+            fclose(fp);
+            fprintf(stderr, "[MemInsight] Upload: Failed to allocate %zu bytes for %s\n",
+                    (size_t)upload_buffer_size, filepath);
+            continue;
+        }
+
+        size_t bytes_read = fread(upload_buffer, 1, (size_t)upload_buffer_size, fp);
+        fclose(fp);
+        if (bytes_read != (size_t)upload_buffer_size) {
+            free(upload_buffer);
+            fprintf(stderr, "[MemInsight] Upload: Failed to read %s\n", filepath);
+            continue;
+        }
+
+        CURL *curl = curl_easy_init();
+        if (!curl) {
+            free(upload_buffer);
+            fprintf(stderr, "[MemInsight] Upload: curl_easy_init failed for %s\n", filepath);
+            continue;
+        }
+
+        curl_easy_setopt(curl, CURLOPT_URL, g_uploadUrl);
+        curl_easy_setopt(curl, CURLOPT_POST, 1L);
+        curl_easy_setopt(curl, CURLOPT_POSTFIELDS, upload_buffer);
+        curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE_LARGE, (curl_off_t)upload_buffer_size);
+        curl_easy_setopt(curl, CURLOPT_SSLCERTTYPE, "P12");
+        curl_easy_setopt(curl, CURLOPT_SSLCERT, cert_path);
+        curl_easy_setopt(curl, CURLOPT_KEYPASSWD, password);
+        curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 30L);
+        curl_easy_setopt(curl, CURLOPT_TIMEOUT, 30L);
+        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, mi_curl_discard_write);
+        curl_easy_setopt(curl, CURLOPT_WRITEDATA, NULL);
+
+        CURLcode curl_result = curl_easy_perform(curl);
+        long http_status = 0;
+        curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_status);
+        curl_easy_cleanup(curl);
+
+        if (curl_result == CURLE_OK && http_status == 200) {
             uploaded++;
-	    printf("[MemInsight] Upload: %s -> HTTP %d\n", entry->d_name, code);
+            printf("[MemInsight] Upload: %s -> HTTP %ld\n", entry->d_name, http_status);
             if (remove(filepath) != 0)
                 fprintf(stderr, "[MemInsight] Upload: failed to delete %s after upload: %s\n",
                         filepath, strerror(errno));
         } else {
-            /* retain file locally for manual recovery */
-            fprintf(stderr, "[MemInsight] Upload: %s -> HTTP %s (curl_exit=%d), retaining for manual backup\n",
-                    entry->d_name, http_code_str[0] ? http_code_str : "0", curl_exit);
-            char errbuf[256] = {0};
-            FILE *ef = fopen(err_out, "r");
-            if (ef) {
-                if (fgets(errbuf, sizeof(errbuf), ef) != NULL)
-                    fprintf(stderr, "[MemInsight] Upload: curl stderr: %s\n", errbuf);
-                fclose(ef);
-            }
+            fprintf(stderr, "[MemInsight] Upload: %s -> HTTP %ld (curl_error=%s), retaining for manual backup\n",
+                    entry->d_name, http_status,
+                    curl_result == CURLE_OK ? "HTTP status != 200" : curl_easy_strerror(curl_result));
         }
-        unlink(err_out);
+
+        free(upload_buffer);
     }
     closedir(dir);
 
-    unlink(http_out);
     printf("[MemInsight] Upload: %d/%d file(s) uploaded to %s\n", uploaded, found, g_uploadUrl);
     return uploaded;
 }
