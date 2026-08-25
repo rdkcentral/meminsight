@@ -18,6 +18,7 @@
 
 #include "config.h"
 #include "meminsight.h"
+#include <inttypes.h>
 
 #define MEMINSIGHT_UPLOAD_URL_ENV "MEMINSIGHT_UPLOAD_URL"
 #define MEMINSIGHT_UPLOAD_URL_MAX 1024
@@ -3410,7 +3411,7 @@ void printHelpAndUsage(char *argv[], bool moreInfo, int returnCode)
 #endif
 #ifdef ENABLE_CJSON
     printf("      --fmt <format>                    Specify report format: csv (default), json, or t2\n");
-    printf("                                        t2: T2-compatible {\"Report\":[...]} with keyed process objects\n");
+    printf("                                        t2: T2-compatible {\"Report\":[{\"key\":value},...]} with flat dot-notation keys\n");
     printf("                                        (cJSON loaded at runtime via dlopen)\n");
     printf("      --json-pretty                     Pretty-print JSON output (only with --fmt json or t2)\n\n");
 #endif
@@ -3466,9 +3467,8 @@ void printHelpAndUsage(char *argv[], bool moreInfo, int returnCode)
 /**
  * @brief Scan output directory for *.t2.json files and POST each to T2.
  *
- * Uses libcurl directly so the upload URL is passed as a request argument,
- * not interpolated into a shell command. Files confirmed uploaded (HTTP 200)
- * are deleted; failed files are retained locally.
+ * Uses GetConfigFile pipe + system curl for mTLS (same pattern as T2 telemetry).
+ * Files confirmed uploaded (HTTP 200) are deleted; failed files are retained locally.
  * @param[in] outDir  Directory to scan for .t2.json files.
  * @return Number of files successfully uploaded (informational only).
  */
@@ -3494,6 +3494,13 @@ static int mi_upload_t2_files(const char *outDir)
 
     printf("[MemInsight] Upload: Using cert %s (pass via %s)\n", cert_path, pass_file);
 
+    /*
+     * HTTP code is written to a temp file; system() avoids fd conflicts with
+     * curl's --config /dev/stdin that popen() would introduce.
+     */
+    char http_out[PATH_MAX];
+    snprintf(http_out, sizeof(http_out), "%s/.mi_http_out_%d", outDir, (int)getpid());
+
     DIR *dir = opendir(outDir);
     if (!dir) {
         fprintf(stderr, "[MemInsight] Upload: Cannot open directory %s: %s\n",
@@ -3510,100 +3517,66 @@ static int mi_upload_t2_files(const char *outDir)
             continue;
 
         char filepath[PATH_MAX];
-        int np = snprintf(filepath, sizeof(filepath), "%s/%s", outDir, entry->d_name);
+	int np = snprintf(filepath, sizeof(filepath), "%s/%s", outDir, entry->d_name);
         if (np < 0 || (size_t)np >= sizeof(filepath))
             continue;
         if (access(filepath, R_OK) != 0)
             continue;
 
         found++;
+        char err_out[PATH_MAX];
+        snprintf(err_out, sizeof(err_out), "%s/.mi_curl_err_%d", outDir, (int)getpid());
 
-        char password[256] = {0};
-        FILE *pass_proc = popen("/usr/bin/GetConfigFile " MEMINSIGHT_UPLOAD_MARKER_PATH " stdout 2>/dev/null", "r");
-        if (!pass_proc || !fgets(password, sizeof(password), pass_proc)) {
-            if (pass_proc) pclose(pass_proc);
-            fprintf(stderr, "[MemInsight] Upload: Failed to get password from GetConfigFile\n");
+        char cmd[PATH_MAX * 2 + 512];
+        int n = snprintf(cmd, sizeof(cmd),
+            "/usr/bin/GetConfigFile \"%s\" stdout 2>/dev/null | "
+            "awk '{print \"--pass \" $0}' | "
+            "curl --cert-type P12 --cert \"%s\" --config /dev/stdin "
+            "--tlsv1.2 -H \"Content-type: application/json\" "
+            "-X POST -d @\"%s\" \"%s\" "
+            "--connect-timeout 30 -m 30 -w '%%{http_code}' -s -o /dev/null >\"%s\" 2>\"%s\"",
+            pass_file, cert_path, filepath, g_uploadUrl, http_out, err_out);
+
+        if (n < 0 || (size_t)n >= sizeof(cmd)) {
+            fprintf(stderr, "[MemInsight] Upload: Command too long for %s\n", entry->d_name);
             continue;
         }
-        if (pass_proc) pclose(pass_proc);
-        password[strcspn(password, "\r\n")] = '\0';
 
-        FILE *fp = fopen(filepath, "rb");
-        if (!fp) {
-            fprintf(stderr, "[MemInsight] Upload: Failed to open %s for upload: %s\n",
-                    filepath, strerror(errno));
-            continue;
-        }
+        int status = system(cmd);
+        int curl_exit = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
 
-        if (fseek(fp, 0, SEEK_END) != 0) {
+        char http_code_str[16] = {0};
+        FILE *fp = fopen(http_out, "r");
+        if (fp) {
+            if (fgets(http_code_str, sizeof(http_code_str), fp) != NULL)
+                http_code_str[strcspn(http_code_str, "\n")] = '\0';
             fclose(fp);
-            fprintf(stderr, "[MemInsight] Upload: Failed to seek %s\n", filepath);
-            continue;
         }
 
-        long upload_buffer_size = ftell(fp);
-        if (upload_buffer_size < 0 || fseek(fp, 0, SEEK_SET) != 0) {
-            fclose(fp);
-            fprintf(stderr, "[MemInsight] Upload: Failed to read length of %s\n", filepath);
-            continue;
-        }
-
-        char *upload_buffer = malloc((size_t)upload_buffer_size ? (size_t)upload_buffer_size : 1);
-        if (!upload_buffer) {
-            fclose(fp);
-            fprintf(stderr, "[MemInsight] Upload: Failed to allocate %zu bytes for %s\n",
-                    (size_t)upload_buffer_size, filepath);
-            continue;
-        }
-
-        size_t bytes_read = fread(upload_buffer, 1, (size_t)upload_buffer_size, fp);
-        fclose(fp);
-        if (bytes_read != (size_t)upload_buffer_size) {
-            free(upload_buffer);
-            fprintf(stderr, "[MemInsight] Upload: Failed to read %s\n", filepath);
-            continue;
-        }
-
-        CURL *curl = curl_easy_init();
-        if (!curl) {
-            free(upload_buffer);
-            fprintf(stderr, "[MemInsight] Upload: curl_easy_init failed for %s\n", filepath);
-            continue;
-        }
-
-        curl_easy_setopt(curl, CURLOPT_URL, g_uploadUrl);
-        curl_easy_setopt(curl, CURLOPT_POST, 1L);
-        curl_easy_setopt(curl, CURLOPT_POSTFIELDS, upload_buffer);
-        curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE_LARGE, (curl_off_t)upload_buffer_size);
-        curl_easy_setopt(curl, CURLOPT_SSLCERTTYPE, "P12");
-        curl_easy_setopt(curl, CURLOPT_SSLCERT, cert_path);
-        curl_easy_setopt(curl, CURLOPT_KEYPASSWD, password);
-        curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 30L);
-        curl_easy_setopt(curl, CURLOPT_TIMEOUT, 30L);
-        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, mi_curl_discard_write);
-        curl_easy_setopt(curl, CURLOPT_WRITEDATA, NULL);
-
-        CURLcode curl_result = curl_easy_perform(curl);
-        long http_status = 0;
-        curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_status);
-        curl_easy_cleanup(curl);
-
-        if (curl_result == CURLE_OK && http_status == 200) {
+        int code = atoi(http_code_str);
+        if (code == 200) {
             uploaded++;
-            printf("[MemInsight] Upload: %s -> HTTP %ld\n", entry->d_name, http_status);
+	    printf("[MemInsight] Upload: %s -> HTTP %d\n", entry->d_name, code);
             if (remove(filepath) != 0)
                 fprintf(stderr, "[MemInsight] Upload: failed to delete %s after upload: %s\n",
                         filepath, strerror(errno));
         } else {
-            fprintf(stderr, "[MemInsight] Upload: %s -> HTTP %ld (curl_error=%s), retaining for manual backup\n",
-                    entry->d_name, http_status,
-                    curl_result == CURLE_OK ? "HTTP status != 200" : curl_easy_strerror(curl_result));
+            /* retain file locally for manual recovery */
+            fprintf(stderr, "[MemInsight] Upload: %s -> HTTP %s (curl_exit=%d), retaining for manual backup\n",
+                    entry->d_name, http_code_str[0] ? http_code_str : "0", curl_exit);
+            char errbuf[256] = {0};
+            FILE *ef = fopen(err_out, "r");
+            if (ef) {
+                if (fgets(errbuf, sizeof(errbuf), ef) != NULL)
+                    fprintf(stderr, "[MemInsight] Upload: curl stderr: %s\n", errbuf);
+                fclose(ef);
+            }
         }
-
-        free(upload_buffer);
+        unlink(err_out);
     }
     closedir(dir);
 
+    unlink(http_out);
     printf("[MemInsight] Upload: %d/%d file(s) uploaded to %s\n", uploaded, found, g_uploadUrl);
     return uploaded;
 }
@@ -4189,7 +4162,7 @@ void saveMeminfo(FILE *out)
      * MemTotal,MemFree,MemAvailable,Buffers,Cached,SwapCached
      * Active(anon),Inactive(anon),Active(file),Inactive(file)
      * SwapTotal,SwapFree,AnonPages,Mapped,Shmem,Slab,KernelStack,
-     * VmallocUsed,CmaTotal,CmaFree
+     * VmallocUsed,CmaFree,CmaTotal
      ***/
 #define MEMINFO_NEEDED_FIELDS_COUNT 20
 #define MEMINFO_HEADER_TOTAL 256
@@ -4198,7 +4171,7 @@ void saveMeminfo(FILE *out)
         "MemTotal","MemFree","MemAvailable","Buffers","Cached","SwapCached",
         "Active(anon)","Inactive(anon)","Active(file)","Inactive(file)",
         "SwapTotal","SwapFree","AnonPages","Mapped","Shmem","Slab","KernelStack",
-	"VmallocUsed","CmaTotal","CmaFree"};
+	"VmallocUsed","CmaFree","CmaTotal"};
     static char meminfoHeader[MEMINFO_HEADER_TOTAL] = {0};
     static char meminfoValue[MEMINFO_HEADER_TOTAL] = {0};
     static int skipMemTotal = 0;
@@ -4561,6 +4534,13 @@ int writeT2Report(const char *filepath, const SetupInfo *setup, int iteration, i
     T2_ADD_STRING((key), _t2_num_buf); \
 } while(0)
 
+/* Helper macro: add a uint64_t value as a decimal string. */
+#define T2_ADD_U64_STRING(key, v) do { \
+    char _t2_u64_buf[32]; \
+    snprintf(_t2_u64_buf, sizeof(_t2_u64_buf), "%" PRIu64, (uint64_t)(v)); \
+    T2_ADD_STRING((key), _t2_u64_buf); \
+} while(0)
+
     /* Helper macro: add a single {key: "double_as_string"} object */
 #define T2_ADD_DOUBLE_STRING(key, v) do { \
     char _t2_dbl_buf[32]; \
@@ -4663,58 +4643,40 @@ int writeT2Report(const char *filepath, const SetupInfo *setup, int iteration, i
         static const char *outputNames[] = {"user", "system", "idle", "iowait", "nice", "irq", "softirq", "steal", "guest", "guest_nice", "cpu_stat"};
         const int fieldCount = 8;
         const int outputCount = 4;
-        static unsigned long prevCpu[8] = {0};
+	static uint64_t prevCpu[8] = {0};
         static int hasPrev = 0;
 
-#ifdef TESTME
-        FILE *fp = fopen((isTestMode && testStat[0]) ? testStat : STAT_FILE, "r");
-#else
-        FILE *fp = fopen(STAT_FILE, "r");
-#endif
-        if (fp) {
-            char line[256];
-            unsigned long fields[8] = {0};
-            int parsed = 0;
-            while (fgets(line, sizeof(line), fp)) {
-                if (strncmp(line, "cpu ", 4) == 0) {
-                    parsed = sscanf(line + 4, "%lu %lu %lu %lu %lu %lu %lu %lu",
-                                    &fields[0], &fields[1], &fields[2], &fields[3],
-                                    &fields[4], &fields[5], &fields[6], &fields[7]);
-                    break;
-                }
+        CpuStatSnapshot cpu = {0};
+        if (readSystemCpuStat(&cpu)) {
+            for (int i = 0; i < outputCount; i++) {
+                char key[64];
+                snprintf(key, sizeof(key), "cpu_stats.%s", outputNames[i]);
+                T2_ADD_U64_STRING(key, cpu.values[outputIdx[i]]);
             }
-            fclose(fp);
-            if (parsed >= 1) {
-                for (int i = 0; i < outputCount; i++) {
-                    char key[64];
-                    snprintf(key, sizeof(key), "cpu_stats.%s", outputNames[i]);
-		    T2_ADD_ULONG_STRING(key, fields[outputIdx[i]]);
-                }
 
-                /* Compute deltas */
-                unsigned long delta_user = 0, delta_system = 0, delta_idle = 0, delta_total = 0;
-                if (hasPrev) {
-                    delta_user = fields[0] - prevCpu[0];
-                    delta_system = fields[2] - prevCpu[2];
-                    delta_idle = fields[3] - prevCpu[3];
-                    for (int i = 0; i < fieldCount; i++)
-                        delta_total += (fields[i] - prevCpu[i]);
-                }
-                T2_ADD_ULONG_STRING("cpu_stats.delta_user", delta_user);
-                T2_ADD_ULONG_STRING("cpu_stats.delta_system", delta_system);
-                T2_ADD_ULONG_STRING("cpu_stats.delta_idle", delta_idle);
-                T2_ADD_ULONG_STRING("cpu_stats.delta_total", delta_total);
-
-                double cpu_percent = 0.0;
-                if (delta_total > 0)
-                    cpu_percent = (double)(delta_user + delta_system) / (double)delta_total * 100.0;
-                T2_ADD_DOUBLE_STRING("cpu_stats.cpu_percent", cpu_percent);
-
-                /* Save current as previous for next iteration */
+            /* Compute deltas */
+            uint64_t delta_user = 0, delta_system = 0, delta_idle = 0, delta_total = 0;
+            if (hasPrev) {
+                delta_user = cpu.values[0] - prevCpu[0];
+                delta_system = cpu.values[2] - prevCpu[2];
+                delta_idle = cpu.values[3] - prevCpu[3];
                 for (int i = 0; i < fieldCount; i++)
-                    prevCpu[i] = fields[i];
-                hasPrev = 1;
+                    delta_total += (cpu.values[i] - prevCpu[i]);
             }
+            T2_ADD_U64_STRING("cpu_stats.delta_user", delta_user);
+            T2_ADD_U64_STRING("cpu_stats.delta_system", delta_system);
+            T2_ADD_U64_STRING("cpu_stats.delta_idle", delta_idle);
+            T2_ADD_U64_STRING("cpu_stats.delta_total", delta_total);
+
+            double cpu_percent = 0.0;
+            if (delta_total > 0)
+                cpu_percent = (double)(delta_user + delta_system) / (double)delta_total * 100.0;
+            T2_ADD_DOUBLE_STRING("cpu_stats.cpu_percent", cpu_percent);
+
+            /* Save current as previous for next iteration */
+            for (int i = 0; i < fieldCount; i++)
+                prevCpu[i] = cpu.values[i];
+            hasPrev = 1;
         }
     }
 
@@ -5057,6 +5019,7 @@ int writeT2Report(const char *filepath, const SetupInfo *setup, int iteration, i
 #undef T2_ADD_STRING
 #undef T2_ADD_NUMBER
 #undef T2_ADD_ULONG_STRING
+#undef T2_ADD_U64_STRING
 #undef T2_ADD_DOUBLE_STRING
     return rc;
 }
@@ -5432,11 +5395,6 @@ int main(int argc, char *argv[])
 
     const char *resolved_upload_url = resolveUploadUrl(cli_upload_url, cli_upload_url_set);
     bool effective_upload_enable = cli_upload_enable;
-    if (cli_upload_enable && !resolved_upload_url)
-    {
-        PRINT_MUST("Upload requested but no URL provided via --upload-url or %s; skipping upload signaling.\n", MEMINSIGHT_UPLOAD_URL_ENV);
-        effective_upload_enable = false;
-    }
 
     printf("\nExecuting: ");
     for (int i = 0; i < argc; i++)
@@ -5479,16 +5437,15 @@ int main(int argc, char *argv[])
 #endif
 
 #ifdef ENABLE_HTTP_UPLOAD
-    if (effective_upload_enable)
+    /* direct HTTP upload only when an explicit URL is provided (CLI/env), and otherwise keep g_uploadUrl NULL */
+    if (effective_upload_enable && resolved_upload_url)
         g_uploadUrl = resolved_upload_url;
 #endif
 
     /*
-     * Touch the S3 upload marker ONLY when NOT doing direct HTTP upload.
-     * When ENABLE_HTTP_UPLOAD is active and g_uploadUrl is set, our inline
-     * curl upload replaces the legacy S3 path — touching the marker would
-     * trigger the background S3 service which deletes files from the output
-     * directory before our upload can read them.
+     * Preserve the legacy marker-based upload when --upload-enable is used
+     * without an explicit CLI/environment upload URL. When a URL is supplied,
+     * the HTTP upload path handles the T2 files instead.
      */
     if (effective_upload_enable)
     {

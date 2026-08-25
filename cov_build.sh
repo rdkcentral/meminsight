@@ -21,7 +21,7 @@ set -e
 
 ENABLE_CJSON="no"
 ENABLE_TEST="no"
-ENABLE_HTTP_UPLOAD="yes"
+ENABLE_HTTP_UPLOAD="no"
 
 # Display help message
 show_help() {

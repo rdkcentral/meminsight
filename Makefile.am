@@ -28,7 +28,7 @@ meminsight_HEADERS = src/meminsight.h
 AM_CPPFLAGS = @CPPFLAGS@
 AM_LDFLAGS = @LDFLAGS@
 
-meminsight_LDADD = -ldl $(LIBCURL)
+meminsight_LDADD = -ldl
 
 # Add clean targets for better cleanup
 CLEANFILES = *.o *.lo *.la *.al *.so *.a

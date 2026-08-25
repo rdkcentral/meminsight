@@ -84,16 +84,11 @@ AC_ARG_ENABLE([http-upload],
     no)  enable_http_upload=no  ;;
     *)   AC_MSG_ERROR([bad value ${enableval} for --enable-http-upload]) ;;
    esac],
-  [enable_http_upload=yes])
+  [enable_http_upload=no])
 
 AS_IF([test "x$enable_http_upload" = "xyes"], [
-  AC_DEFINE([ENABLE_HTTP_UPLOAD], [1], [Define to enable HTTP upload via libcurl])
-  AC_CHECK_HEADERS([curl/curl.h], [], [AC_MSG_ERROR([curl/curl.h not found; required for HTTP upload])])
-  AC_CHECK_LIB([curl], [curl_easy_init], [], [AC_MSG_ERROR([libcurl not found; required for HTTP upload])])
-  LIBCURL="-lcurl"
+  AC_DEFINE([ENABLE_HTTP_UPLOAD], [1], [Define to enable HTTP upload via shell curl + GetConfigFile])
 ])
-
-AC_SUBST([LIBCURL])
 
 # ---------------------------------------------------------------------------
 # Optional feature: rdkcertselector (linked at build time, like telemetry)
