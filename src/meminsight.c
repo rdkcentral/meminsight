@@ -1986,7 +1986,7 @@ size_t getMacAddress(const char *iface, char *macAddress, size_t szBufSize)
     close(fd);
 
     unsigned char *mac = (unsigned char *)ifr.ifr_hwaddr.sa_data;
-    size_t ret = snprintf(macAddress, szBufSize, "%02X:%02X:%02X:%02X:%02X:%02X", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+    size_t ret = snprintf(macAddress, szBufSize, "%02X%02X%02X%02X%02X%02X", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
     return ret;
 }
 
