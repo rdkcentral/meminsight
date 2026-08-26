@@ -5443,7 +5443,7 @@ int main(int argc, char *argv[])
 
 #ifdef ENABLE_HTTP_UPLOAD
     /* direct HTTP upload only when an explicit URL is provided (CLI/env), and otherwise keep g_uploadUrl NULL */
-    if (effective_upload_enable && resolved_upload_url)
+    if (effective_upload_enable && resolved_upload_url && g_reportFormat == REPORT_T2)
         g_uploadUrl = resolved_upload_url;
 #endif
 
