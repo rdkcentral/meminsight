@@ -18,6 +18,10 @@
 
 #include "config.h"
 #include "meminsight.h"
+#include <inttypes.h>
+
+#define MEMINSIGHT_UPLOAD_URL_ENV "MEMINSIGHT_UPLOAD_URL"
+#define MEMINSIGHT_UPLOAD_URL_MAX 1024
 
 #ifdef ENABLE_CJSON
 #include <dlfcn.h>
@@ -170,6 +174,19 @@ unsigned force_smaps = 0;                  // CLI override: force reading /proc/
 char gSMAPS_OR_ROLLUP[] = "smaps_rollup";  // Default source for process memory info (may be overridden by --smaps)
 int g_backupCount = DEFAULT_BACKUP_COUNT;  // Number of report files handled by pre-run backup policy (default: 30, max: 100)
 int g_backupArgPassed = 0;                 // 1 when --backup/-b is explicitly provided, else 0
+int g_topProcs = 5;                  // Top N processes by PSS for T2 report (default: 5)
+
+typedef enum {
+    SORT_BY_RSS = 0,
+    SORT_BY_PSS,
+    SORT_BY_CPU_TIME,
+    SORT_BY_DELTA_CPU_TIME
+} SortByField;
+static SortByField g_sortBy = SORT_BY_RSS;
+
+#ifdef ENABLE_HTTP_UPLOAD
+static const char *g_uploadUrl = NULL;
+#endif
 
 typedef enum {
     FRAG_SRC_NONE = 0,
@@ -693,6 +710,41 @@ static bool readConfigStoreValue(const char *dir, const char *key, char *value, 
 }
 
 /**
+ * @brief Resolve upload URL with CLI-over-environment priority.
+ *
+ * Resolution order is:
+ * 1) explicit CLI --upload-url
+ * 2) MEMINSIGHT_UPLOAD_URL environment variable
+ *
+ * @param[in] cli_upload_url      CLI-provided upload URL buffer.
+ * @param[in] cli_upload_url_set  true when --upload-url was passed.
+ * @return Resolved URL pointer, or NULL when no non-empty source exists.
+ */
+static const char *resolveUploadUrl(const char *cli_upload_url, bool cli_upload_url_set)
+{
+    if (cli_upload_url_set && cli_upload_url && cli_upload_url[0] != '\0')
+    {
+#ifdef TESTME
+        fprintf(stderr, "Upload URL resolved from CLI\n");
+#endif
+        PRINT_INFO("Upload URL resolved from CLI\n");
+        return cli_upload_url;
+    }
+
+    const char *env_url = getenv(MEMINSIGHT_UPLOAD_URL_ENV);
+    if (env_url && env_url[0] != '\0')
+    {
+#ifdef TESTME
+        fprintf(stderr, "Upload URL resolved from environment \n");
+#endif
+        PRINT_INFO("Upload URL resolved from environment\n");
+        return env_url;
+    }
+
+    return NULL;
+}
+
+/**
  * @brief Write (or selectively update) the configstore state file.
  *
  * Writes key=value pairs to <output-dir>/.meminsight_configstore before the
@@ -709,25 +761,26 @@ static bool readConfigStoreValue(const char *dir, const char *key, char *value, 
  * @param[in] interval        Resolved interval in seconds between iterations.
  * @param[in] upload_enabled  true if --upload-enable was passed.
  * @param[in] upload_interval Upload cadence in seconds (0 if not specified).
+ * @param[in] upload_url      Resolved upload URL, NULL when unavailable.
  */
 static void writeConfigStore(const SetupInfo *setup, int iterations, int interval,
-                             bool upload_enabled, int upload_interval)
+                             bool upload_enabled, int upload_interval, const char *upload_url)
 {
     (void)upload_enabled;
     (void)upload_interval;
+    (void)upload_url;
 
     const char * const keys[] = {
         "UPTIME", "KERNEL_VERSION", "MEMINSIGHT_VERSION", "REPORT_VERSION",
-        "RUN_ITERATIONS", "RUN_INTERVAL", "RUN_ID", "OUTPUT_FORMAT",
-        "OUTPUT_DIR",
+        "RUN_ITERATIONS", "RUN_INTERVAL", "RUN_ID", "OUTPUT_FORMAT", "OUTPUT_DIR",
         "BACKUP_ENABLED", "BACKUP_COUNT", "BACKUP_BASE", "FRAGMENTATION_ENABLED"
     };
     const int nkeys = (int)(sizeof(keys) / sizeof(keys[0]));
 
     char v_uptime[64], v_kver[KERNEL_LEN], v_mver[32], v_rver[32];
     char v_iter[16], v_intv[16], v_runid[32], v_fmt[8];
-    char v_outdir[PATH_MAX];
     char v_backup_enabled[4], v_backup_count[16], v_backup_base[32], v_frag_enabled[4];
+    char v_outdir[PATH_MAX];
 
     snprintf(v_uptime, sizeof(v_uptime), "%s", getSystemUptime());
     snprintf(v_kver,   sizeof(v_kver),   "%s", setup->kernelVersion);
@@ -736,7 +789,8 @@ static void writeConfigStore(const SetupInfo *setup, int iterations, int interva
     snprintf(v_iter,   sizeof(v_iter),   "%d", iterations);
     snprintf(v_intv,   sizeof(v_intv),   "%d", interval);
     snprintf(v_runid,  sizeof(v_runid),  "%s", setup->runHash);
-    snprintf(v_fmt,    sizeof(v_fmt),    "%s", (g_reportFormat == REPORT_JSON) ? "json" : "csv");
+    snprintf(v_fmt,    sizeof(v_fmt),    "%s", (g_reportFormat == REPORT_T2) ? "t2"
+                                             : (g_reportFormat == REPORT_JSON) ? "json" : "csv");
     snprintf(v_outdir, sizeof(v_outdir), "%s", setup->outputDir);
     snprintf(v_backup_enabled, sizeof(v_backup_enabled), "%d", 1);
     snprintf(v_backup_count, sizeof(v_backup_count), "%d", g_backupCount);
@@ -752,8 +806,7 @@ static void writeConfigStore(const SetupInfo *setup, int iterations, int interva
 
     const char * const vals[] = {
         v_uptime, v_kver, v_mver, v_rver,
-        v_iter, v_intv, v_runid, v_fmt,
-        v_outdir,
+        v_iter, v_intv, v_runid, v_fmt, v_outdir,
         v_backup_enabled, v_backup_count, v_backup_base, v_frag_enabled
     };
 
@@ -843,8 +896,9 @@ SetupInfo initializeSetupInfo(const char *outDir, Report_Format format)
     /* One-time directory and file setup. */
     info.outputDir = (outDir && *outDir) ? outDir : DEFAULT_OUT_DIR;
     info.dirCreated = ensure_output_dir(info.outputDir, info.runHash);
-    info.reportFileName = (format == REPORT_JSON) ? JSON_FILE_NAME : CSV_FILE_NAME;
-
+    info.reportFileName = (format == REPORT_T2)   ? T2_FILE_NAME
+                        : (format == REPORT_JSON) ? JSON_FILE_NAME
+                        :                           CSV_FILE_NAME;
     /* One-time device metadata. */
     char interfaceName[IFNAMSIZ] = {0};
     if (getDeviceProperty(deviceInterfaceKey, interfaceName, sizeof(interfaceName)) && interfaceName[0] != '\0') {
@@ -1932,7 +1986,7 @@ size_t getMacAddress(const char *iface, char *macAddress, size_t szBufSize)
     close(fd);
 
     unsigned char *mac = (unsigned char *)ifr.ifr_hwaddr.sa_data;
-    size_t ret = snprintf(macAddress, szBufSize, "%02x%02x%02x%02x%02x%02x", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+    size_t ret = snprintf(macAddress, szBufSize, "%02X%02X%02X%02X%02X%02X", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
     return ret;
 }
 
@@ -3345,14 +3399,20 @@ void printHelpAndUsage(char *argv[], bool moreInfo, int returnCode)
     printf("      --frag                        Enable fragmentation data collection (default: disabled)\n");
     printf("  -b, --backup <count>              Number of report files to keep in pre-run backup handling (default: %d, max: %d)\n", DEFAULT_BACKUP_COUNT, MAX_BACKUP_COUNT);
     printf("  -s, --smaps                       Force /proc/<pid>/smaps (disable auto smaps_rollup detection)\n");
+#ifdef ENABLE_HTTP_UPLOAD
+    printf("      --upload-url <url>                Override T2 upload endpoint (default: env or built-in)\n");
+#endif
+    printf("      --top-procs <N>                   Limit T2 report to top N processes by PSS (default: 5)\n");
+    printf("      --sort-by <field>                 Sort T2 processes by: RSS (default), PSS, CPU_TIME, delta_cpu_time\n");
 #ifdef TESTME
     printf("  -t, --test <smapsFile> <meminfoFile> [buddyinfoFile] [pagetypeinfoFile] [statFile] [bandwidthFile]\n");
     printf("                                    Run in test mode using supplied sample files\n\n");
 #endif
 #ifdef ENABLE_CJSON
-    printf("      --fmt <format>                Specify report format: csv (default) or json\n");
-    printf("                                    (cJSON loaded at runtime via dlopen)\n");
-    printf("      --json-pretty                 Pretty-print JSON output (only with --fmt json)\n\n");
+    printf("      --fmt <format>                    Specify report format: csv (default), json, or t2\n");
+    printf("                                        t2: T2-compatible {\"Report\":[{\"key\":value},...]} with flat dot-notation keys\n");
+    printf("                                        (cJSON loaded at runtime via dlopen)\n");
+    printf("      --json-pretty                     Pretty-print JSON output (only with --fmt json or t2)\n\n");
 #endif
 
     if (moreInfo)
@@ -3362,8 +3422,9 @@ void printHelpAndUsage(char *argv[], bool moreInfo, int returnCode)
 
         printf("Default behavior (no flags):\n");
         printf("  - Runs indefinite number of iterations, with an interval of 15 minutes, monitors all processes with log level INFO\n");
-        printf("  - Output: %s/<MAC>_<timestamp>_iter<iteration>_%s (CSV format)\n", DEFAULT_OUT_DIR, CSV_FILE_NAME);
-        printf("  - Output: %s/<MAC>_<timestamp>_iter<iteration>_%s (JSON format, with --fmt json)\n\n", DEFAULT_OUT_DIR, JSON_FILE_NAME);
+	printf("  - Output: %s/<MAC>_<timestamp>_iter<iteration>_%s (CSV format)\n", DEFAULT_OUT_DIR, CSV_FILE_NAME);
+        printf("  - Output: %s/<MAC>_<timestamp>_iter<iteration>_%s (JSON format, with --fmt json)\n", DEFAULT_OUT_DIR, JSON_FILE_NAME);
+        printf("  - Output: %s/<MAC>_<timestamp>_iter<iteration>_%s (T2 format, with --fmt t2)\n\n", DEFAULT_OUT_DIR, T2_FILE_NAME);
 
         printf("Example:\n");
         printf("  %s\n", argv[0]);
@@ -3385,9 +3446,146 @@ void printHelpAndUsage(char *argv[], bool moreInfo, int returnCode)
         printf("  - If only one is set, the other uses its default or config value.\n");
         printf("  - Output file name format (CSV): <MAC>_<TIMESTAMP>_iter<iteration>_%s\n", CSV_FILE_NAME);
         printf("  - Output file name format (JSON): <MAC>_<TIMESTAMP>_iter<iteration>_%s (use with --fmt json)\n", JSON_FILE_NAME);
+        printf("  - Output file name format (T2): <MAC>_<TIMESTAMP>_iter<iteration>_%s (use with --fmt t2)\n", T2_FILE_NAME);
     }
     exit(returnCode);
 }
+
+#ifdef ENABLE_HTTP_UPLOAD
+/*
+ * -----------------------------------------------------------------------
+ * * HTTP UPLOAD — shell curl + GetConfigFile mTLS pattern
+ * -----------------------------------------------------------------------
+ * Constructs a shell pipeline per file:
+ * GetConfigFile <pass_file> stdout | awk '{print "--pass " $0}' |
+ * curl --cert-type P12 --cert <cert> --config /dev/stdin ...
+ * This keeps the cert passphrase out of the process table (ps output).
+ * -----------------------------------------------------------------------
+ */
+
+/**
+ * @brief Scan output directory for *.t2.json files and POST each to T2.
+ *
+ * Uses GetConfigFile pipe + system curl for mTLS (same pattern as T2 telemetry).
+ * Files confirmed uploaded (HTTP 200) are deleted; failed files are retained locally.
+ * @param[in] outDir  Directory to scan for .t2.json files.
+ * @return Number of files successfully uploaded (informational only).
+ */
+static int mi_upload_t2_files(const char *outDir)
+{
+    if (!g_uploadUrl || !outDir)
+        return 0;
+
+    /* Prefer dynamic xPKI cert; fall back to static xPKI cert */
+    const char *cert_path = NULL;
+    const char *pass_file = NULL;
+    if (access("/opt/certs/devicecert_1.pk12", F_OK) == 0) {
+        cert_path = "/opt/certs/devicecert_1.pk12";
+        pass_file = "/tmp/.cfgDynamicxpki";
+    } else if (access("/etc/ssl/certs/staticXpkiCrt.pk12", F_OK) == 0) {
+        cert_path = "/etc/ssl/certs/staticXpkiCrt.pk12";
+        pass_file = "/tmp/.cfgStaticxpki";
+    }
+    if (!cert_path) {
+        fprintf(stderr, "[MemInsight] Upload: No device cert available, skipping upload.\n");
+        return 0;
+    }
+
+    printf("[MemInsight] Upload: Using cert %s (pass via %s)\n", cert_path, pass_file);
+
+    /*
+     * HTTP code is written to a temp file; system() avoids fd conflicts with
+     * curl's --config /dev/stdin that popen() would introduce.
+     */
+    char http_out[PATH_MAX];
+    snprintf(http_out, sizeof(http_out), "%s/.mi_http_out_%d", outDir, (int)getpid());
+
+    DIR *dir = opendir(outDir);
+    if (!dir) {
+        fprintf(stderr, "[MemInsight] Upload: Cannot open directory %s: %s\n",
+                outDir, strerror(errno));
+        return 0;
+    }
+
+    int uploaded = 0;
+    int found = 0;
+    struct dirent *entry;
+    while ((entry = readdir(dir)) != NULL) {
+        size_t nlen = strlen(entry->d_name);
+        if (nlen < 9 || strcmp(entry->d_name + nlen - 8, ".t2.json") != 0)
+            continue;
+
+        char filepath[PATH_MAX];
+	int np = snprintf(filepath, sizeof(filepath), "%s/%s", outDir, entry->d_name);
+        if (np < 0 || (size_t)np >= sizeof(filepath))
+            continue;
+        if (access(filepath, R_OK) != 0)
+            continue;
+
+        found++;
+        char err_out[PATH_MAX];
+        snprintf(err_out, sizeof(err_out), "%s/.mi_curl_err_%d", outDir, (int)getpid());
+
+        /* Reject characters that can break shell quoting and lead to command injection. */
+         if (strpbrk(g_uploadUrl, "\"'`$\\\n\r") != NULL) {
+             fprintf(stderr, "[MemInsight] Upload: Invalid characters in upload URL; skipping upload.\n");
+             continue;
+         }
+
+        char cmd[PATH_MAX * 2 + 512];
+        int n = snprintf(cmd, sizeof(cmd),
+            "/usr/bin/GetConfigFile \"%s\" stdout 2>/dev/null | "
+            "awk '{print \"--pass \" $0}' | "
+            "curl --cert-type P12 --cert \"%s\" --config /dev/stdin "
+            "--tlsv1.2 -H \"Content-type: application/json\" "
+            "-X POST -d @\"%s\" \"%s\" "
+            "--connect-timeout 30 -m 30 -w '%%{http_code}' -s -o /dev/null >\"%s\" 2>\"%s\"",
+            pass_file, cert_path, filepath, g_uploadUrl, http_out, err_out);
+
+        if (n < 0 || (size_t)n >= sizeof(cmd)) {
+            fprintf(stderr, "[MemInsight] Upload: Command too long for %s\n", entry->d_name);
+            continue;
+        }
+
+        int status = system(cmd);
+        int curl_exit = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+
+        char http_code_str[16] = {0};
+        FILE *fp = fopen(http_out, "r");
+        if (fp) {
+            if (fgets(http_code_str, sizeof(http_code_str), fp) != NULL)
+                http_code_str[strcspn(http_code_str, "\n")] = '\0';
+            fclose(fp);
+        }
+
+        int code = atoi(http_code_str);
+        if (code == 200) {
+            uploaded++;
+	    printf("[MemInsight] Upload: %s -> HTTP %d\n", entry->d_name, code);
+            if (remove(filepath) != 0)
+                fprintf(stderr, "[MemInsight] Upload: failed to delete %s after upload: %s\n",
+                        filepath, strerror(errno));
+        } else {
+            /* retain file locally for manual recovery */
+            fprintf(stderr, "[MemInsight] Upload: %s -> HTTP %s (curl_exit=%d), retaining for manual backup\n",
+                    entry->d_name, http_code_str[0] ? http_code_str : "0", curl_exit);
+            char errbuf[256] = {0};
+            FILE *ef = fopen(err_out, "r");
+            if (ef) {
+                if (fgets(errbuf, sizeof(errbuf), ef) != NULL)
+                    fprintf(stderr, "[MemInsight] Upload: curl stderr: %s\n", errbuf);
+                fclose(ef);
+            }
+        }
+        unlink(err_out);
+    }
+    closedir(dir);
+
+    unlink(http_out);
+    printf("[MemInsight] Upload: %d/%d file(s) uploaded to %s\n", uploaded, found, g_uploadUrl);
+    return uploaded;
+}
+#endif /* ENABLE_HTTP_UPLOAD */
 
 /**
  * @brief Run system-wide collection mode and emit CSV or JSON reports.
@@ -3403,9 +3601,11 @@ void printHelpAndUsage(char *argv[], bool moreInfo, int returnCode)
  * @param[in] long_run        When true, ignore iteration count termination rules.
  * @param[in] upload_enabled  Whether upload signaling is enabled.
  * @param[in] upload_interval Upload cadence in seconds.
+ * @param[in] upload_url      Resolved upload URL, NULL when unavailable.
  * @return 0 on success, -1 on handled failure.
  */
-int collectSystemMemoryStats(bool enableKThreads, const char *outDir, int iterations, int interval, bool long_run, bool upload_enabled, int upload_interval)
+int collectSystemMemoryStats(bool enableKThreads, const char *outDir, int iterations, int interval, bool long_run, 
+                                   bool upload_enabled, int upload_interval, const char *upload_url)
 {
     // Initialize setup info (MAC, firmware name, output dir, file extension)
     SetupInfo setup = initializeSetupInfo(outDir, g_reportFormat);
@@ -3414,7 +3614,7 @@ int collectSystemMemoryStats(bool enableKThreads, const char *outDir, int iterat
         return -1;
     }
 
-    writeConfigStore(&setup, iterations, interval, upload_enabled, upload_interval);
+    writeConfigStore(&setup, iterations, interval, upload_enabled, upload_interval, upload_url);
 
     if (upload_enabled)
         (void)writeUploadMarker(&setup, upload_enabled, upload_interval);
@@ -3596,6 +3796,13 @@ int collectSystemMemoryStats(bool enableKThreads, const char *outDir, int iterat
                 return -1;
             }
         }
+        else if (g_reportFormat == REPORT_T2) {
+            if (writeT2Report(outputfile, &setup, iter + 1, iterations, interval) != 0) {
+                PRINT_ERROR("Failed to write T2 JSON output file: %s\n", outputfile);
+                removeFileIfPresent(MEMINSIGHT_INPROGRESS_FILE);
+                return -1;
+            }
+        }
 #endif
 #ifdef TESTME
         if (1 == isTestMode) {
@@ -3609,6 +3816,12 @@ int collectSystemMemoryStats(bool enableKThreads, const char *outDir, int iterat
         }
     }
     printf("\n---- Completed Data Capture ----\n");
+
+#ifdef ENABLE_HTTP_UPLOAD
+    if (upload_enabled && g_reportFormat == REPORT_T2)
+        mi_upload_t2_files(setup.outputDir);
+#endif
+
     removeFileIfPresent(MEMINSIGHT_INPROGRESS_FILE);
     return 0;
 }
@@ -3632,9 +3845,10 @@ int collectSystemMemoryStats(bool enableKThreads, const char *outDir, int iterat
  * @param[in] long_run         Run indefinitely when true (ignores iteration count).
  * @param[in] upload_enabled   true if --upload-enable was passed.
  * @param[in] upload_interval  Upload cadence in seconds (0 if not specified).
+ * @param[in] upload_url       Resolved upload URL, NULL when unavailable.
  * @return 0 on success, -1 on failure.
  */
-int handleConfigMode(const char *confFile, const char *cli_out_dir, bool cli_output_set, int cli_iterations, int cli_interval, bool enableKThreads, bool long_run, bool upload_enabled, int upload_interval)
+int handleConfigMode(const char *confFile, const char *cli_out_dir, bool cli_output_set, int cli_iterations, int cli_interval, bool enableKThreads, bool long_run, bool upload_enabled, int upload_interval, const char *upload_url)
 {
     Config_Data config = {0};
     if (parseConfig(confFile, &config) != 0)
@@ -3704,7 +3918,7 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, bool cli_out
     config.iterations = final_iterations;
     config.interval = final_interval;
 
-    writeConfigStore(&setup, final_iterations, final_interval, upload_enabled, upload_interval);
+    writeConfigStore(&setup, final_iterations, final_interval, upload_enabled, upload_interval, upload_url);
 
     if (upload_enabled)
         (void)writeUploadMarker(&setup, upload_enabled, upload_interval);
@@ -3851,7 +4065,7 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, bool cli_out
                 g_cjson.AddItemToObject(g_rootObject, "processes", processesArray);
             }
 #endif
-            if (g_reportFormat != REPORT_CSV) {
+            if (g_reportFormat == REPORT_JSON) {
                 freeProcessInfoList();
             }
         }
@@ -3901,6 +4115,16 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, bool cli_out
                 return -1;
             }
         }
+        else if (g_reportFormat == REPORT_T2) {
+            if (writeT2Report(outputFilePath, &setup, iter + 1, final_iterations, final_interval) != 0) {
+                PRINT_ERROR("Failed to write T2 JSON output file: %s\n", outputFilePath);
+                for (unsigned j = 0; j < config.whiteListCount; j++)
+                    if (config.whitelist[j]) free(config.whitelist[j]);
+                if (config.whitelist) free(config.whitelist);
+                removeFileIfPresent(MEMINSIGHT_INPROGRESS_FILE);
+                return -1;
+            }
+        }
 #endif
 
         if (final_interval > 0 && iter + 1 < final_iterations)
@@ -3923,6 +4147,12 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, bool cli_out
         free(config.whitelist);
     }
     PRINT_INFO("\n---- Completed Data Capture ----\n");
+
+#ifdef ENABLE_HTTP_UPLOAD
+    if (upload_enabled && g_reportFormat == REPORT_T2)
+        mi_upload_t2_files(setup.outputDir);
+#endif
+
     removeFileIfPresent(MEMINSIGHT_INPROGRESS_FILE);
     return 0;
 }
@@ -3937,7 +4167,7 @@ void saveMeminfo(FILE *out)
      * MemTotal,MemFree,MemAvailable,Buffers,Cached,SwapCached
      * Active(anon),Inactive(anon),Active(file),Inactive(file)
      * SwapTotal,SwapFree,AnonPages,Mapped,Shmem,Slab,KernelStack,
-     * VmallocUsed,CmaTotal,CmaFree
+     * VmallocUsed,CmaFree,CmaTotal
      ***/
 #define MEMINFO_NEEDED_FIELDS_COUNT 20
 #define MEMINFO_HEADER_TOTAL 256
@@ -3946,7 +4176,7 @@ void saveMeminfo(FILE *out)
         "MemTotal","MemFree","MemAvailable","Buffers","Cached","SwapCached",
         "Active(anon)","Inactive(anon)","Active(file)","Inactive(file)",
         "SwapTotal","SwapFree","AnonPages","Mapped","Shmem","Slab","KernelStack",
-        "VmallocUsed","CmaFree","CmaTotal"};
+	"VmallocUsed","CmaFree","CmaTotal"};
     static char meminfoHeader[MEMINFO_HEADER_TOTAL] = {0};
     static char meminfoValue[MEMINFO_HEADER_TOTAL] = {0};
     static int skipMemTotal = 0;
@@ -4087,7 +4317,7 @@ void saveMeminfo(FILE *out)
  * @brief Add meminfo key/value fields to a JSON root object.
  *
  * Reads /proc/meminfo (or the test fixture when TESTME is set) and
- * writes each needed field as a numeric member of @p root.
+ * writes each needed field as numeric member of @p root.
  * Uses the same field list as the CSV saveMeminfo() for consistency.
  */
 void saveMeminfo_JSON(cJSON_t *root)
@@ -4105,7 +4335,6 @@ void saveMeminfo_JSON(cJSON_t *root)
         PRINT_ERROR("Failed to create meminfo JSON object\n");
         return;
     }
-
 #ifdef TESTME
     FILE *meminfo = fopen((isTestMode) ? testMeminfo : MEMINFO_FILE, "r");
 #else
@@ -4119,6 +4348,8 @@ void saveMeminfo_JSON(cJSON_t *root)
 
     char tmp[128];
     char name[64];
+    char key[96];
+    char valueStr[32];
     unsigned long value;
 
     while (fgets(tmp, sizeof(tmp), meminfo)) {
@@ -4248,6 +4479,556 @@ int writeJSONToFile(const char *filepath, const SetupInfo *setup)
     return rc;
 }
 
+/**
+ * @brief Build and write a T2-compatible JSON report to file.
+ *
+ * Produces the format: {"Report":[{key:value},...]} where processes are
+ * represented as keyed objects (e.g., {"OneWifi":{"RSS":1234,"PSS":567,...}})
+ * instead of an anonymous array. This format is directly ingestible by the
+ * T2 Elastic telemetry endpoint.
+ *
+ * Unlike writeJSONToFile(), this function builds the T2 structure from scratch
+ * using the per-iteration state (headProcessInfo linked list, meminfo, cpustat).
+ * The caller must NOT have already freed the process list.
+ *
+ * @param[in] filepath    Output file path.
+ * @param[in] setup       SetupInfo with device metadata.
+ * @param[in] iteration   Current iteration number (1-based).
+ * @param[in] iterations  Total iterations configured.
+ * @param[in] interval    Interval in seconds between iterations.
+ * @return 0 on success, -1 on error.
+ */
+int writeT2Report(const char *filepath, const SetupInfo *setup, int iteration, int iterations, int interval)
+{
+    /* Build the root: {"Report": [...]} */
+    cJSON_t *root = g_cjson.CreateObject();
+    if (!root) {
+        PRINT_ERROR("T2: Failed to create root object\n");
+        return -1;
+    }
+
+    cJSON_t *reportArray = g_cjson.CreateArray();
+    if (!reportArray) {
+        PRINT_ERROR("T2: Failed to create Report array\n");
+        g_cjson.Delete(root);
+        return -1;
+    }
+
+    /* Helper macro: add a single {key: string_value} object to reportArray */
+#define T2_ADD_STRING(key, val) do { \
+    cJSON_t *_obj = g_cjson.CreateObject(); \
+    if (_obj) { \
+        g_cjson.AddStringToObject(_obj, key, val); \
+        g_cjson.AddItemToArray(reportArray, _obj); \
+    } \
+} while(0)
+
+    /* Helper macro: add a single {key: number_value} object to reportArray */
+#define T2_ADD_NUMBER(key, val) do { \
+    cJSON_t *_obj = g_cjson.CreateObject(); \
+    if (_obj) { \
+        g_cjson.AddNumberToObject(_obj, key, (double)(val)); \
+        g_cjson.AddItemToArray(reportArray, _obj); \
+    } \
+} while(0)
+
+/* Helper macro: add a single {key: "unsigned_long_as_string"} object */
+#define T2_ADD_ULONG_STRING(key, v) do { \
+    char _t2_num_buf[32]; \
+    snprintf(_t2_num_buf, sizeof(_t2_num_buf), "%lu", (unsigned long)(v)); \
+    T2_ADD_STRING((key), _t2_num_buf); \
+} while(0)
+
+/* Helper macro: add a uint64_t value as a decimal string. */
+#define T2_ADD_U64_STRING(key, v) do { \
+    char _t2_u64_buf[32]; \
+    snprintf(_t2_u64_buf, sizeof(_t2_u64_buf), "%" PRIu64, (uint64_t)(v)); \
+    T2_ADD_STRING((key), _t2_u64_buf); \
+} while(0)
+
+    /* Helper macro: add a single {key: "double_as_string"} object */
+#define T2_ADD_DOUBLE_STRING(key, v) do { \
+    char _t2_dbl_buf[32]; \
+    snprintf(_t2_dbl_buf, sizeof(_t2_dbl_buf), "%.2f", (double)(v)); \
+    T2_ADD_STRING((key), _t2_dbl_buf); \
+} while(0)
+
+    /* --- Standard T2 metadata --- */
+    T2_ADD_STRING("Profile_Name", "MEMINSIGHT_REPORT");
+    T2_ADD_STRING("Profile",      "RDKB");
+    T2_ADD_STRING("mac",          setup->mac);
+    T2_ADD_STRING("Version",      setup->fwName);
+
+    /* Parse device.model, device.version, device.environment from firmware name.
+     * Format: MODEL_VERSION_ENVIRONMENT  e.g. CGM4331COM_DEV_stable2_20260610090917sdy_65318
+     * First token = model, second = version, rest = environment */
+    {
+        char fwCopy[256];
+        strncpy(fwCopy, setup->fwName, sizeof(fwCopy) - 1);
+        fwCopy[sizeof(fwCopy) - 1] = '\0';
+
+        char *model = fwCopy;
+        char *version = NULL;
+        char *environment = NULL;
+        char *first_sep = strchr(fwCopy, '_');
+        if (first_sep) {
+            *first_sep = '\0';
+            version = first_sep + 1;
+            char *second_sep = strchr(version, '_');
+            if (second_sep) {
+                *second_sep = '\0';
+                environment = second_sep + 1;
+            }
+        }
+        T2_ADD_STRING("device.model",       model);
+        T2_ADD_STRING("device.version",     version ? version : "");
+        T2_ADD_STRING("device.environment", environment ? environment : "");
+    }
+
+    /* Timestamp, Date, Uptime, Iteration */
+    time_t timenow = time(NULL);
+    struct tm *tm_info = localtime(&timenow);
+    char ts[32] = {0};
+    char dateStr[16] = {0};
+    strftime(ts, sizeof(ts), "%Y-%m-%d %H:%M:%S", tm_info);
+    strftime(dateStr, sizeof(dateStr), "%Y-%m-%d", tm_info);
+    T2_ADD_STRING("Time", ts);
+    T2_ADD_STRING("Date", dateStr);
+
+    const char *uptime = getSystemUptime();
+    T2_ADD_STRING("Uptime", uptime);
+
+    {
+        char iterStr[16];
+        snprintf(iterStr, sizeof(iterStr), "%d", iteration);
+        T2_ADD_STRING("Iteration", iterStr);
+    }
+
+    /* --- meminfo as flattened key-value entries --- */
+    {
+        static const char *meminfoNeeded[] = {
+            "MemTotal", "MemFree", "MemAvailable", "Buffers", "Cached",
+            "SwapCached", "Active(anon)", "Inactive(anon)", "Active(file)",
+            "Inactive(file)", "SwapTotal", "SwapFree", "AnonPages", "Mapped", "Shmem", "Slab",
+	    "KernelStack", "VmallocUsed", "CmaFree", "CmaTotal"
+        };
+        const int fieldCount = (int)(sizeof(meminfoNeeded) / sizeof(meminfoNeeded[0]));
+
+#ifdef TESTME
+        FILE *meminfo = fopen((isTestMode) ? testMeminfo : MEMINFO_FILE, "r");
+#else
+        FILE *meminfo = fopen(MEMINFO_FILE, "r");
+#endif
+        if (meminfo) {
+            char tmp[128], name[64];
+	    char key[96], valueStr[32];
+            unsigned long value;
+            while (fgets(tmp, sizeof(tmp), meminfo)) {
+                if (sscanf(tmp, "%63s %lu kB", name, &value) == 2) {
+                    size_t len = strlen(name);
+                    if (len > 0 && name[len - 1] == ':')
+                        name[len - 1] = '\0';
+                    for (int i = 0; i < fieldCount; i++) {
+                        if (strcmp(name, meminfoNeeded[i]) == 0) {
+                            snprintf(key, sizeof(key), "meminfo.%s", name);
+                            snprintf(valueStr, sizeof(valueStr), "%lu", value);
+                            T2_ADD_STRING(key, valueStr);
+                            break;
+                        }
+                    }
+                }
+            }
+            fclose(meminfo);
+        }
+    }
+
+    /* --- cpu_stats as nested object with deltas --- */
+    {
+        static const int outputIdx[] = {0, 2, 3, 4}; /* user, system, idle, iowait */
+        static const char *outputNames[] = {"user", "system", "idle", "iowait", "nice", "irq", "softirq", "steal", "guest", "guest_nice", "cpu_stat"};
+        const int fieldCount = 8;
+        const int outputCount = 4;
+	static uint64_t prevCpu[8] = {0};
+        static int hasPrev = 0;
+
+        CpuStatSnapshot cpu = {0};
+        if (readSystemCpuStat(&cpu)) {
+            for (int i = 0; i < outputCount; i++) {
+                char key[64];
+                snprintf(key, sizeof(key), "cpu_stats.%s", outputNames[i]);
+                T2_ADD_U64_STRING(key, cpu.values[outputIdx[i]]);
+            }
+
+            /* Compute deltas */
+            uint64_t delta_user = 0, delta_system = 0, delta_idle = 0, delta_total = 0;
+            if (hasPrev) {
+                delta_user = (cpu.values[0] >= prevCpu[0]) ? (cpu.values[0] - prevCpu[0]) : 0;
+                delta_system = (cpu.values[2] >= prevCpu[2]) ? (cpu.values[2] - prevCpu[2]) : 0;
+                delta_idle = (cpu.values[3] >= prevCpu[3]) ? (cpu.values[3] - prevCpu[3]) : 0;
+                for (int i = 0; i < fieldCount; i++)
+                    delta_total += (cpu.values[i] >= prevCpu[i]) ? (cpu.values[i] - prevCpu[i]) : 0;
+            }
+            T2_ADD_U64_STRING("cpu_stats.delta_user", delta_user);
+            T2_ADD_U64_STRING("cpu_stats.delta_system", delta_system);
+            T2_ADD_U64_STRING("cpu_stats.delta_idle", delta_idle);
+            T2_ADD_U64_STRING("cpu_stats.delta_total", delta_total);
+
+            double cpu_percent = 0.0;
+            if (delta_total > 0)
+                cpu_percent = (double)(delta_user + delta_system) / (double)delta_total * 100.0;
+            T2_ADD_DOUBLE_STRING("cpu_stats.cpu_percent", cpu_percent);
+
+            /* Save current as previous for next iteration */
+            for (int i = 0; i < fieldCount; i++)
+                prevCpu[i] = cpu.values[i];
+            hasPrev = 1;
+        }
+    }
+
+    /* --- Fragmentation as flattened key-value entries (when --frag is enabled) --- */
+    if (g_CollectFragData) {
+        if (g_fragSource == FRAG_SRC_PAGETYPEINFO) {
+            T2_ADD_STRING("fragmentation.source", "pagetypeinfo");
+            T2_ADD_STRING("fragmentation.path", PGT_FILE);
+
+            FILE *fp = NULL;
+#ifdef TESTME
+            if (isTestMode) {
+                if (testPagetypeinfo[0])
+                    fp = fopen(testPagetypeinfo, "r");
+            } else {
+                fp = fopen(PGT_FILE, "r");
+            }
+#else
+            fp = fopen(PGT_FILE, "r");
+#endif
+            if (!fp) {
+                T2_ADD_STRING("fragmentation.parse_status", "source_unavailable_or_parse_error");
+            } else {
+                char line[1024];
+                int pageBlockOrder = -1;
+                int pagesPerBlock = -1;
+                int rowCount = 0;
+
+                while (fgets(line, sizeof(line), fp)) {
+                    if (pageBlockOrder < 0 && sscanf(line, "Page block order: %d", &pageBlockOrder) == 1)
+                        continue;
+                    if (pagesPerBlock < 0 && sscanf(line, "Pages per block: %d", &pagesPerBlock) == 1)
+                        continue;
+
+                    unsigned node = 0;
+                    char zone[64] = {0};
+                    char type[64] = {0};
+                    int consumed = 0;
+                    int matched = sscanf(line, "Node %u, zone %63[^,], type %63s %n", &node, zone, type, &consumed);
+                    if (matched != 3 || consumed <= 0)
+                        continue;
+
+                    char *zonePtr = zone;
+                    trimLeadingWhitespace(&zonePtr);
+                    trimTrailingWhitespace(zonePtr);
+
+                    unsigned long values[32] = {0};
+                    int valueCount = parseUnsignedSeries(line + consumed, values, 32);
+                    if (valueCount <= 0)
+                        continue;
+
+                    char key[128];
+                    snprintf(key, sizeof(key), "fragmentation.rows.%d.node", rowCount);
+                    T2_ADD_ULONG_STRING(key, node);
+                    snprintf(key, sizeof(key), "fragmentation.rows.%d.zone", rowCount);
+                    T2_ADD_STRING(key, zonePtr);
+                    snprintf(key, sizeof(key), "fragmentation.rows.%d.type", rowCount);
+                    T2_ADD_STRING(key, type);
+                    for (int i = 0; i < valueCount; i++) {
+                        snprintf(key, sizeof(key), "fragmentation.rows.%d.order_%d", rowCount, i);
+                        T2_ADD_ULONG_STRING(key, values[i]);
+                    }
+                    rowCount++;
+                }
+                fclose(fp);
+
+                if (pageBlockOrder >= 0)
+                    T2_ADD_ULONG_STRING("fragmentation.page_block_order", pageBlockOrder);
+                if (pagesPerBlock >= 0)
+                    T2_ADD_ULONG_STRING("fragmentation.pages_per_block", pagesPerBlock);
+                T2_ADD_ULONG_STRING("fragmentation.row_count", rowCount);
+                if (rowCount <= 0)
+                    T2_ADD_STRING("fragmentation.parse_status", "source_unavailable_or_parse_error");
+            }
+        } else if (g_fragSource == FRAG_SRC_BUDDYINFO) {
+            T2_ADD_STRING("fragmentation.source", "buddyinfo");
+            T2_ADD_STRING("fragmentation.path", BUDDYINFO_FILE);
+
+            FILE *fp = NULL;
+#ifdef TESTME
+            if (isTestMode) {
+                if (testBuddyinfo[0])
+                    fp = fopen(testBuddyinfo, "r");
+            } else {
+                fp = fopen(BUDDYINFO_FILE, "r");
+            }
+#else
+            fp = fopen(BUDDYINFO_FILE, "r");
+#endif
+            if (!fp) {
+                T2_ADD_STRING("fragmentation.parse_status", "source_unavailable_or_parse_error");
+            } else {
+                char line[1024];
+                int rowCount = 0;
+                while (fgets(line, sizeof(line), fp)) {
+                    unsigned node = 0;
+                    char zone[64] = {0};
+                    int consumed = 0;
+                    int matched = sscanf(line, "Node %u, zone %63s %n", &node, zone, &consumed);
+                    if (matched != 2 || consumed <= 0)
+                        continue;
+
+                    unsigned long values[32] = {0};
+                    int valueCount = parseUnsignedSeries(line + consumed, values, 32);
+                    if (valueCount <= 0)
+                        continue;
+
+                    char key[128];
+                    snprintf(key, sizeof(key), "fragmentation.rows.%d.node", rowCount);
+                    T2_ADD_ULONG_STRING(key, node);
+                    snprintf(key, sizeof(key), "fragmentation.rows.%d.zone", rowCount);
+                    T2_ADD_STRING(key, zone);
+                    for (int i = 0; i < valueCount; i++) {
+                        snprintf(key, sizeof(key), "fragmentation.rows.%d.order_%d", rowCount, i);
+                        T2_ADD_ULONG_STRING(key, values[i]);
+                    }
+                    rowCount++;
+                }
+                fclose(fp);
+                T2_ADD_ULONG_STRING("fragmentation.row_count", rowCount);
+                if (rowCount <= 0)
+                    T2_ADD_STRING("fragmentation.parse_status", "source_unavailable_or_parse_error");
+            }
+        } else {
+            T2_ADD_STRING("fragmentation.source", "none");
+            T2_ADD_STRING("fragmentation.parse_status", "source_unavailable");
+        }
+    }
+
+    /* --- Top N processes by PSS as individually named objects with deltas --- */
+    {
+        /* Previous iteration storage for deltas */
+        typedef struct prev_proc {
+            char name[256];
+            unsigned pid;
+            unsigned long cputime;
+            unsigned long minFaults;
+            unsigned long majFaults;
+            struct prev_proc *next;
+        } PrevProc;
+
+        static PrevProc *prevList = NULL;
+
+        /* Use configured top-procs limit */
+        int topLimit = g_topProcs;
+
+        /* Collect all valid processes into array for sorting */
+        int totalProcs = 0;
+        Process_Info *cur = headProcessInfo;
+        while (cur) { if (cur->pid > 0) totalProcs++; cur = cur->next; }
+
+        Process_Info **sortArr = NULL;
+        if (totalProcs > 0)
+            sortArr = (Process_Info **)malloc(sizeof(Process_Info *) * (size_t)totalProcs);
+
+        if (sortArr) {
+            int idx = 0;
+            cur = headProcessInfo;
+            while (cur) {
+                if (cur->pid > 0) sortArr[idx++] = cur;
+                cur = cur->next;
+            }
+
+            /* Sort descending by selected field (insertion sort) */
+            for (int i = 1; i < totalProcs; i++) {
+                Process_Info *key = sortArr[i];
+                int j = i - 1;
+                unsigned long keyVal = key->rssTotal;
+                if (g_sortBy == SORT_BY_PSS) keyVal = key->pssTotal;
+                else if (g_sortBy == SORT_BY_CPU_TIME) keyVal = key->cputime;
+                /* delta_cpu_time sort is handled below after delta computation */
+
+                while (j >= 0) {
+                    unsigned long jVal = sortArr[j]->rssTotal;
+                    if (g_sortBy == SORT_BY_PSS) jVal = sortArr[j]->pssTotal;
+                    else if (g_sortBy == SORT_BY_CPU_TIME) jVal = sortArr[j]->cputime;
+                    if (jVal >= keyVal) break;
+                    sortArr[j + 1] = sortArr[j];
+                    j--;
+                }
+                sortArr[j + 1] = key;
+            }
+
+            int limit = totalProcs;
+            if (topLimit > 0 && topLimit < totalProcs)
+                limit = topLimit;
+
+            /* For delta_cpu_time sort, compute deltas first then re-sort */
+            unsigned long *deltaArr = NULL;
+            if (g_sortBy == SORT_BY_DELTA_CPU_TIME) {
+                deltaArr = (unsigned long *)calloc((size_t)totalProcs, sizeof(unsigned long));
+                if (deltaArr) {
+                    for (int i = 0; i < totalProcs; i++) {
+                        PrevProc *pp = prevList;
+                        while (pp) {
+                            if (strcmp(pp->name, sortArr[i]->name) == 0 && pp->pid == sortArr[i]->pid) {
+                                deltaArr[i] = sortArr[i]->cputime - pp->cputime;
+                                break;
+                            }
+                            pp = pp->next;
+                        }
+                    }
+                    /* Re-sort by delta_cpu_time descending */
+                    for (int i = 1; i < totalProcs; i++) {
+                        Process_Info *key = sortArr[i];
+                        unsigned long keyDelta = deltaArr[i];
+                        int j = i - 1;
+                        while (j >= 0 && deltaArr[j] < keyDelta) {
+                            sortArr[j + 1] = sortArr[j];
+                            deltaArr[j + 1] = deltaArr[j];
+                            j--;
+                        }
+                        sortArr[j + 1] = key;
+                        deltaArr[j + 1] = keyDelta;
+                    }
+                }
+            }
+
+            for (int i = 0; i < limit; i++) {
+                Process_Info *p = sortArr[i];
+		char key[sizeof(p->name) + 32]; /* name + longest field suffix */
+                snprintf(key, sizeof(key), "%s.PID", p->name);
+                T2_ADD_ULONG_STRING(key, p->pid);
+                snprintf(key, sizeof(key), "%s.RSS", p->name);
+                T2_ADD_ULONG_STRING(key, p->rssTotal);
+                snprintf(key, sizeof(key), "%s.PSS", p->name);
+                T2_ADD_ULONG_STRING(key, p->pssTotal);
+                snprintf(key, sizeof(key), "%s.SHARED_CLEAN", p->name);
+                T2_ADD_ULONG_STRING(key, p->shared_clean_total);
+                snprintf(key, sizeof(key), "%s.PRIVATE_CLEAN", p->name);
+                T2_ADD_ULONG_STRING(key, p->private_clean_total);
+                snprintf(key, sizeof(key), "%s.PRIVATE_DIRTY", p->name);
+                T2_ADD_ULONG_STRING(key, p->private_dirty_total);
+                snprintf(key, sizeof(key), "%s.SWAP_PSS", p->name);
+                T2_ADD_ULONG_STRING(key, p->swap_pss_total);
+                snprintf(key, sizeof(key), "%s.CPU_TIME", p->name);
+                T2_ADD_ULONG_STRING(key, p->cputime);
+		snprintf(key, sizeof(key), "%s.MIN_FAULTS", p->name);
+                T2_ADD_ULONG_STRING(key, p->minFaults);
+                snprintf(key, sizeof(key), "%s.MAJ_FAULTS", p->name);
+                T2_ADD_ULONG_STRING(key, p->majFaults);
+
+
+                /* Compute deltas from previous iteration */
+                unsigned long delta_cpu = 0;
+		unsigned long delta_min_faults = 0;
+		unsigned long delta_maj_faults = 0;
+                if (deltaArr && g_sortBy == SORT_BY_DELTA_CPU_TIME) {
+                    delta_cpu = deltaArr[i];
+                } else {
+                    PrevProc *pp = prevList;
+                    while (pp) {
+                        if (strcmp(pp->name, p->name) == 0 && pp->pid == p->pid) {
+                            delta_cpu = p->cputime - pp->cputime;
+                            delta_min_faults = (p->minFaults >= pp->minFaults)
+                                               ? (p->minFaults - pp->minFaults)
+                                               : 0;
+                            delta_maj_faults = (p->majFaults >= pp->majFaults)
+                                               ? (p->majFaults - pp->majFaults)
+                                               : 0;
+                            break;
+                        }
+                        pp = pp->next;
+                    }
+                }
+                snprintf(key, sizeof(key), "%s.delta_cpu_time", p->name);
+                T2_ADD_ULONG_STRING(key, delta_cpu);
+		snprintf(key, sizeof(key), "%s.delta_min_faults", p->name);
+                T2_ADD_ULONG_STRING(key, delta_min_faults);
+                snprintf(key, sizeof(key), "%s.delta_maj_faults", p->name);
+                T2_ADD_ULONG_STRING(key, delta_maj_faults);
+            }
+            free(deltaArr);
+            free(sortArr);
+        }
+
+        /* Free previous list and rebuild from current (all procs, not just top N) */
+        while (prevList) {
+            PrevProc *tmp = prevList;
+            prevList = prevList->next;
+            free(tmp);
+        }
+        cur = headProcessInfo;
+        while (cur) {
+            if (cur->pid > 0) {
+                PrevProc *pp = (PrevProc *)malloc(sizeof(PrevProc));
+                if (pp) {
+                    strncpy(pp->name, cur->name, sizeof(pp->name) - 1);
+                    pp->name[sizeof(pp->name) - 1] = '\0';
+                    pp->pid = cur->pid;
+                    pp->cputime = cur->cputime;
+                    pp->minFaults = cur->minFaults;
+                    pp->majFaults = cur->majFaults;
+                    pp->next = prevList;
+                    prevList = pp;
+                }
+            }
+            cur = cur->next;
+        }
+    }
+
+    /* --- Assemble and write --- */
+    g_cjson.AddItemToObject(root, "Report", reportArray);
+
+    FILE *out = fopen(filepath, "w");
+    if (!out) {
+        PRINT_ERROR("T2: Failed to open %s for writing: %s\n", filepath, strerror(errno));
+        g_cjson.Delete(root);
+        return -1;
+    }
+
+    char *jsonStr = g_jsonPrettyPrint
+                    ? g_cjson.Print(root)
+                    : g_cjson.PrintUnformatted(root);
+
+    int rc = 0;
+    if (jsonStr) {
+        if (fprintf(out, "%s\n", jsonStr) < 0) {
+            PRINT_ERROR("T2: Failed to write to %s: %s\n", filepath, strerror(errno));
+            rc = -1;
+        }
+        g_cjson.Free(jsonStr);
+    } else {
+        PRINT_ERROR("T2: cJSON serialisation returned NULL for %s\n", filepath);
+        rc = -1;
+    }
+
+    fclose(out);
+    g_cjson.Delete(root);
+
+    /* Free the process linked list (mirrors writeProcessInfo_JSON behavior) */
+    Process_Info *cur = headProcessInfo;
+    while (cur) {
+        Process_Info *tofree = cur;
+        cur = cur->next;
+        free(tofree);
+    }
+    headProcessInfo = NULL;
+
+#undef T2_ADD_STRING
+#undef T2_ADD_NUMBER
+#undef T2_ADD_ULONG_STRING
+#undef T2_ADD_U64_STRING
+#undef T2_ADD_DOUBLE_STRING
+    return rc;
+}
+
 #endif /* ENABLE_CJSON */
 
 // -----------------------------
@@ -4272,6 +5053,8 @@ int main(int argc, char *argv[])
     int cli_interval = -1;
     bool cli_fmt_json = false;
     bool cli_upload_enable = false;
+    bool cli_upload_url_set = false;
+    char cli_upload_url[MEMINSIGHT_UPLOAD_URL_MAX] = {0};
     bool cli_upload_interval_set = false;
     int  cli_upload_interval = 0;
     bool cli_json_pretty_set = false;
@@ -4442,6 +5225,26 @@ int main(int argc, char *argv[])
             cli_upload_enable = true;
             /* Compatibility flag: Handled via RFC handlers. */
         }
+        else if (!strncmp(argv[i], "--upload-url", 13))
+        {
+            if (i + 1 < argc)
+            {
+                cli_upload_url_set = true;
+                i++; // skip next arg (upload URL)
+                if (argv[i][0] == '\0')
+                {
+                    PRINT_ERROR("Error: Empty upload URL provided after --upload-url\n");
+                    printHelpAndUsage(argv, false, 1);
+                }
+                strncpy(cli_upload_url, argv[i], sizeof(cli_upload_url) - 1);
+                cli_upload_url[sizeof(cli_upload_url) - 1] = '\0';
+            }
+            else
+            {
+                PRINT_ERROR("Error: Missing upload URL value after %s\n", argv[i]);
+                printHelpAndUsage(argv, false, 1);
+            }
+        }
         else if (!strncmp(argv[i], "--upload-interval", 18))
         {
             cli_upload_interval_set = true;
@@ -4465,6 +5268,45 @@ int main(int argc, char *argv[])
         {
             g_CollectFragData = true;
         }
+        else if (!strncmp(argv[i], "--top-procs", 11))
+        {
+            if (i + 1 < argc)
+            {
+                i++;
+                g_topProcs = atoi(argv[i]);
+                if (g_topProcs < 0) g_topProcs = 0;
+            }
+            else
+            {
+                PRINT_ERROR("Error: Missing count after --top-procs\n");
+                printHelpAndUsage(argv, false, 1);
+            }
+        }
+        else if (!strncmp(argv[i], "--sort-by", 9))
+        {
+            if (i + 1 < argc)
+            {
+                i++;
+                if (!strcasecmp(argv[i], "RSS"))
+                    g_sortBy = SORT_BY_RSS;
+                else if (!strcasecmp(argv[i], "PSS"))
+                    g_sortBy = SORT_BY_PSS;
+                else if (!strcasecmp(argv[i], "CPU_TIME"))
+                    g_sortBy = SORT_BY_CPU_TIME;
+                else if (!strcasecmp(argv[i], "delta_cpu_time"))
+                    g_sortBy = SORT_BY_DELTA_CPU_TIME;
+                else
+                {
+                    PRINT_ERROR("Error: Invalid --sort-by value '%s'. Use RSS, PSS, CPU_TIME, or delta_cpu_time\n", argv[i]);
+                    printHelpAndUsage(argv, false, 1);
+                }
+            }
+            else
+            {
+                PRINT_ERROR("Error: Missing field after --sort-by\n");
+                printHelpAndUsage(argv, false, 1);
+            }
+        }
         else if (!strncmp(argv[i], "--fmt", 5))
         { // output format: csv or json
             if (i + 1 < argc)
@@ -4481,6 +5323,17 @@ int main(int argc, char *argv[])
                     g_reportFormat = REPORT_CSV;
 #endif
                 }
+                else if (!strncmp(argv[i], "t2", 3))
+                {
+                    cli_fmt_json = true;
+#ifdef ENABLE_CJSON
+                    g_reportFormat = REPORT_T2;
+#else
+                    printf("Warning: --fmt t2 requested but cJSON support not compiled in.\n");
+                    printf("         Build with --enable-cjson flag. Falling back to CSV.\n");
+                    g_reportFormat = REPORT_CSV;
+#endif
+                }
                 else if (!strncmp(argv[i], "csv", 4))
                 {
                     cli_fmt_json = false;
@@ -4488,7 +5341,7 @@ int main(int argc, char *argv[])
                 }
                 else
                 {
-                    PRINT_MUST("Error: Unsupported format '%s'. Supported: csv, json.\n", argv[i]);
+                    PRINT_MUST("Error: Unsupported format '%s'. Supported: csv, json, t2.\n", argv[i]);
                     printHelpAndUsage(argv, false, 1);
                 }
             }
@@ -4545,6 +5398,9 @@ int main(int argc, char *argv[])
         printHelpAndUsage(argv, false, 1);
     }
 
+    const char *resolved_upload_url = resolveUploadUrl(cli_upload_url, cli_upload_url_set);
+    bool effective_upload_enable = cli_upload_enable;
+
     printf("\nExecuting: ");
     for (int i = 0; i < argc; i++)
     {
@@ -4577,7 +5433,7 @@ int main(int argc, char *argv[])
     }
 
 #ifdef ENABLE_CJSON
-    if (g_reportFormat == REPORT_JSON) {
+    if (g_reportFormat == REPORT_JSON || g_reportFormat == REPORT_T2) {
         if (loadCjson() != 0) {
             /* loadCjson() already set g_reportFormat = REPORT_CSV and printed the reason */
             PRINT_MUST("JSON: Continuing with CSV fallback.\n");
@@ -4585,12 +5441,33 @@ int main(int argc, char *argv[])
     }
 #endif
 
+#ifdef ENABLE_HTTP_UPLOAD
+    /* direct HTTP upload only when an explicit URL is provided (CLI/env), and otherwise keep g_uploadUrl NULL */
+    if (effective_upload_enable && resolved_upload_url && g_reportFormat == REPORT_T2)
+        g_uploadUrl = resolved_upload_url;
+#endif
+
+    /*
+     * Preserve the legacy marker-based upload when --upload-enable is used
+     * without an explicit CLI/environment upload URL. When a URL is supplied,
+     * the HTTP upload path handles the T2 files instead.
+     */
+    if (effective_upload_enable)
+    {
+#ifdef ENABLE_HTTP_UPLOAD
+        if (!g_uploadUrl)
+#endif
+        {
+            (void)touchFile(MEMINSIGHT_UPLOAD_MARKER_PATH);
+        }
+    }
+
     if (isConfigPresent)
     {
 #ifdef TESTME
-    return (handleConfigMode(confFile, out_dir, cli_output_set, cli_iterations, cli_interval, enableKThreads, long_run, cli_upload_enable, cli_upload_interval) == 0) ? 0 : 1;
+    return (handleConfigMode(confFile, out_dir, cli_output_set, cli_iterations, cli_interval, enableKThreads, long_run, effective_upload_enable, cli_upload_interval, resolved_upload_url) == 0) ? 0 : 1;
 #else
-    handleConfigMode(confFile, out_dir, cli_output_set, cli_iterations, cli_interval, enableKThreads, long_run, cli_upload_enable, cli_upload_interval);
+    handleConfigMode(confFile, out_dir, cli_output_set, cli_iterations, cli_interval, enableKThreads, long_run, effective_upload_enable, cli_upload_interval, resolved_upload_url);
 #endif
     }
     else if (isSystemWide)
@@ -4607,9 +5484,9 @@ int main(int argc, char *argv[])
         }
         PRINT_MUST("* Running %d iterations with %ds interval (indefinitely?: %s)\n", final_iterations, final_interval, long_run ? "yes" : "no");
 #ifdef TESTME
-        return (collectSystemMemoryStats(enableKThreads, out_dir, final_iterations, final_interval, long_run, cli_upload_enable, cli_upload_interval) == 0) ? 0 : 1;
+        return (collectSystemMemoryStats(enableKThreads, out_dir, final_iterations, final_interval, long_run, effective_upload_enable, cli_upload_interval, resolved_upload_url) == 0) ? 0 : 1;
 #else
-        collectSystemMemoryStats(enableKThreads, out_dir, final_iterations, final_interval, long_run, cli_upload_enable, cli_upload_interval);
+        collectSystemMemoryStats(enableKThreads, out_dir, final_iterations, final_interval, long_run, effective_upload_enable, cli_upload_interval, resolved_upload_url);
 #endif
     }
 
