@@ -76,13 +76,13 @@
 /* MEMINSIGHT_MAJOR_VERSION, MEMINSIGHT_MINOR_VERSION, and MEMINSIGHT_PATCH_VERSION are to track the binary version, any changes in the binary version should increment this version.
 This is used to ensure compatibility with older versions of the binary. */
 #define MEMINSIGHT_MAJOR_VERSION "1"
-#define MEMINSIGHT_MINOR_VERSION "2"
+#define MEMINSIGHT_MINOR_VERSION "3"
 #define MEMINSIGHT_PATCH_VERSION "0"
 
 /* REPORT_MAJOR_VERSION, REPORT_MINOR_VERSION, and REPORT_PATCH_VERSION are to track the report format, any changes in the report format should increment this version.
 This is used to ensure compatibility with older versions of the report parser. */
 #define REPORT_MAJOR_VERSION "1"
-#define REPORT_MINOR_VERSION "3"
+#define REPORT_MINOR_VERSION "4"
 #define REPORT_PATCH_VERSION "0"
 
 #ifndef DEVICE_INTERFACE_KEY
