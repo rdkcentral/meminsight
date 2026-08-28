@@ -283,6 +283,7 @@ if $MEM_BIN --help 2>&1 | grep -F -- "--fmt" >/dev/null 2>&1; then
         JSON_FILE=$(ls /tmp/meminsight/*.json 2>/dev/null | head -n 1)
         if [ -n "$JSON_FILE" ] && [ -f "$JSON_FILE" ] && \
            grep -F '"meminfo"' "$JSON_FILE" >/dev/null 2>&1 && \
+           grep -F '"cpu_stat"' "$JSON_FILE" >/dev/null 2>&1 && \
            grep -F '"processes"' "$JSON_FILE" >/dev/null 2>&1 && \
            grep -F '"fragmentation"' "$JSON_FILE" >/dev/null 2>&1; then
             echo "✓ $JSON_DESC PASSED"
@@ -1017,11 +1018,11 @@ META_MARKER="/tmp/.meminsight_upload"
 echo "------------------------------------------"
 echo "$META_DESC6"
 echo "------------------------------------------"
-echo "Command: $MEM_BIN --upload-enable --upload-interval 1800 -o $META_OUT6 -t $RET_SMAP_FILE $RET_MEMINFO_FILE"
+echo "Command: $MEM_BIN --upload-enable --upload-interval 1800 --upload-url https://example.test/upload -o $META_OUT6 -t $RET_SMAP_FILE $RET_MEMINFO_FILE"
 
 rm -rf "$META_OUT6"
 rm -f "$META_MARKER" /tmp/.meminsight_configstore
-if $MEM_BIN --upload-enable --upload-interval 1800 -o "$META_OUT6" -t "$RET_SMAP_FILE" "$RET_MEMINFO_FILE" >/tmp/meminsight_upload_handoff.log 2>&1; then
+if $MEM_BIN --upload-enable --upload-interval 1800 --upload-url https://example.test/upload -o "$META_OUT6" -t "$RET_SMAP_FILE" "$RET_MEMINFO_FILE" >/tmp/meminsight_upload_handoff.log 2>&1; then
     META_CONFIG="$META_OUT6/.meminsight_configstore"
     if [ -f "$META_CONFIG" ] && [ -s "$META_MARKER" ] && [ ! -e /tmp/.meminsight_configstore ] && \
        grep -F "RUN_ID=" "$META_CONFIG" >/dev/null 2>&1 && \
@@ -1046,6 +1047,122 @@ else
     record_tc_result "30" "Upload marker/configstore key separation" "FAILURE"
 fi
 rm -f "$META_MARKER"
+echo ""
+
+# T2 JSON output test (runs only when JSON support is compiled in)
+T2_DESC="Test 31: T2 format produces Report array with flattened notation"
+T2_SMAP_FILE="test/1-non-zero-swap-entry/meminsight_testSmap.txt"
+T2_MEMINFO_FILE="test/1-non-zero-swap-entry/meminsight_testMeminfo.txt"
+
+echo "------------------------------------------"
+echo "$T2_DESC"
+echo "------------------------------------------"
+
+if $MEM_BIN --help 2>&1 | grep -F "t2" >/dev/null 2>&1; then
+    echo "Command: $MEM_BIN --fmt t2 -o /tmp/meminsight -t $T2_SMAP_FILE $T2_MEMINFO_FILE"
+    rm -rf /tmp/meminsight/*.t2.json
+
+    if $MEM_BIN --fmt t2 -o /tmp/meminsight -t "$T2_SMAP_FILE" "$T2_MEMINFO_FILE"; then
+        T2_FILE=$(ls /tmp/meminsight/*.t2.json 2>/dev/null | head -n 1)
+        if [ -n "$T2_FILE" ] && [ -f "$T2_FILE" ] && \
+           grep -F '"Report"' "$T2_FILE" >/dev/null 2>&1 && \
+	   grep -F '"meminfo.MemTotal"' "$T2_FILE" >/dev/null 2>&1 && \
+	   grep -F '"cpu_stats.user"' "$T2_FILE" >/dev/null 2>&1 && \
+           grep -F '"tail.PID"' "$T2_FILE" >/dev/null 2>&1 && \
+           grep -F '"tail.PSS"' "$T2_FILE" >/dev/null 2>&1 && \
+	   grep -F '"mac"' "$T2_FILE" >/dev/null 2>&1 && \
+	   grep -F '"device.model"' "$T2_FILE" >/dev/null 2>&1; then
+            echo "✓ $T2_DESC PASSED"
+            echo "Output sample:"
+            head -5 "$T2_FILE"
+            echo "..."
+	    record_tc_result "31" "T2 format produces Report array with flattened notation" "SUCCESS"
+        else
+            echo "✗ $T2_DESC FAILED (missing flattened T2 structure)"
+            [ -n "$T2_FILE" ] && cat "$T2_FILE"
+            TEST_FAILED=$((TEST_FAILED + 1))
+	    record_tc_result "31" "T2 format produces Report array with flattened notation" "FAILURE"
+        fi
+    else
+        echo "✗ $T2_DESC FAILED (command execution failed)"
+        TEST_FAILED=$((TEST_FAILED + 1))
+	record_tc_result "31" "T2 format produces Report array with flattened notation" "FAILURE"
+    fi
+else
+    echo "- $T2_DESC SKIPPED (T2 format not compiled in this binary)"
+fi
+echo ""
+
+# Upload URL CLI parsing test
+UPLOAD_DESC="Test 32: --upload-url CLI option accepted"
+echo "------------------------------------------"
+echo "$UPLOAD_DESC"
+echo "------------------------------------------"
+
+# Test that --upload-url is accepted without crashing (upload will fail gracefully with no cert/curl)
+if $MEM_BIN --help 2>&1 | grep -F "upload-url" >/dev/null 2>&1; then
+    UPLOAD_LOG="/tmp/meminsight_upload_test.log"
+    echo "Command: $MEM_BIN --fmt t2 --upload-enable --upload-url https://localhost:9999/test -o /tmp/meminsight -t $T2_SMAP_FILE $T2_MEMINFO_FILE"
+    rm -rf /tmp/meminsight/*.t2.json
+
+    $MEM_BIN --fmt t2 --upload-enable --upload-url https://localhost:9999/test \
+        -o /tmp/meminsight -t "$T2_SMAP_FILE" "$T2_MEMINFO_FILE" >"$UPLOAD_LOG" 2>&1
+    RC=$?
+
+    # Binary should still succeed (upload failure doesn't affect exit code)
+    if [ "$RC" -eq 0 ] && grep -F "Upload URL" "$UPLOAD_LOG" >/dev/null 2>&1; then
+        echo "✓ $UPLOAD_DESC PASSED"
+	record_tc_result "32" "--Upload-url CLI validation" "SUCCESS"
+    else
+        echo "✗ $UPLOAD_DESC FAILED (exit=$RC)"
+        cat "$UPLOAD_LOG"
+        TEST_FAILED=$((TEST_FAILED + 1))
+	record_tc_result "32" "--Upload-url CLI validation" "FAILURE"
+    fi
+else
+    echo "- $UPLOAD_DESC SKIPPED (--upload-url not compiled in this binary)"
+fi
+echo ""
+
+# T2 format with fragmentation data test
+T2_FRAG_DESC="Test 33: T2 format with --frag produces fragmentation object"
+T2_FRAG_SMAP_FILE="test/1-non-zero-swap-entry/meminsight_testSmap.txt"
+T2_FRAG_MEMINFO_FILE="test/1-non-zero-swap-entry/meminsight_testMeminfo.txt"
+T2_FRAG_BUDDY_FILE="test/6-buddyinfo-sample/meminsight_testBuddyinfo.txt"
+T2_FRAG_PGT_FILE="test/7-pagetypeinfo-sample/meminsight_testPagetypeinfo.txt"
+
+echo "------------------------------------------"
+echo "$T2_FRAG_DESC"
+echo "------------------------------------------"
+
+if $MEM_BIN --help 2>&1 | grep -F "t2" >/dev/null 2>&1; then
+    echo "Command: $MEM_BIN --fmt t2 --frag -o /tmp/meminsight -t $T2_FRAG_SMAP_FILE $T2_FRAG_MEMINFO_FILE $T2_FRAG_BUDDY_FILE $T2_FRAG_PGT_FILE"
+    rm -rf /tmp/meminsight/*.t2.json
+
+    if $MEM_BIN --fmt t2 --frag -o /tmp/meminsight -t "$T2_FRAG_SMAP_FILE" "$T2_FRAG_MEMINFO_FILE" "$T2_FRAG_BUDDY_FILE" "$T2_FRAG_PGT_FILE"; then
+        T2_FRAG_FILE=$(ls /tmp/meminsight/*.t2.json 2>/dev/null | head -n 1)
+        if [ -n "$T2_FRAG_FILE" ] && [ -f "$T2_FRAG_FILE" ] && \
+           grep -F '"fragmentation.source"' "$T2_FRAG_FILE" >/dev/null 2>&1 && \
+	   grep -F '"fragmentation.row_count"' "$T2_FRAG_FILE" >/dev/null 2>&1 && \
+           grep -F '"Report"' "$T2_FRAG_FILE" >/dev/null 2>&1; then
+            echo "✓ $T2_FRAG_DESC PASSED"
+            echo "Output sample:"
+            head -10 "$T2_FRAG_FILE"
+            echo "..."
+	    record_tc_result "33" "T2 format with --frag produces fragmentation object" "SUCCESS"
+        else
+            echo "✗ $T2_FRAG_DESC FAILED (missing flattened fragmentation entries in T2 output)"
+            [ -n "$T2_FRAG_FILE" ] && cat "$T2_FRAG_FILE"
+            TEST_FAILED=$((TEST_FAILED + 1))
+	    record_tc_result "33" "T2 format with --frag produces fragmentation object" "FAILURE"
+        fi
+    else
+        echo "✗ $T2_FRAG_DESC FAILED (command execution failed)"
+        TEST_FAILED=$((TEST_FAILED + 1))
+    fi
+else
+    echo "- $T2_FRAG_DESC SKIPPED (T2 format not compiled in this binary)"
+fi
 echo ""
 
 # Summary

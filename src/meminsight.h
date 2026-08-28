@@ -39,6 +39,7 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <sys/utsname.h>
+#include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -75,13 +76,13 @@
 /* MEMINSIGHT_MAJOR_VERSION, MEMINSIGHT_MINOR_VERSION, and MEMINSIGHT_PATCH_VERSION are to track the binary version, any changes in the binary version should increment this version.
 This is used to ensure compatibility with older versions of the binary. */
 #define MEMINSIGHT_MAJOR_VERSION "1"
-#define MEMINSIGHT_MINOR_VERSION "2"
+#define MEMINSIGHT_MINOR_VERSION "3"
 #define MEMINSIGHT_PATCH_VERSION "0"
 
 /* REPORT_MAJOR_VERSION, REPORT_MINOR_VERSION, and REPORT_PATCH_VERSION are to track the report format, any changes in the report format should increment this version.
 This is used to ensure compatibility with older versions of the report parser. */
 #define REPORT_MAJOR_VERSION "1"
-#define REPORT_MINOR_VERSION "3"
+#define REPORT_MINOR_VERSION "4"
 #define REPORT_PATCH_VERSION "0"
 
 #ifndef DEVICE_INTERFACE_KEY
@@ -98,6 +99,9 @@ This is used to ensure compatibility with older versions of the report parser. *
 #define BW_DDR_MODE_FILE "/sys/class/aml_ddr/mode"
 #ifndef BW_DDR_FILE
 #define BW_DDR_FILE "/sys/class/aml_ddr/bandwidth"
+#endif
+#ifndef PROC_STAT_FILE
+#define PROC_STAT_FILE STAT_FILE
 #endif
 #ifndef BUDDYINFO_FILE
 #define BUDDYINFO_FILE PROC_DIR "/buddyinfo"
@@ -132,6 +136,7 @@ This is used to ensure compatibility with older versions of the report parser. *
 #define CONFIG_EXTN ".conf"
 #define CSV_FILE_NAME "meminsight.csv"
 #define JSON_FILE_NAME "meminsight.json"
+#define T2_FILE_NAME  "meminsight.t2.json"
 #define LONG_RUN_INTERVAL 900 // 900 is Default interval for long runs in seconds
 #define LONG_RUN_ITERATIONS 48 // 12-hour capture at 15-minute interval; caller may override via CLI/config
 
@@ -207,7 +212,8 @@ typedef struct {
 typedef enum
 {
     REPORT_CSV,
-    REPORT_JSON
+    REPORT_JSON,
+    REPORT_T2
 } Report_Format;
 
 // -----------------------------
@@ -256,8 +262,8 @@ const char *getKernelVersion(void);
 int isPID(const char *str);
 int getPIDByProcessName(const char *procName, unsigned int *pidOut);
 int parseConfig(const char *configFile, Config_Data *config);
-int collectSystemMemoryStats(bool enableKThreads, const char *outDir, int iterations, int interval, bool long_run, bool upload_enabled, int upload_interval);
-int handleConfigMode(const char *confFile, const char *cli_out_dir, bool cli_output_set, int cli_iterations, int cli_interval, bool enableKThreads, bool long_run, bool upload_enabled, int upload_interval);
+int collectSystemMemoryStats(bool enableKThreads, const char *outDir, int iterations, int interval, bool long_run, bool upload_enabled, int upload_interval, const char *upload_url);
+int handleConfigMode(const char *confFile, const char *cli_out_dir, bool cli_output_set, int cli_iterations, int cli_interval, bool enableKThreads, bool long_run, bool upload_enabled, int upload_interval, const char *upload_url);
 int fillProcessStatFields(unsigned pid, Process_Info *info, unsigned *flagsOut);
 
 #ifdef ENABLE_CJSON
@@ -272,6 +278,7 @@ void saveMeminfo_JSON(cJSON_t *root);
 void saveFragmentationInfo_JSON(cJSON_t *root);
 void writeProcessInfo_JSON(cJSON_t *processesArray);
 int writeJSONToFile(const char *filepath, const SetupInfo *setup);
+int writeT2Report(const char *filepath, const SetupInfo *setup, int iteration, int iterations, int interval);
 #endif
 
 #endif // MEMINSIGHT_H
