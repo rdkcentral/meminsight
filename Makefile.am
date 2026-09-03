@@ -26,7 +26,7 @@ meminsightdir = $(includedir)
 meminsight_HEADERS = src/meminsight.h
 
 AM_CPPFLAGS = @CPPFLAGS@
-AM_CFLAGS += -Wno-error=format
+AM_CFLAGS = -Wno-error=format
 AM_LDFLAGS = @LDFLAGS@
 
 meminsight_LDADD = -ldl
