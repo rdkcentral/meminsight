@@ -3482,6 +3482,15 @@ static int mi_upload_t2_files(const char *outDir)
     if (access("/opt/certs/devicecert_1.pk12", F_OK) == 0) {
         cert_path = "/opt/certs/devicecert_1.pk12";
         pass_file = "/tmp/.cfgDynamicxpki";
+    } else if (access("/opt/certs/devicecert_2.pk12", F_OK) == 0) {
+        cert_path = "/opt/certs/devicecert_2.pk12";
+        pass_file = "/tmp/.cfgDynamicxpki";
+    } else if (access("/nvram/certs/devicecert_1.pk12", F_OK) == 0) {
+        cert_path = "/nvram/certs/devicecert_1.pk12";
+        pass_file = "/tmp/.cfgDynamicxpki";
+    } else if (access("/nvram/certs/devicecert_2.pk12", F_OK) == 0) {
+        cert_path = "/nvram/certs/devicecert_2.pk12";
+        pass_file = "/tmp/.cfgDynamicxpki";
     } else if (access("/etc/ssl/certs/staticXpkiCrt.pk12", F_OK) == 0) {
         cert_path = "/etc/ssl/certs/staticXpkiCrt.pk12";
         pass_file = "/tmp/.cfgStaticxpki";
