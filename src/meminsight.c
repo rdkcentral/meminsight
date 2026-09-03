@@ -18,6 +18,7 @@
 
 #include "config.h"
 #include "meminsight.h"
+#include <stdio.h>
 #include <inttypes.h>
 
 #define MEMINSIGHT_UPLOAD_URL_ENV "MEMINSIGHT_UPLOAD_URL"
@@ -95,6 +96,8 @@ static int loadCjson(void)
         g_reportFormat = REPORT_CSV;
         return -1;
     }
+
+    printf("Test workflow %s \n");
 
 #define LOAD_SYM(fn) \
     do { \
