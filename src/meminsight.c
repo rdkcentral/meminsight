@@ -97,7 +97,6 @@ static int loadCjson(void)
         return -1;
     }
 
-    printf("Test workflow %s \n");
 
 #define LOAD_SYM(fn) \
     do { \
@@ -250,6 +249,8 @@ typedef struct {
  */
 static int cmp_mtime_desc(const void *a, const void *b)
 {
+    printf("Test workflow %s \n");
+
     const RetainEntry *ea = (const RetainEntry *)a;
     const RetainEntry *eb = (const RetainEntry *)b;
     if (eb->mtime > ea->mtime) return  1;
