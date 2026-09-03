@@ -18,6 +18,7 @@
 
 #include "config.h"
 #include "meminsight.h"
+#include <stdio.h>
 #include <inttypes.h>
 
 #define MEMINSIGHT_UPLOAD_URL_ENV "MEMINSIGHT_UPLOAD_URL"
@@ -95,6 +96,7 @@ static int loadCjson(void)
         g_reportFormat = REPORT_CSV;
         return -1;
     }
+
 
 #define LOAD_SYM(fn) \
     do { \
@@ -247,6 +249,8 @@ typedef struct {
  */
 static int cmp_mtime_desc(const void *a, const void *b)
 {
+    printf("Test workflow %s \n");
+
     const RetainEntry *ea = (const RetainEntry *)a;
     const RetainEntry *eb = (const RetainEntry *)b;
     if (eb->mtime > ea->mtime) return  1;
