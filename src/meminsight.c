@@ -223,6 +223,7 @@ int (*getProcessInfos_ptr)(FILE*);
 /* Forward declarations for local helpers used before their definitions. */
 static void trimTrailingWhitespace(char *str);
 static bool readConfigStoreValue(const char *dir, const char *key, char *value, size_t valueLen);
+static bool outputDirHasMeminsightBase(const char *dir);
 
 static FILE *openRegularFileForRead(const char *path)
 {
@@ -254,7 +255,7 @@ static FILE *openRegularFileForRead(const char *path)
 
 static FILE *createRestrictedReportFile(const char *dir, const char *fileName)
 {
-    if (!dir || !*dir || !fileName || !*fileName ||
+    if (!outputDirHasMeminsightBase(dir) || !fileName || !*fileName ||
         strcmp(fileName, ".") == 0 || strcmp(fileName, "..") == 0 ||
         strchr(fileName, '/') != NULL) {
         errno = EINVAL;
@@ -971,7 +972,13 @@ SetupInfo initializeSetupInfo(const char *outDir, Report_Format format)
 
     /* One-time directory and file setup. */
     info.outputDir = (outDir && *outDir) ? outDir : DEFAULT_OUT_DIR;
-    info.dirCreated = ensure_output_dir(info.outputDir, info.runHash);
+    if (!outputDirHasMeminsightBase(info.outputDir)) {
+        PRINT_MUST("Output directory '%s' must have 'meminsight' in the final path component\n",
+                   info.outputDir);
+        info.dirCreated = false;
+    } else {
+        info.dirCreated = ensure_output_dir(info.outputDir, info.runHash);
+    }
     info.reportFileName = (format == REPORT_T2)   ? T2_FILE_NAME
                         : (format == REPORT_JSON) ? JSON_FILE_NAME
                         :                           CSV_FILE_NAME;
