@@ -301,6 +301,38 @@ static FILE *createRestrictedReportFile(const char *dir, const char *fileName)
     return stream;
 }
 
+static bool appendMeminfoValue(char *buffer, size_t bufferLen, size_t *used,
+                               bool prependComma, unsigned long value)
+{
+    if (!buffer || !used || *used >= bufferLen)
+        return false;
+
+    size_t remaining = bufferLen - *used;
+    int written = snprintf(buffer + *used, remaining,
+                           prependComma ? ",%lu" : "%lu", value);
+    if (written < 0 || (size_t)written >= remaining)
+        return false;
+
+    *used += (size_t)written;
+    return true;
+}
+
+static bool appendMeminfoHeader(char *buffer, size_t bufferLen, size_t *used,
+                                bool prependComma, const char *field)
+{
+    if (!buffer || !used || !field || *used >= bufferLen)
+        return false;
+
+    size_t remaining = bufferLen - *used;
+    int written = snprintf(buffer + *used, remaining,
+                           prependComma ? ",%s" : "%s", field);
+    if (written < 0 || (size_t)written >= remaining)
+        return false;
+
+    *used += (size_t)written;
+    return true;
+}
+
 // -----------------------------
 // Utility Functions
 // -----------------------------
@@ -4298,15 +4330,15 @@ void saveMeminfo(FILE *out)
 	"VmallocUsed","CmaFree","CmaTotal"};
     static char meminfoHeader[MEMINFO_HEADER_TOTAL] = {0};
     static char meminfoValue[MEMINFO_HEADER_TOTAL] = {0};
-    static int skipMemTotal = 0;
+    static size_t skipMemTotal = 0;
     static int skipArray[MEMINFO_NEEDED_FIELDS_COUNT] = {0};
     static int learnt = 0;
 
 #ifdef TESTME
     char tstmeminfoHeader[MEMINFO_HEADER_TOTAL] = {0};
     char tstmeminfoValue[MEMINFO_HEADER_TOTAL] = {0};
-    int tstprocessHeaderIndex = 0;
-    int tstprocessValueIndex = 0;
+    size_t tstprocessHeaderIndex = 0;
+    size_t tstprocessValueIndex = 0;
     FILE *meminfo = fopen((isTestMode)?testMeminfo:MEMINFO_FILE, "r");
 #else
     FILE *meminfo = fopen(MEMINFO_FILE, "r");
@@ -4316,7 +4348,7 @@ void saveMeminfo(FILE *out)
         char tmp[128];
         int skipCount = skipArray[1];
         int processIndex = learnt;
-        int processValIndex = skipMemTotal;
+        size_t processValIndex = skipMemTotal;
         while (fgets(tmp, 127, meminfo) && (processIndex < MEMINFO_NEEDED_FIELDS_COUNT)) {
 #ifdef TESTME
             char tstname[64];
@@ -4327,13 +4359,16 @@ void saveMeminfo(FILE *out)
             tstname[strlen(tstname)-1] = '\0';
             for (int tsti=0; tsti<MEMINFO_NEEDED_FIELDS_COUNT; tsti++) {
                 if (!strcmp(tstname, meminfoNeeded[tsti])) {
-                    if (!tstprocessHeaderIndex) {
-                        tstprocessHeaderIndex += sprintf(tstmeminfoHeader+tstprocessHeaderIndex, "%s", meminfoNeeded[tsti]);
-                        tstprocessValueIndex += sprintf(tstmeminfoValue+tstprocessValueIndex, "%lu", value);
-                    }
-                    else {
-                        tstprocessHeaderIndex += sprintf(tstmeminfoHeader+tstprocessHeaderIndex, ",%s", meminfoNeeded[tsti]);
-                        tstprocessValueIndex += sprintf(tstmeminfoValue+tstprocessValueIndex, ",%lu", value);
+                    bool prependComma = (tstprocessHeaderIndex != 0);
+                    if (!appendMeminfoHeader(tstmeminfoHeader, sizeof(tstmeminfoHeader),
+                                             &tstprocessHeaderIndex, prependComma,
+                                             meminfoNeeded[tsti]) ||
+                        !appendMeminfoValue(tstmeminfoValue, sizeof(tstmeminfoValue),
+                                            &tstprocessValueIndex, prependComma, value)) {
+                        PRINT_ERROR("%s: Test meminfo buffer insufficient\n", __FUNCTION__);
+                        fclose(meminfo);
+                        unitTestFailed = 1;
+                        return;
                     }
                 }
             }
@@ -4347,7 +4382,12 @@ void saveMeminfo(FILE *out)
                     processIndex++;
                     if (processIndex < MEMINFO_NEEDED_FIELDS_COUNT)
                         skipCount = skipArray[processIndex];
-                    processValIndex += sprintf(meminfoValue+processValIndex, ",%lu", value);
+                    if (!appendMeminfoValue(meminfoValue, sizeof(meminfoValue),
+                                            &processValIndex, true, value)) {
+                        PRINT_MUST("Meminfo value buffer insufficient\n");
+                        fclose(meminfo);
+                        return;
+                    }
                 }
             }
             else 
@@ -4365,11 +4405,21 @@ void saveMeminfo(FILE *out)
                     if (processIndex) { // For MemTotal, skip always since we've the constant value
                         skipArray[processIndex++] = skipCount;
                         skipCount = 0;
-                        processValIndex += sprintf(meminfoValue+processValIndex, ",%lu", value);
+                        if (!appendMeminfoValue(meminfoValue, sizeof(meminfoValue),
+                                                &processValIndex, true, value)) {
+                            PRINT_MUST("Meminfo value buffer insufficient\n");
+                            fclose(meminfo);
+                            return;
+                        }
                     }
                     else {
                         processIndex++;
-                        processValIndex += sprintf(meminfoValue+processValIndex, "%lu", value);
+                        if (!appendMeminfoValue(meminfoValue, sizeof(meminfoValue),
+                                                &processValIndex, false, value)) {
+                            PRINT_MUST("Meminfo value buffer insufficient\n");
+                            fclose(meminfo);
+                            return;
+                        }
                         skipMemTotal = processValIndex;
                     }
                     }
@@ -4387,7 +4437,12 @@ void saveMeminfo(FILE *out)
                             meminfoNeeded[i] = tmpp;
                             skipArray[processIndex++] = skipCount;
                             skipCount = 0;
-                            processValIndex += sprintf(meminfoValue+processValIndex, ",%lu", value);
+                            if (!appendMeminfoValue(meminfoValue, sizeof(meminfoValue),
+                                                    &processValIndex, true, value)) {
+                                PRINT_MUST("Meminfo value buffer insufficient\n");
+                                fclose(meminfo);
+                                return;
+                            }
                             break;
                         }
                     }
@@ -4398,18 +4453,14 @@ void saveMeminfo(FILE *out)
         if (!learnt) {
             PRINT_DBG_INITIAL("Total %d found %d\n", MEMINFO_NEEDED_FIELDS_COUNT, processIndex);
             learnt = 1;
-            int index = 0;
+            size_t index = 0;
             for (int i=0; i < processIndex; i++) {
-                if ((MEMINFO_HEADER_TOTAL - 16) < index) {
-                    PRINT_MUST("Buffer insufficient....\n");
-                    exit(0);
-                }
-                PRINT_DBG_INITIAL("index %d at %d..meminfo [%s] skip [%d]\n", index,i,meminfoNeeded[i],skipArray[i]);
-                if (index) {
-                    index += sprintf(meminfoHeader+index, ",%s", meminfoNeeded[i]);
-                }
-                else {
-                    index += sprintf(meminfoHeader+index, "%s", meminfoNeeded[i]);
+                PRINT_DBG_INITIAL("index %zu at %d..meminfo [%s] skip [%d]\n", index,i,meminfoNeeded[i],skipArray[i]);
+                if (!appendMeminfoHeader(meminfoHeader, sizeof(meminfoHeader), &index,
+                                         index != 0, meminfoNeeded[i])) {
+                    PRINT_MUST("Meminfo header buffer insufficient\n");
+                    meminfoHeader[0] = '\0';
+                    return;
                 }
             }
         }
