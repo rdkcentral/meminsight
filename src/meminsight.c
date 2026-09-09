@@ -224,6 +224,76 @@ int (*getProcessInfos_ptr)(FILE*);
 static void trimTrailingWhitespace(char *str);
 static bool readConfigStoreValue(const char *dir, const char *key, char *value, size_t valueLen);
 
+static FILE *openRegularFileForRead(const char *path)
+{
+    if (!path || !*path)
+        return NULL;
+
+    int fd = open(path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+    if (fd == -1)
+        return NULL;
+
+    struct stat st;
+    if (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode)) {
+        close(fd);
+        errno = EINVAL;
+        return NULL;
+    }
+
+    FILE *stream = fdopen(fd, "r");
+    if (!stream)
+        close(fd);
+    return stream;
+}
+
+static FILE *createRestrictedReportFile(const char *dir, const char *fileName)
+{
+    if (!dir || !*dir || !fileName || !*fileName ||
+        strcmp(fileName, ".") == 0 || strcmp(fileName, "..") == 0 ||
+        strchr(fileName, '/') != NULL) {
+        errno = EINVAL;
+        return NULL;
+    }
+
+    int dirfd = open(dir, O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
+    if (dirfd == -1)
+        return NULL;
+
+    int fd = openat(dirfd, fileName,
+                    O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC | O_NOFOLLOW,
+                    S_IRUSR | S_IWUSR | S_IRGRP);
+    int openErrno = errno;
+    close(dirfd);
+    if (fd == -1) {
+        errno = openErrno;
+        return NULL;
+    }
+
+    struct stat st;
+    if (fstat(fd, &st) != 0) {
+        int savedErrno = errno;
+        close(fd);
+        errno = savedErrno;
+        return NULL;
+    }
+    if (!S_ISREG(st.st_mode)) {
+        close(fd);
+        errno = EINVAL;
+        return NULL;
+    }
+    if (fchmod(fd, S_IRUSR | S_IWUSR | S_IRGRP) != 0) {
+        int savedErrno = errno;
+        close(fd);
+        errno = savedErrno;
+        return NULL;
+    }
+
+    FILE *stream = fdopen(fd, "w");
+    if (!stream)
+        close(fd);
+    return stream;
+}
+
 // -----------------------------
 // Utility Functions
 // -----------------------------
@@ -1804,10 +1874,17 @@ static bool readBandwidthData(unsigned long *totalBandwidth, float *usagePercent
     if (!fgets(buffer, sizeof(buffer), fp) || buffer[0] != '1')
     {
         fclose(fp);
-        fp = fopen(BW_DDR_MODE_FILE, "w");
-        if (!fp)
+        int modeFd = open(BW_DDR_MODE_FILE, O_WRONLY | O_CLOEXEC | O_NOFOLLOW);
+        if (modeFd == -1)
         {
             PRINT_ERROR("Failed to open %s for writing: %s\n", BW_DDR_MODE_FILE, strerror(errno));
+            return false;
+        }
+        fp = fdopen(modeFd, "w");
+        if (!fp)
+        {
+            PRINT_ERROR("Failed to open %s stream for writing: %s\n", BW_DDR_MODE_FILE, strerror(errno));
+            close(modeFd);
             return false;
         }
         if (fputs("1\n", fp) == EOF)
@@ -2161,7 +2238,7 @@ int parseConfig(const char *configPath, Config_Data *config)
     config->interval = DEFAULT_INTERVAL;     // Default to 0 seconds interval
     strncpy(config->logLevel, DEFAULT_LOG_LEVEL, sizeof(config->logLevel) - 1);
 
-    FILE *fp = fopen(configPath, "r");
+    FILE *fp = openRegularFileForRead(configPath);
     if (!fp)
     {
         PRINT_ERROR("Failed to open config file: %s\n", configPath);
@@ -2440,7 +2517,7 @@ void testGetProcessInfos_Parse(char *tmp)
     if (!strncmp(tmp, "Rss:", 4))
     {
         PRINT_DBG("%s", tmp);
-        if (sscanf(tmp, "Rss: %u kB", &test_rss))
+        if (sscanf(tmp, "Rss: %u kB", &test_rss) == 1)
         {
             processInfoTest.rssTotal += test_rss;
         }
@@ -2448,7 +2525,7 @@ void testGetProcessInfos_Parse(char *tmp)
     else if (!strncmp(tmp, "Pss:", 4))
     {
         PRINT_DBG("%s", tmp);
-        if (sscanf(tmp, "Pss: %u kB", &test_pss))
+        if (sscanf(tmp, "Pss: %u kB", &test_pss) == 1)
         {
             processInfoTest.pssTotal += test_pss;
         }
@@ -2457,7 +2534,7 @@ void testGetProcessInfos_Parse(char *tmp)
     else if (!strncmp(tmp, "Shared_Clean:", 13))
     {
         PRINT_DBG("%s", tmp);
-        if (sscanf(tmp, "Shared_Clean: %u kB", &test_shared_clean))
+        if (sscanf(tmp, "Shared_Clean: %u kB", &test_shared_clean) == 1)
         {
          if (test_shared_clean) {
                 processInfoTest.shared_clean_total += ((!smaps_rollup)? prev_test_pss : test_shared_clean);
@@ -2467,7 +2544,7 @@ void testGetProcessInfos_Parse(char *tmp)
     else if (!strncmp(tmp, "Private_Clean:", 14))
     {
         PRINT_DBG("%s", tmp);
-        if (sscanf(tmp, "Private_Clean: %u kB", &test_private_clean))
+        if (sscanf(tmp, "Private_Clean: %u kB", &test_private_clean) == 1)
         {
             processInfoTest.private_clean_total += test_private_clean;
         }
@@ -2475,7 +2552,7 @@ void testGetProcessInfos_Parse(char *tmp)
     else if (!strncmp(tmp, "Private_Dirty:", 14))
     {
         PRINT_DBG("%s", tmp);
-        if (sscanf(tmp, "Private_Dirty: %u kB", &test_private_dirty))
+        if (sscanf(tmp, "Private_Dirty: %u kB", &test_private_dirty) == 1)
         {
             processInfoTest.private_dirty_total += test_private_dirty;
         }
@@ -2483,7 +2560,7 @@ void testGetProcessInfos_Parse(char *tmp)
     else if (!strncmp(tmp, "SwapPss:", 8))
     {
      PRINT_DBG("Test pss: %d %s\n", prev_test_pss, tmp);
-        if (sscanf(tmp, "SwapPss: %u kB", &test_swap_pss))
+        if (sscanf(tmp, "SwapPss: %u kB", &test_swap_pss) == 1)
         {
             processInfoTest.swap_pss_total += test_swap_pss;
         }
@@ -2590,7 +2667,7 @@ int getProcessInfos_rollup_learnt(FILE *smap)
         {
             if (expect_rss)
             {
-                if (sscanf(tmp, "Rss: %u kB", &rss))
+                if (sscanf(tmp, "Rss: %u kB", &rss) == 1)
                 {
                     PRINT_DBG_SCANNED("Read Rss (%u) after %u/%u lines --> %s\r", rss, skipped,
                                           lines_To_skip, tmp);
@@ -2605,7 +2682,7 @@ int getProcessInfos_rollup_learnt(FILE *smap)
             }
             else if (expect_pss)
             {
-                if (sscanf(tmp, "Pss: %u kB", &pss))
+                if (sscanf(tmp, "Pss: %u kB", &pss) == 1)
                 {
                     PRINT_DBG_SCANNED("Read Pss (%u) after %u/%u lines  --> %s\r", pss, skipped, lines_To_skip,
                                       tmp);
@@ -2619,7 +2696,7 @@ int getProcessInfos_rollup_learnt(FILE *smap)
             }
             else if (expect_shared_clean)
             {
-                if (sscanf(tmp, "Shared_Clean: %u kB", &shared_clean))
+                if (sscanf(tmp, "Shared_Clean: %u kB", &shared_clean) == 1)
                 {
                     PRINT_DBG_SCANNED("Read shared_clean (%u)  %u/%u lines --> %s\r", shared_clean, skipped,
                                       lines_To_skip, tmp);
@@ -2634,7 +2711,7 @@ int getProcessInfos_rollup_learnt(FILE *smap)
             }
             else if (expect_private_clean)
             {
-                if (sscanf(tmp, "Private_Clean: %u kB", &private_clean))
+                if (sscanf(tmp, "Private_Clean: %u kB", &private_clean) == 1)
                 {
                     expect_private_clean = 0;
                     PRINT_DBG_SCANNED("Read private_clean (%u)  %u/%u lines --> %s\r", private_clean, skipped,
@@ -2648,7 +2725,7 @@ int getProcessInfos_rollup_learnt(FILE *smap)
             }
             else if (expect_private_dirty)
             {
-                if (sscanf(tmp, "Private_Dirty: %u kB", &private_dirty))
+                if (sscanf(tmp, "Private_Dirty: %u kB", &private_dirty) == 1)
                 {
                     expect_private_dirty = 0;
                     PRINT_DBG_SCANNED("Read private_dirty (%u)  %u/%u lines --> %s\r", private_dirty, skipped,
@@ -2666,7 +2743,7 @@ int getProcessInfos_rollup_learnt(FILE *smap)
             }
             else if (expect_swap_pss)
             {
-                if (sscanf(tmp, "SwapPss: %u kB", &swap_pss))
+                if (sscanf(tmp, "SwapPss: %u kB", &swap_pss) == 1)
                 {
                     PRINT_DBG_SCANNED("Read swap_pss (%u)  %u/%u lines --> %s\r", swap_pss, skipped,
                                       lines_To_skip, tmp);
@@ -2721,7 +2798,7 @@ int getProcessInfos_rollup(FILE *smap)
         unsigned swap_pss = 0;
         if (!linesToSkipForRss_smaps_rollup)
         {
-            if (sscanf(tmp, "Rss: %u kB", &rss))
+            if (sscanf(tmp, "Rss: %u kB", &rss) == 1)
             {
                 getProcessInfo.rssTotal = rss;
                 linesToSkipForRss_smaps_rollup = linesSkippedForRss + 1;
@@ -2734,7 +2811,7 @@ int getProcessInfos_rollup(FILE *smap)
         }
         else if (!linesToSkipForPss_smaps_rollup)
         {
-            if (sscanf(tmp, "Pss: %u kB", &pss))
+            if (sscanf(tmp, "Pss: %u kB", &pss) == 1)
             {
                 getProcessInfo.pssTotal = pss;
                 linesToSkipForPss_smaps_rollup = linesSkippedForPss + 1;
@@ -2747,7 +2824,7 @@ int getProcessInfos_rollup(FILE *smap)
         }
         else if (!linesToSkipForSharedClean_smaps_rollup)
         {
-            if (sscanf(tmp, "Shared_Clean: %u kB", &shared_clean))
+            if (sscanf(tmp, "Shared_Clean: %u kB", &shared_clean) == 1)
             {
                 getProcessInfo.shared_clean_total = shared_clean;
                 linesToSkipForSharedClean_smaps_rollup = linesSkippedForSharedClean + 1;
@@ -2761,7 +2838,7 @@ int getProcessInfos_rollup(FILE *smap)
         }
         else if (!linesToSkipForPrivateClean_smaps_rollup)
         {
-            if (sscanf(tmp, "Private_Clean: %u kB", &private_clean))
+            if (sscanf(tmp, "Private_Clean: %u kB", &private_clean) == 1)
             {
                 getProcessInfo.private_clean_total = private_clean;
                 linesToSkipForPrivateClean_smaps_rollup = linesSkippedForPrivateClean + 1;
@@ -2775,7 +2852,7 @@ int getProcessInfos_rollup(FILE *smap)
         }
         else if (!linesToSkipForDirtyPrivate_smaps_rollup)
         {
-            if (sscanf(tmp, "Private_Dirty: %u kB", &private_dirty))
+            if (sscanf(tmp, "Private_Dirty: %u kB", &private_dirty) == 1)
             {
                 getProcessInfo.private_dirty_total = private_dirty;
                 linesToSkipForDirtyPrivate_smaps_rollup = linesSkippedForDirtyPrivate + 1;
@@ -2789,7 +2866,7 @@ int getProcessInfos_rollup(FILE *smap)
         }
         else if (!linesToSkipForSwapPss_smaps_rollup)
         {
-            if (sscanf(tmp, "SwapPss: %u kB", &swap_pss))
+            if (sscanf(tmp, "SwapPss: %u kB", &swap_pss) == 1)
             {
                 getProcessInfo.swap_pss_total = swap_pss;
                 linesToSkipForSwapPss_smaps_rollup = linesSkippedForSwapPss + 1;
@@ -2799,7 +2876,7 @@ int getProcessInfos_rollup(FILE *smap)
             else
             {
                 // check if smap doesn't contain swappss..
-                if (sscanf(tmp, "Locked: %u kB", &swap_pss))
+                if (sscanf(tmp, "Locked: %u kB", &swap_pss) == 1)
                 {
                     PRINT_DBG_INITIAL("*****No SwapPss....skipping\n");
                 linesToSkipForSwapPss_smaps_rollup = 0xFFFF;
@@ -2856,7 +2933,7 @@ int getProcessInfos_learnt(FILE *smap)
         {
             if (expect_rss)
             {
-                if (sscanf(tmp, "Rss: %u kB\n", &rss))
+                if (sscanf(tmp, "Rss: %u kB\n", &rss) == 1)
                 {
                     if (rss)
                     {
@@ -2881,7 +2958,7 @@ int getProcessInfos_learnt(FILE *smap)
             }
             else if (expect_pss)
             {
-                if (sscanf(tmp, "Pss: %u kB\n", &pss))
+                if (sscanf(tmp, "Pss: %u kB\n", &pss) == 1)
                 {
                     getProcessInfo.pssTotal += pss;
                     lines_To_skip = linesToSkipForSharedClean;
@@ -2894,7 +2971,7 @@ int getProcessInfos_learnt(FILE *smap)
             }
             else if (expect_shared_clean)
             {
-                if (sscanf(tmp, "Shared_Clean: %u kB\n", &shared_clean))
+                if (sscanf(tmp, "Shared_Clean: %u kB\n", &shared_clean) == 1)
                 {
                     if (shared_clean) {
                         getProcessInfo.shared_clean_total += prev_pss;
@@ -2909,7 +2986,7 @@ int getProcessInfos_learnt(FILE *smap)
             }
             else if (expect_private_clean)
             {
-                if (sscanf(tmp, "Private_Clean: %u kB\n", &private_clean))
+                if (sscanf(tmp, "Private_Clean: %u kB\n", &private_clean) == 1)
                 {
                     expect_private_clean = 0;
                     getProcessInfo.private_clean_total += private_clean;
@@ -2921,7 +2998,7 @@ int getProcessInfos_learnt(FILE *smap)
             }
             else if (expect_private_dirty)
             {
-                if (sscanf(tmp, "Private_Dirty: %u kB\n", &private_dirty))
+                if (sscanf(tmp, "Private_Dirty: %u kB\n", &private_dirty) == 1)
                 {
                     expect_private_dirty = 0;
                     getProcessInfo.private_dirty_total += private_dirty;
@@ -2941,7 +3018,7 @@ int getProcessInfos_learnt(FILE *smap)
             }
             else if (expect_swap_pss)
             {
-                if (sscanf(tmp, "SwapPss: %u kB\n", &swap_pss))
+                if (sscanf(tmp, "SwapPss: %u kB\n", &swap_pss) == 1)
                 {
                     expect_swap_pss = 0;
                     expect_rss = 1;
@@ -3033,7 +3110,7 @@ int getProcessInfos_initial(FILE *smap)
         { // Learn here
             if (!linesToSkipForRss)
             {
-                if (sscanf(tmp, "Rss: %u kB", &rss))
+                if (sscanf(tmp, "Rss: %u kB", &rss) == 1)
                 {
                     getProcessInfo.rssTotal += rss;
                     linesToSkipForRss = linesSkippedForRss + 1;
@@ -3046,7 +3123,7 @@ int getProcessInfos_initial(FILE *smap)
             }
             else if (!linesToSkipForPss)
             {
-                if (sscanf(tmp, "Pss: %u kB", &pss))
+                if (sscanf(tmp, "Pss: %u kB", &pss) == 1)
                 {
                     getProcessInfo.pssTotal += pss;
                     linesToSkipForPss = linesSkippedForPss + 1;
@@ -3060,7 +3137,7 @@ int getProcessInfos_initial(FILE *smap)
             }
             else if (!linesToSkipForSharedClean)
             {
-                if (sscanf(tmp, "Shared_Clean: %u kB", &shared_clean))
+                if (sscanf(tmp, "Shared_Clean: %u kB", &shared_clean) == 1)
                 {
                     if (shared_clean) {
                         getProcessInfo.shared_clean_total += prev_pss;
@@ -3076,7 +3153,7 @@ int getProcessInfos_initial(FILE *smap)
             }
             else if (!linesToSkipForPrivateClean)
             {
-                if (sscanf(tmp, "Private_Clean: %u kB", &private_clean))
+                if (sscanf(tmp, "Private_Clean: %u kB", &private_clean) == 1)
                 {
                     getProcessInfo.private_clean_total += private_clean;
                     linesToSkipForPrivateClean = linesSkippedForPrivateClean + 1;
@@ -3090,7 +3167,7 @@ int getProcessInfos_initial(FILE *smap)
             }
             else if (!linesToSkipForDirtyPrivate)
             {
-                if (sscanf(tmp, "Private_Dirty: %u kB", &private_dirty))
+                if (sscanf(tmp, "Private_Dirty: %u kB", &private_dirty) == 1)
                 {
                     getProcessInfo.private_dirty_total += private_dirty;
                     linesToSkipForDirtyPrivate = linesSkippedForDirtyPrivate + 1;
@@ -3104,7 +3181,7 @@ int getProcessInfos_initial(FILE *smap)
             }
             else if (!linesToSkipForSwapPss)
             {
-                if (sscanf(tmp, "SwapPss: %u kB", &swap_pss))
+                if (sscanf(tmp, "SwapPss: %u kB", &swap_pss) == 1)
                 {
                     getProcessInfo.swap_pss_total += swap_pss;
                     linesToSkipForSwapPss = linesSkippedForSwapPss + 1;
@@ -3115,7 +3192,7 @@ int getProcessInfos_initial(FILE *smap)
                 else
                 {
                     // check if smap doesn't contain swappss..
-                    if (sscanf(tmp, "Rss: %u kB", &rss))
+                    if (sscanf(tmp, "Rss: %u kB", &rss) == 1)
                     {
                         getProcessInfo.rssTotal += rss;
                         linesToSkipForRollover = linesSkippedForSwapPss + 1;
@@ -3138,7 +3215,7 @@ int getProcessInfos_initial(FILE *smap)
             }
             else if (!linesToSkipForRollover)
             {
-                if (sscanf(tmp, "Rss: %u kB", &rss))
+                if (sscanf(tmp, "Rss: %u kB", &rss) == 1)
                 {
                     getProcessInfo.rssTotal += rss;
                     linesToSkipForRollover = linesSkippedForRollover + 1;
@@ -3171,7 +3248,7 @@ int getProcessInfos_initial(FILE *smap)
             {
                 if (expect_rss)
                 {
-                    if (sscanf(tmp, "Rss: %u kB", &rss))
+                    if (sscanf(tmp, "Rss: %u kB", &rss) == 1)
                     {
                         PRINT_DBG_SCANNED("Read Rss (%u) after %u/%u lines --> %s\r", rss, skipped,
                                               lines_To_skip, tmp);
@@ -3199,7 +3276,7 @@ int getProcessInfos_initial(FILE *smap)
                 }
                 else if (expect_pss)
                 {
-                    if (sscanf(tmp, "Pss: %u kB", &pss))
+                    if (sscanf(tmp, "Pss: %u kB", &pss) == 1)
                     {
                         PRINT_DBG_SCANNED("Read Pss (%u) after %u/%u lines  --> %s\r", pss, skipped, lines_To_skip,
                                           tmp);
@@ -3214,7 +3291,7 @@ int getProcessInfos_initial(FILE *smap)
                 }
                 else if (expect_shared_clean)
                 {
-                    if (sscanf(tmp, "Shared_Clean: %u kB", &shared_clean))
+                    if (sscanf(tmp, "Shared_Clean: %u kB", &shared_clean) == 1)
                     {
                         PRINT_DBG_SCANNED("Read shared_clean (%u)  %u/%u lines --> %s\r", shared_clean, skipped,
                                           lines_To_skip, tmp);
@@ -3231,7 +3308,7 @@ int getProcessInfos_initial(FILE *smap)
                 }
                 else if (expect_private_clean)
                 {
-                    if (sscanf(tmp, "Private_Clean: %u kB", &private_clean))
+                    if (sscanf(tmp, "Private_Clean: %u kB", &private_clean) == 1)
                     {
                         expect_private_clean = 0;
                         PRINT_DBG_SCANNED("Read private_clean (%u)  %u/%u lines --> %s\r", private_clean, skipped,
@@ -3245,7 +3322,7 @@ int getProcessInfos_initial(FILE *smap)
                 }
                 else if (expect_private_dirty)
                 {
-                    if (sscanf(tmp, "Private_Dirty: %u kB", &private_dirty))
+                    if (sscanf(tmp, "Private_Dirty: %u kB", &private_dirty) == 1)
                     {
                         expect_private_dirty = 0;
                         PRINT_DBG_SCANNED("Read private_dirty (%u)  %u/%u lines --> %s\r", private_dirty, skipped,
@@ -3267,7 +3344,7 @@ int getProcessInfos_initial(FILE *smap)
                 }
                 else if (expect_swap_pss)
                 {
-                    if (sscanf(tmp, "SwapPss: %u kB", &swap_pss))
+                    if (sscanf(tmp, "SwapPss: %u kB", &swap_pss) == 1)
                     {
                         expect_swap_pss = 0;
                         expect_rss = 1;
@@ -3632,6 +3709,7 @@ int collectSystemMemoryStats(bool enableKThreads, const char *outDir, int iterat
 
     PRINT_MUST("Capturing System wide stats into directory %s\n", setup.outputDir);
     char outputfile[512];
+    char outputName[256];
 
     for (int iter = 0; long_run || iter < iterations; iter++)
     {
@@ -3640,14 +3718,26 @@ int collectSystemMemoryStats(bool enableKThreads, const char *outDir, int iterat
 
         // Current timestamp
         time_t timenow = time(NULL);
-        struct tm *tm_info = localtime(&timenow);
+        struct tm tm_info;
         char timestamp[32] = {0};
         char ts[32] = {0};
-        strftime(ts, sizeof(ts), "%Y-%m-%d %H:%M:%S", tm_info);
-        strftime(timestamp, sizeof(timestamp), "%Y%m%d%H%M%S", tm_info);
 
-        snprintf(outputfile, sizeof(outputfile), "%s/%s_%s_iter%d_%s",
-                 setup.outputDir, setup.mac, timestamp, iter + 1, setup.reportFileName);
+        if (localtime_r(&timenow, &tm_info) == NULL) {
+            PRINT_ERROR("%s: Failed to get local time\n", __FUNCTION__);
+            continue;
+        }
+
+        if (strftime(ts, sizeof(ts), "%Y-%m-%d %H:%M:%S", &tm_info) == 0) {
+            PRINT_ERROR("%s: Failed to format timestamp\n", __FUNCTION__);
+            continue;
+        }
+
+        if (strftime(timestamp, sizeof(timestamp), "%Y%m%d%H%M%S", &tm_info) == 0) {
+            PRINT_ERROR("%s: Failed to format timestamp\n", __FUNCTION__);
+            continue;
+        }
+        snprintf(outputName, sizeof(outputName), "%s_%s_iter%d_%s", setup.mac, timestamp, iter + 1, setup.reportFileName);
+        snprintf(outputfile, sizeof(outputfile), "%s/%s", setup.outputDir, outputName);
         PRINT_INFO("Capturing Process stats into: %s\n", outputfile);
 
         /* Recalculate uptime fresh on each iteration. */
@@ -3678,7 +3768,7 @@ int collectSystemMemoryStats(bool enableKThreads, const char *outDir, int iterat
 
         FILE *output = NULL;
         if (g_reportFormat == REPORT_CSV) {
-            output = fopen(outputfile, "w");
+            output = createRestrictedReportFile(setup.outputDir, outputName);
             if (NULL == output) {
                 PRINT_MUST("%s: Open failed, %d [%s]\n", outputfile, errno, strerror(errno));
                 removeFileIfPresent(MEMINSIGHT_INPROGRESS_FILE);
@@ -3948,16 +4038,23 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, bool cli_out
 
         // Get timestamp
         time_t timenow = time(NULL);
-        struct tm *tm_info = localtime(&timenow);
+        struct tm tm_info;
         char timestamp[32] = {0};
         char ts[32] = {0};
-        strftime(ts, sizeof(ts), "%Y-%m-%d %H:%M:%S", tm_info);
-        strftime(timestamp, sizeof(timestamp), "%Y%m%d%H%M%S", tm_info);
+        if (localtime_r(&timenow, &tm_info) == NULL ||
+            strftime(ts, sizeof(ts), "%Y-%m-%d %H:%M:%S", &tm_info) == 0 ||
+            strftime(timestamp, sizeof(timestamp), "%Y%m%d%H%M%S", &tm_info) == 0) {
+            PRINT_ERROR("%s: Failed to generate timestamp\n", __FUNCTION__);
+            continue;
+        }
 
         // Generate output file name
         char outputFilePath[PATH_MAX * 2] = {0};
-        snprintf(outputFilePath, sizeof(outputFilePath), "%s/%s_%s_iter%d_%s",
-                 setup.outputDir, setup.mac, timestamp, iter + 1, setup.reportFileName);
+        char outputFileName[256] = {0};
+        snprintf(outputFileName, sizeof(outputFileName), "%s_%s_iter%d_%s",
+             setup.mac, timestamp, iter + 1, setup.reportFileName);
+        snprintf(outputFilePath, sizeof(outputFilePath), "%s/%s",
+             setup.outputDir, outputFileName);
         PRINT_INFO("Capturing Process stats into %s\n", outputFilePath);
 
         /* Recalculate uptime fresh on each iteration */
@@ -3991,7 +4088,7 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, bool cli_out
 
         FILE *output = NULL;
         if (g_reportFormat == REPORT_CSV) {
-            output = fopen(outputFilePath, "w");
+            output = createRestrictedReportFile(setup.outputDir, outputFileName);
             if (!output) {
                 PRINT_ERROR("Error: Failed to open output file '%s' for writing\n", outputFilePath);
                 for (unsigned j = 0; j < config.whiteListCount; j++)
@@ -4210,7 +4307,7 @@ void saveMeminfo(FILE *out)
         while (fgets(tmp, 127, meminfo) && (processIndex < MEMINFO_NEEDED_FIELDS_COUNT)) {
 #ifdef TESTME
             char tstname[64];
-            if (!sscanf(tmp, "%s %lu kB", tstname, &value)) {
+            if (sscanf(tmp, "%63s %lu kB", tstname, &value) != 2) {
                 PRINT_ERROR("%s: Error parsing [%s]\n", __FUNCTION__, tmp);
                 continue; 
             }
@@ -4230,11 +4327,13 @@ void saveMeminfo(FILE *out)
 #endif
             if (learnt) {
                 if (! --skipCount) {
-                    if (!sscanf(tmp, "%*s %lu kB", &value)) {
+                    if (sscanf(tmp, "%*s %lu kB", &value) != 1) {
                         PRINT_ERROR("%s: Error parsing [%s]\n", __FUNCTION__, tmp);
                         continue; 
                     }
-                    skipCount = skipArray[++processIndex];
+                    processIndex++;
+                    if (processIndex < MEMINFO_NEEDED_FIELDS_COUNT)
+                        skipCount = skipArray[processIndex];
                     processValIndex += sprintf(meminfoValue+processValIndex, ",%lu", value);
                 }
             }
@@ -4242,7 +4341,7 @@ void saveMeminfo(FILE *out)
             {
                 char name[64];
                 // Below lines repeat, but okay..for clarity and not needed to check whether learnt again
-                if (!sscanf(tmp, "%s %lu kB", name, &value)) {
+                if (sscanf(tmp, "%63s %lu kB", name, &value) != 2) {
                     PRINT_ERROR("%s: Error parsing [%s]\n", __FUNCTION__, tmp);
                     continue; 
                 }
@@ -4451,14 +4550,14 @@ void writeProcessInfo_JSON(cJSON_t *processesArray)
  */
 int writeJSONToFile(const char *filepath, const SetupInfo *setup)
 {
-    (void)setup; /* metadata already written into g_rootObject at creation */
-
     if (!g_rootObject) {
         PRINT_ERROR("No JSON data to write\n");
         return -1;
     }
 
-    FILE *out = fopen(filepath, "w");
+    const char *fileName = strrchr(filepath, '/');
+    fileName = fileName ? fileName + 1 : filepath;
+    FILE *out = createRestrictedReportFile(setup->outputDir, fileName);
     if (!out) {
         PRINT_ERROR("Failed to open %s for writing: %s\n", filepath, strerror(errno));
         g_cjson.Delete(g_rootObject);
@@ -4596,11 +4695,17 @@ int writeT2Report(const char *filepath, const SetupInfo *setup, int iteration, i
 
     /* Timestamp, Date, Uptime, Iteration */
     time_t timenow = time(NULL);
-    struct tm *tm_info = localtime(&timenow);
+    struct tm tm_info;
     char ts[32] = {0};
     char dateStr[16] = {0};
-    strftime(ts, sizeof(ts), "%Y-%m-%d %H:%M:%S", tm_info);
-    strftime(dateStr, sizeof(dateStr), "%Y-%m-%d", tm_info);
+    if (localtime_r(&timenow, &tm_info) == NULL ||
+        strftime(ts, sizeof(ts), "%Y-%m-%d %H:%M:%S", &tm_info) == 0 ||
+        strftime(dateStr, sizeof(dateStr), "%Y-%m-%d", &tm_info) == 0) {
+        PRINT_ERROR("T2: Failed to generate timestamp\n");
+        g_cjson.Delete(reportArray);
+        g_cjson.Delete(root);
+        return -1;
+    }
     T2_ADD_STRING("Time", ts);
     T2_ADD_STRING("Date", dateStr);
 
@@ -4995,7 +5100,9 @@ int writeT2Report(const char *filepath, const SetupInfo *setup, int iteration, i
     /* --- Assemble and write --- */
     g_cjson.AddItemToObject(root, "Report", reportArray);
 
-    FILE *out = fopen(filepath, "w");
+    const char *fileName = strrchr(filepath, '/');
+    fileName = fileName ? fileName + 1 : filepath;
+    FILE *out = createRestrictedReportFile(setup->outputDir, fileName);
     if (!out) {
         PRINT_ERROR("T2: Failed to open %s for writing: %s\n", filepath, strerror(errno));
         g_cjson.Delete(root);
@@ -5080,14 +5187,11 @@ int main(int argc, char *argv[])
         { // config file
             if (i + 1 < argc)
             {
-                strncpy(confFile, argv[i + 1], PATH_MAX - 1);
-                FILE *fp = fopen(confFile, "r");
-                if (!fp)
+                if (!realpath(argv[i + 1], confFile))
                 {
-                    PRINT_ERROR("Error: Config file '%s' does not exist or cannot be opened.\n", confFile);
+                    PRINT_ERROR("Error: Config file '%s' does not exist or cannot be resolved.\n", argv[i + 1]);
                     printHelpAndUsage(argv, true, 1);
                 }
-                fclose(fp);
                 isSystemWide = false; // Config mode implies not system-wide
                 isConfigPresent = true;
                 i++; // Skip next arg (conf file)
