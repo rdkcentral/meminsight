@@ -671,8 +671,47 @@ static bool outputDirHasMeminsightBase(const char *dir)
     return strstr(baseName, "meminsight") != NULL;
 }
 
+static bool isSafeOutputDir(const char *dir)
+{
+    if (!dir || !*dir || strlen(dir) >= PATH_MAX)
+        return false;
+
+    if (strchr(dir, '\\') || strchr(dir, ':'))
+        return false;
+
+    for (const unsigned char *p = (const unsigned char *)dir; *p; p++) {
+        if (*p < 0x20 || *p == 0x7f)
+            return false;
+    }
+
+    const char *segment = dir;
+    while (*segment) {
+        while (*segment == '/')
+            segment++;
+        if (!*segment)
+            break;
+
+        const char *end = strchr(segment, '/');
+        size_t segmentLen = end ? (size_t)(end - segment) : strlen(segment);
+        if ((segmentLen == 1 && segment[0] == '.') ||
+            (segmentLen == 2 && segment[0] == '.' && segment[1] == '.'))
+            return false;
+
+        segment = end ? end + 1 : segment + segmentLen;
+    }
+
+    return true;
+}
+
 static bool validateOutputDirOrHelp(const char *dir, char *argv[], bool moreInfo)
 {
+    if (!isSafeOutputDir(dir))
+    {
+        PRINT_MUST("Output directory '%s' contains an unsafe path expression\n", dir ? dir : "(null)");
+        printHelpAndUsage(argv, moreInfo, 1);
+        return false;
+    }
+
     if (!outputDirHasMeminsightBase(dir))
     {
         PRINT_MUST("Output directory '%s' must have 'meminsight' in the final path component\n", dir);
@@ -964,7 +1003,8 @@ SetupInfo initializeSetupInfo(const char *outDir, Report_Format format)
     snprintf(info.runHash, sizeof(info.runHash), "%llu%llu%02d", epoch, pid, random2Digit);
 
     /* One-time directory and file setup. */
-    info.outputDir = (outDir && *outDir) ? outDir : DEFAULT_OUT_DIR;
+    const char *requestedOutputDir = (outDir && *outDir) ? outDir : DEFAULT_OUT_DIR;
+    info.outputDir = isSafeOutputDir(requestedOutputDir) ? requestedOutputDir : DEFAULT_OUT_DIR;
     info.dirCreated = ensure_output_dir(info.outputDir, info.runHash);
     info.reportFileName = (format == REPORT_T2)   ? T2_FILE_NAME
                         : (format == REPORT_JSON) ? JSON_FILE_NAME
@@ -3960,6 +4000,15 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, bool cli_out
     const char *final_out_dir = cli_output_set
                                     ? cli_out_dir
                                     : (config.outputDir[0] ? config.outputDir : DEFAULT_OUT_DIR);
+
+    if (!isSafeOutputDir(final_out_dir))
+    {
+        PRINT_MUST("Error: Output directory '%s' contains an unsafe path expression\n", final_out_dir);
+        for (unsigned j = 0; j < config.whiteListCount; j++)
+            if (config.whitelist[j]) free(config.whitelist[j]);
+        if (config.whitelist) free(config.whitelist);
+        return -1;
+    }
 
     if (!outputDirHasMeminsightBase(final_out_dir))
     {
