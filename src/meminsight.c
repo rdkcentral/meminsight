@@ -262,7 +262,7 @@ static FILE *createRestrictedReportFile(const char *dir, const char *fileName)
         return NULL;
     }
 
-    int dirfd = open(dir, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    int dirfd = open(dir, O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
     if (dirfd == -1)
         return NULL;
 
@@ -608,7 +608,8 @@ static int apply_backup_policy(const char *dir, int keepCount, const char *runId
  * <timestamp>_<RUN_ID>_<BACKUP_BASE> subdirectory.
  * Backup handling is best-effort; run setup continues if some archive/delete
  * operations fail and the output directory remains usable.
- * If @p dir does not exist a single-level mkdir(2) is attempted.
+ * A symlink in the final path component is rejected. If @p dir does not exist,
+ * a single-level mkdir(2) is attempted.
  *
  * @param[in] dir  Path to the desired output directory.
  * @return true if the directory exists or was successfully created, false otherwise.
@@ -616,8 +617,13 @@ static int apply_backup_policy(const char *dir, int keepCount, const char *runId
 static bool ensure_output_dir(const char *dir, const char *runIdFallback)
 {
     struct stat st = {0};
-    if (stat(dir, &st) == 0) // Exists
+    if (lstat(dir, &st) == 0) // Exists
     {
+        if (S_ISLNK(st.st_mode))
+        {
+            PRINT_MUST("Output directory '%s' must not be a symbolic link\n", dir);
+            return false;
+        }
         if (S_ISDIR(st.st_mode)) // Is a directory
         {
             if (apply_backup_policy(dir, g_backupCount, runIdFallback) != 0)
