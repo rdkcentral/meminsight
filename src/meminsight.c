@@ -616,28 +616,43 @@ static int apply_backup_policy(const char *dir, int keepCount, const char *runId
  */
 static bool ensure_output_dir(const char *dir, const char *runIdFallback)
 {
+    if (!dir || !*dir)
+        return false;
+
+    size_t dirLen = strlen(dir);
+    if (dirLen >= PATH_MAX)
+    {
+        PRINT_MUST("Output directory path is too long\n");
+        return false;
+    }
+
+    char normalizedDir[PATH_MAX];
+    memcpy(normalizedDir, dir, dirLen + 1);
+    while (dirLen > 1 && normalizedDir[dirLen - 1] == '/')
+        normalizedDir[--dirLen] = '\0';
+
     struct stat st = {0};
-    if (lstat(dir, &st) == 0) // Exists
+    if (lstat(normalizedDir, &st) == 0) // Exists
     {
         if (S_ISLNK(st.st_mode))
         {
-            PRINT_MUST("Output directory '%s' must not be a symbolic link\n", dir);
+            PRINT_MUST("Output directory '%s' must not be a symbolic link\n", normalizedDir);
             return false;
         }
         if (S_ISDIR(st.st_mode)) // Is a directory
         {
-            if (apply_backup_policy(dir, g_backupCount, runIdFallback) != 0)
+            if (apply_backup_policy(normalizedDir, g_backupCount, runIdFallback) != 0)
             {
-                PRINT_MUST("Warning: backup policy had partial failures in '%s'; continuing run setup\n", dir);
+                PRINT_MUST("Warning: backup policy had partial failures in '%s'; continuing run setup\n", normalizedDir);
             }
             return true;
         }
-        PRINT_MUST("Path '%s' exists but is not a directory\n", dir);
+        PRINT_MUST("Path '%s' exists but is not a directory\n", normalizedDir);
         return false;
     }
-    if (mkdir(dir, 0755) == -1) // Try to create
+    if (mkdir(normalizedDir, 0755) == -1) // Try to create
     {
-        PRINT_MUST("Failed to create output directory '%s': %s\n", dir, strerror(errno));
+        PRINT_MUST("Failed to create output directory '%s': %s\n", normalizedDir, strerror(errno));
         return false;
     }
     return true;
