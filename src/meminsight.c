@@ -266,12 +266,25 @@ static FILE *createRestrictedReportFile(const char *dir, const char *fileName)
     if (dirfd == -1)
         return NULL;
 
-    int fd = openat(dirfd, fileName,
-                    O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC | O_NOFOLLOW,
-                    S_IRUSR | S_IWUSR | S_IRGRP);
-    int openErrno = errno;
-    close(dirfd);
+    /*
+     * Never open an existing inode with O_TRUNC: a hard-linked report name
+     * would truncate the linked file. Unlink and O_EXCL-create a new inode.
+     */
+    const int createFlags = O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW;
+    const mode_t createMode = S_IRUSR | S_IWUSR | S_IRGRP;
+    int fd = openat(dirfd, fileName, createFlags, createMode);
+    if (fd == -1 && errno == EEXIST) {
+        if (unlinkat(dirfd, fileName, 0) != 0) {
+            int savedErrno = errno;
+            close(dirfd);
+            errno = savedErrno;
+            return NULL;
+        }
+        fd = openat(dirfd, fileName, createFlags, createMode);
+    }
     if (fd == -1) {
+        int openErrno = errno;
+        close(dirfd);
         errno = openErrno;
         return NULL;
     }
@@ -280,14 +293,20 @@ static FILE *createRestrictedReportFile(const char *dir, const char *fileName)
     if (fstat(fd, &st) != 0) {
         int savedErrno = errno;
         close(fd);
+        (void)unlinkat(dirfd, fileName, 0);
+        close(dirfd);
         errno = savedErrno;
         return NULL;
     }
-    if (!S_ISREG(st.st_mode)) {
+    if (!S_ISREG(st.st_mode) || st.st_nlink != 1 || st.st_uid != geteuid()) {
         close(fd);
+        (void)unlinkat(dirfd, fileName, 0);
+        close(dirfd);
         errno = EINVAL;
         return NULL;
     }
+    close(dirfd);
+
     if (fchmod(fd, S_IRUSR | S_IWUSR | S_IRGRP) != 0) {
         int savedErrno = errno;
         close(fd);
@@ -379,13 +398,17 @@ static int cmp_mtime_desc(const void *a, const void *b)
  * Non-report files/subdirectories are untouched. If no matching reports are
  * found, the function returns immediately without creating a backup dir.
  *
- * @param[in] dir     Output directory to apply policy to.
+ * @param[in] dirfd   Directory fd opened with O_DIRECTORY | O_NOFOLLOW.
+ * @param[in] dir     Output directory path (for log messages only).
  * @param[in] keepCount  Backup count (must be >= 1, capped by MAX_BACKUP_COUNT).
  * @return 0 on success, -1 on scan/allocation/archive-create failure,
  *         or when any archive/remove file operation fails.
  */
-static int apply_backup_policy(const char *dir, int keepCount, const char *runIdFallback)
+static int apply_backup_policy(int dirfd, const char *dir, int keepCount, const char *runIdFallback)
 {
+    if (dirfd < 0 || !dir || !*dir)
+        return -1;
+
     if (keepCount < 1)
     {
         PRINT_MUST("Invalid backup count %d (must be between 1 and %d)\n", keepCount, MAX_BACKUP_COUNT);
@@ -400,10 +423,24 @@ static int apply_backup_policy(const char *dir, int keepCount, const char *runId
     const char *activeExt = (g_reportFormat == REPORT_JSON) ? ".json" : ".csv";
     const size_t activeExtLen = strlen(activeExt);
 
-    DIR *d = opendir(dir);
+    int scanFd = dup(dirfd);
+    if (scanFd == -1)
+    {
+        PRINT_MUST("Failed to duplicate output dir fd for backup scan '%s': %s\n", dir, strerror(errno));
+        return -1;
+    }
+    if (fcntl(scanFd, F_SETFD, FD_CLOEXEC) == -1)
+    {
+        PRINT_MUST("Failed to set CLOEXEC on backup scan fd '%s': %s\n", dir, strerror(errno));
+        close(scanFd);
+        return -1;
+    }
+
+    DIR *d = fdopendir(scanFd);
     if (!d)
     {
         PRINT_MUST("Failed to open output dir for backup scan '%s': %s\n", dir, strerror(errno));
+        close(scanFd);
         return -1;
     }
 
@@ -414,15 +451,6 @@ static int apply_backup_policy(const char *dir, int keepCount, const char *runId
     if (!entries)
     {
         PRINT_MUST("Failed to allocate memory for backup scan\n");
-        closedir(d);
-        return -1;
-    }
-
-    int scanfd = dirfd(d);
-    if (scanfd == -1)
-    {
-        PRINT_MUST("Failed to get directory fd for backup scan '%s': %s\n", dir, strerror(errno));
-        free(entries);
         closedir(d);
         return -1;
     }
@@ -438,7 +466,7 @@ static int apply_backup_policy(const char *dir, int keepCount, const char *runId
             continue;
 
         struct stat st;
-        if (fstatat(scanfd, ent->d_name, &st, 0) != 0 || !S_ISREG(st.st_mode))
+        if (fstatat(scanFd, ent->d_name, &st, 0) != 0 || !S_ISREG(st.st_mode))
             continue;
 
         if (count >= capacity)
@@ -472,18 +500,10 @@ static int apply_backup_policy(const char *dir, int keepCount, const char *runId
     /* Sort newest first. */
     qsort(entries, count, sizeof(RetainEntry), cmp_mtime_desc);
 
-    int dirfd = open(dir, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
-    if (dirfd == -1)
-    {
-        PRINT_MUST("Failed to open output dir for backup operations '%s': %s\n", dir, strerror(errno));
-        free(entries);
-        return -1;
-    }
-
     /*
      * Create archive subdirectory inside output directory.
      *
-    * Runs can start within the same second, so <timestamp>_<RUN_ID>_<BACKUP_BASE>
+     * Runs can start within the same second, so <timestamp>_<RUN_ID>_<BACKUP_BASE>
      * may already exist. In that case retry with a numeric suffix.
      */
     char archiveName[PATH_MAX];
@@ -515,7 +535,6 @@ static int apply_backup_policy(const char *dir, int keepCount, const char *runId
         if (archiveNameLen <= 0 || (size_t)archiveNameLen >= sizeof(archiveName))
         {
             PRINT_MUST("Failed to build backup archive name for '%s'\n", dir);
-            close(dirfd);
             free(entries);
             return -1;
         }
@@ -529,7 +548,6 @@ static int apply_backup_policy(const char *dir, int keepCount, const char *runId
         if (errno != EEXIST)
         {
             PRINT_MUST("Failed to create backup archive dir '%s/%s': %s\n", dir, archiveName, strerror(errno));
-            close(dirfd);
             free(entries);
             return -1;
         }
@@ -538,15 +556,13 @@ static int apply_backup_policy(const char *dir, int keepCount, const char *runId
     if (!archiveCreated)
     {
         PRINT_MUST("Failed to create unique backup archive dir under '%s'\n", dir);
-        close(dirfd);
         free(entries);
         return -1;
     }
-    int archivefd = openat(dirfd, archiveName, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    int archivefd = openat(dirfd, archiveName, O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
     if (archivefd == -1)
     {
         PRINT_MUST("Failed to open backup archive dir '%s/%s': %s\n", dir, archiveName, strerror(errno));
-        close(dirfd);
         free(entries);
         return -1;
     }
@@ -594,7 +610,6 @@ static int apply_backup_policy(const char *dir, int keepCount, const char *runId
     PRINT_MUST(".\n");
 
     close(archivefd);
-    close(dirfd);
     free(entries);
     return (opFailures == 0) ? 0 : -1;
 }
@@ -631,30 +646,51 @@ static bool ensure_output_dir(const char *dir, const char *runIdFallback)
     while (dirLen > 1 && normalizedDir[dirLen - 1] == '/')
         normalizedDir[--dirLen] = '\0';
 
-    struct stat st = {0};
-    if (lstat(normalizedDir, &st) == 0) // Exists
+    const int dirFlags = O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW;
+    int dirfd = open(normalizedDir, dirFlags);
+    if (dirfd == -1)
     {
-        if (S_ISLNK(st.st_mode))
+        if (errno == ELOOP)
         {
             PRINT_MUST("Output directory '%s' must not be a symbolic link\n", normalizedDir);
             return false;
         }
-        if (S_ISDIR(st.st_mode)) // Is a directory
+        if (errno != ENOENT)
         {
-            if (apply_backup_policy(normalizedDir, g_backupCount, runIdFallback) != 0)
-            {
-                PRINT_MUST("Warning: backup policy had partial failures in '%s'; continuing run setup\n", normalizedDir);
-            }
-            return true;
+            if (errno == ENOTDIR)
+                PRINT_MUST("Path '%s' exists but is not a directory\n", normalizedDir);
+            else
+                PRINT_MUST("Failed to open output directory '%s': %s\n", normalizedDir, strerror(errno));
+            return false;
         }
-        PRINT_MUST("Path '%s' exists but is not a directory\n", normalizedDir);
-        return false;
+
+        if (mkdir(normalizedDir, 0755) == -1)
+        {
+            if (errno != EEXIST)
+            {
+                PRINT_MUST("Failed to create output directory '%s': %s\n", normalizedDir, strerror(errno));
+                return false;
+            }
+        }
+
+        dirfd = open(normalizedDir, dirFlags);
+        if (dirfd == -1)
+        {
+            if (errno == ELOOP)
+                PRINT_MUST("Output directory '%s' must not be a symbolic link\n", normalizedDir);
+            else if (errno == ENOTDIR)
+                PRINT_MUST("Path '%s' exists but is not a directory\n", normalizedDir);
+            else
+                PRINT_MUST("Failed to open output directory '%s': %s\n", normalizedDir, strerror(errno));
+            return false;
+        }
     }
-    if (mkdir(normalizedDir, 0755) == -1) // Try to create
+
+    if (apply_backup_policy(dirfd, normalizedDir, g_backupCount, runIdFallback) != 0)
     {
-        PRINT_MUST("Failed to create output directory '%s': %s\n", normalizedDir, strerror(errno));
-        return false;
+        PRINT_MUST("Warning: backup policy had partial failures in '%s'; continuing run setup\n", normalizedDir);
     }
+    close(dirfd);
     return true;
 }
 
@@ -1016,8 +1052,7 @@ SetupInfo initializeSetupInfo(const char *outDir, Report_Format format)
 
     unsigned long long epoch = (unsigned long long)time(NULL);
     unsigned long long pid = (unsigned long long)getpid();
-    srand((unsigned int)(epoch ^ pid));
-    int random2Digit = rand() % 100;
+    int random2Digit = (int)((epoch ^ (pid * 1103515245ULL) ^ (epoch >> 17)) % 100ULL);
 #ifdef TESTME
     PRINT_INFO("Debug: epoch=%llu |  pid=%llu | random2Digit=%02d\n", epoch, pid, random2Digit);
 #endif
@@ -1067,26 +1102,44 @@ static void updateBandwidthAvailability(void)
     /* In test mode, fixture availability determines bandwidth support. */
     if (isTestMode)
     {
-        g_bwDataAvailable = (testBandwidth[0] != '\0' && access(testBandwidth, R_OK) == 0);
+        int bwFd = -1;
+        if (testBandwidth[0] != '\0')
+            bwFd = open(testBandwidth, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+        g_bwDataAvailable = (bwFd >= 0);
+        if (bwFd >= 0)
+            close(bwFd);
         return;
     }
 #endif
 
-    bool modeReadable = (access(BW_DDR_MODE_FILE, R_OK) == 0);
-    bool modeWritable = (access(BW_DDR_MODE_FILE, W_OK) == 0);
-    bool bwReadable = (access(BW_DDR_FILE, R_OK) == 0);
+    bool modeReadable = false;
+    bool modeWritable = false;
+    bool bwReadable = false;
     bool modeEnabled = false;
 
-    if (modeReadable)
+    int modeFd = open(BW_DDR_MODE_FILE, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+    if (modeFd >= 0)
     {
-        FILE *fp = fopen(BW_DDR_MODE_FILE, "r");
-        if (fp)
-        {
-            char modeBuf[16] = {0};
-            if (fgets(modeBuf, sizeof(modeBuf), fp) && modeBuf[0] == '1')
-                modeEnabled = true;
-            fclose(fp);
-        }
+        char modeBuf[16] = {0};
+        ssize_t n = read(modeFd, modeBuf, sizeof(modeBuf) - 1);
+        modeReadable = true;
+        if (n > 0 && modeBuf[0] == '1')
+            modeEnabled = true;
+        close(modeFd);
+    }
+
+    modeFd = open(BW_DDR_MODE_FILE, O_WRONLY | O_CLOEXEC | O_NOFOLLOW);
+    if (modeFd >= 0)
+    {
+        modeWritable = true;
+        close(modeFd);
+    }
+
+    int bwFd = open(BW_DDR_FILE, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+    if (bwFd >= 0)
+    {
+        bwReadable = true;
+        close(bwFd);
     }
 
     g_bwDataAvailable = (bwReadable && modeReadable && (modeWritable || modeEnabled));
@@ -3774,7 +3827,7 @@ int collectSystemMemoryStats(bool enableKThreads, const char *outDir, int iterat
     (void)touchFile(MEMINSIGHT_INPROGRESS_FILE);
 
     PRINT_MUST("Capturing System wide stats into directory %s\n", setup.outputDir);
-    char outputfile[512];
+    char outputfile[PATH_MAX * 2];
     char outputName[256];
 
     for (int iter = 0; long_run || iter < iterations; iter++)
@@ -3788,22 +3841,25 @@ int collectSystemMemoryStats(bool enableKThreads, const char *outDir, int iterat
         char timestamp[32] = {0};
         char ts[32] = {0};
 
-        if (localtime_r(&timenow, &tm_info) == NULL) {
-            PRINT_ERROR("%s: Failed to get local time\n", __FUNCTION__);
-            continue;
+        if (localtime_r(&timenow, &tm_info) == NULL ||
+            strftime(ts, sizeof(ts), "%Y-%m-%d %H:%M:%S", &tm_info) == 0 ||
+            strftime(timestamp, sizeof(timestamp), "%Y%m%d%H%M%S", &tm_info) == 0) {
+            PRINT_ERROR("%s: Failed to generate timestamp\n", __FUNCTION__);
+            removeFileIfPresent(MEMINSIGHT_INPROGRESS_FILE);
+            return -1;
         }
-
-        if (strftime(ts, sizeof(ts), "%Y-%m-%d %H:%M:%S", &tm_info) == 0) {
-            PRINT_ERROR("%s: Failed to format timestamp\n", __FUNCTION__);
-            continue;
+        int nameLen = snprintf(outputName, sizeof(outputName), "%s_%s_iter%d_%s", setup.mac, timestamp, iter + 1, setup.reportFileName);
+        if (nameLen <= 0 || (size_t)nameLen >= sizeof(outputName)) {
+            PRINT_ERROR("%s: Failed to build output file name\n", __FUNCTION__);
+            removeFileIfPresent(MEMINSIGHT_INPROGRESS_FILE);
+            return -1;
         }
-
-        if (strftime(timestamp, sizeof(timestamp), "%Y%m%d%H%M%S", &tm_info) == 0) {
-            PRINT_ERROR("%s: Failed to format timestamp\n", __FUNCTION__);
-            continue;
+        int pathLen = snprintf(outputfile, sizeof(outputfile), "%s/%s", setup.outputDir, outputName);
+        if (pathLen <= 0 || (size_t)pathLen >= sizeof(outputfile)) {
+            PRINT_ERROR("%s: Failed to build output file path\n", __FUNCTION__);
+            removeFileIfPresent(MEMINSIGHT_INPROGRESS_FILE);
+            return -1;
         }
-        snprintf(outputName, sizeof(outputName), "%s_%s_iter%d_%s", setup.mac, timestamp, iter + 1, setup.reportFileName);
-        snprintf(outputfile, sizeof(outputfile), "%s/%s", setup.outputDir, outputName);
         PRINT_INFO("Capturing Process stats into: %s\n", outputfile);
 
         /* Recalculate uptime fresh on each iteration. */
@@ -4111,16 +4167,36 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, bool cli_out
             strftime(ts, sizeof(ts), "%Y-%m-%d %H:%M:%S", &tm_info) == 0 ||
             strftime(timestamp, sizeof(timestamp), "%Y%m%d%H%M%S", &tm_info) == 0) {
             PRINT_ERROR("%s: Failed to generate timestamp\n", __FUNCTION__);
-            continue;
+            for (unsigned j = 0; j < config.whiteListCount; j++)
+                if (config.whitelist[j]) free(config.whitelist[j]);
+            if (config.whitelist) free(config.whitelist);
+            removeFileIfPresent(MEMINSIGHT_INPROGRESS_FILE);
+            return -1;
         }
 
         // Generate output file name
         char outputFilePath[PATH_MAX * 2] = {0};
         char outputFileName[256] = {0};
-        snprintf(outputFileName, sizeof(outputFileName), "%s_%s_iter%d_%s",
+        int nameLen = snprintf(outputFileName, sizeof(outputFileName), "%s_%s_iter%d_%s",
              setup.mac, timestamp, iter + 1, setup.reportFileName);
-        snprintf(outputFilePath, sizeof(outputFilePath), "%s/%s",
+        if (nameLen <= 0 || (size_t)nameLen >= sizeof(outputFileName)) {
+            PRINT_ERROR("%s: Failed to build output file name\n", __FUNCTION__);
+            for (unsigned j = 0; j < config.whiteListCount; j++)
+                if (config.whitelist[j]) free(config.whitelist[j]);
+            if (config.whitelist) free(config.whitelist);
+            removeFileIfPresent(MEMINSIGHT_INPROGRESS_FILE);
+            return -1;
+        }
+        int pathLen = snprintf(outputFilePath, sizeof(outputFilePath), "%s/%s",
              setup.outputDir, outputFileName);
+        if (pathLen <= 0 || (size_t)pathLen >= sizeof(outputFilePath)) {
+            PRINT_ERROR("%s: Failed to build output file path\n", __FUNCTION__);
+            for (unsigned j = 0; j < config.whiteListCount; j++)
+                if (config.whitelist[j]) free(config.whitelist[j]);
+            if (config.whitelist) free(config.whitelist);
+            removeFileIfPresent(MEMINSIGHT_INPROGRESS_FILE);
+            return -1;
+        }
         PRINT_INFO("Capturing Process stats into %s\n", outputFilePath);
 
         /* Recalculate uptime fresh on each iteration */
@@ -4697,6 +4773,7 @@ int writeT2Report(const char *filepath, const SetupInfo *setup, int iteration, i
     cJSON_t *root = g_cjson.CreateObject();
     if (!root) {
         PRINT_ERROR("T2: Failed to create root object\n");
+        freeProcessInfoList();
         return -1;
     }
 
@@ -4704,6 +4781,7 @@ int writeT2Report(const char *filepath, const SetupInfo *setup, int iteration, i
     if (!reportArray) {
         PRINT_ERROR("T2: Failed to create Report array\n");
         g_cjson.Delete(root);
+        freeProcessInfoList();
         return -1;
     }
 
@@ -4789,6 +4867,7 @@ int writeT2Report(const char *filepath, const SetupInfo *setup, int iteration, i
         PRINT_ERROR("T2: Failed to generate timestamp\n");
         g_cjson.Delete(reportArray);
         g_cjson.Delete(root);
+        freeProcessInfoList();
         return -1;
     }
     T2_ADD_STRING("Time", ts);
@@ -5191,6 +5270,7 @@ int writeT2Report(const char *filepath, const SetupInfo *setup, int iteration, i
     if (!out) {
         PRINT_ERROR("T2: Failed to open %s for writing: %s\n", filepath, strerror(errno));
         g_cjson.Delete(root);
+        freeProcessInfoList();
         return -1;
     }
 
