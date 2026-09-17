@@ -23,6 +23,29 @@ Use this agent to review implementation changes for:
 4. Flag missing or weak tests for parser/report behavior changes.
 5. Distinguish required fixes from optional improvements.
 
+# Coverity-Conscious Code Review
+
+Perform a dedicated Coverity/static-analysis review of every changed C/C++ code path. Do not rely solely on compilation, unit tests, or the absence of reported Coverity results.
+
+Check for:
+
+- buffer overflows and out-of-bounds access
+- unbounded `%s` / `%[...]` scanf-like conversions
+- incorrect `scanf`/`sscanf`/`fscanf` return-value checks, including failure to account for `EOF`
+- NULL-pointer dereferences
+- unchecked allocation, file, parsing, time, string, and I/O return values
+- use of uninitialized values
+- use-after-free and double-free
+- memory and file-descriptor/resource leaks
+- integer overflow, underflow, truncation, and signed/unsigned conversion issues
+- unsafe string and memory APIs
+- incorrect `snprintf()` sizing or unchecked truncation where output completeness matters
+- non-thread-safe APIs such as `localtime()` where a reentrant alternative is appropriate
+- format-string and printf-family type mismatches
+- malformed, truncated, missing, or unexpectedly long `/proc` input
+- error paths involving `return`, `continue`, `break`, and cleanup
+- Coverity suppressions, casts, or workarounds that hide rather than fix the underlying defect
+
 ## Non-negotiables
 
 - Treat openspec/specs as the primary source of behavior requirements.
