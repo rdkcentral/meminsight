@@ -184,10 +184,6 @@ typedef enum {
 } SortByField;
 static SortByField g_sortBy = SORT_BY_RSS;
 
-#ifdef ENABLE_HTTP_UPLOAD
-static const char *g_uploadUrl = NULL;
-#endif
-
 typedef enum {
     FRAG_SRC_NONE = 0,
     FRAG_SRC_PAGETYPEINFO,
@@ -766,21 +762,18 @@ static const char *resolveUploadUrl(const char *cli_upload_url, bool cli_upload_
 static void writeConfigStore(const SetupInfo *setup, int iterations, int interval,
                              bool upload_enabled, int upload_interval, const char *upload_url)
 {
-    (void)upload_enabled;
-    (void)upload_interval;
-    (void)upload_url;
-
     const char * const keys[] = {
         "UPTIME", "KERNEL_VERSION", "MEMINSIGHT_VERSION", "REPORT_VERSION",
         "RUN_ITERATIONS", "RUN_INTERVAL", "RUN_ID", "OUTPUT_FORMAT", "OUTPUT_DIR",
-        "BACKUP_ENABLED", "BACKUP_COUNT", "BACKUP_BASE", "FRAGMENTATION_ENABLED"
+        "BACKUP_ENABLED", "BACKUP_COUNT", "BACKUP_BASE", "FRAGMENTATION_ENABLED",
+	"UPLOAD_URL", "UPLOAD_INTERVAL"
     };
     const int nkeys = (int)(sizeof(keys) / sizeof(keys[0]));
 
     char v_uptime[64], v_kver[KERNEL_LEN], v_mver[32], v_rver[32];
     char v_iter[16], v_intv[16], v_runid[32], v_fmt[8];
     char v_backup_enabled[4], v_backup_count[16], v_backup_base[32], v_frag_enabled[4];
-    char v_outdir[PATH_MAX];
+    char v_outdir[PATH_MAX], v_upload_url[MEMINSIGHT_UPLOAD_URL_MAX], v_upload_interval[16];
 
     snprintf(v_uptime, sizeof(v_uptime), "%s", getSystemUptime());
     snprintf(v_kver,   sizeof(v_kver),   "%s", setup->kernelVersion);
@@ -796,7 +789,11 @@ static void writeConfigStore(const SetupInfo *setup, int iterations, int interva
     snprintf(v_backup_count, sizeof(v_backup_count), "%d", g_backupCount);
     snprintf(v_backup_base, sizeof(v_backup_base), "%s", BACKUP_BASE);
     snprintf(v_frag_enabled, sizeof(v_frag_enabled), "%d", g_CollectFragData ? 1 : 0);
-
+    /* upload destination is only meaningful for non-CSV formats consumed by the upload service */
+    snprintf(v_upload_url, sizeof(v_upload_url), "%s",
+             (upload_enabled && g_reportFormat != REPORT_CSV && upload_url) ? upload_url : "");
+    snprintf(v_upload_interval, sizeof(v_upload_interval), "%d", upload_enabled ? upload_interval : 0);
+ 
     char configStorePath[PATH_MAX];
     if (!buildConfigStorePath(setup->outputDir, configStorePath, sizeof(configStorePath)))
     {
@@ -807,7 +804,8 @@ static void writeConfigStore(const SetupInfo *setup, int iterations, int interva
     const char * const vals[] = {
         v_uptime, v_kver, v_mver, v_rver,
         v_iter, v_intv, v_runid, v_fmt, v_outdir,
-        v_backup_enabled, v_backup_count, v_backup_base, v_frag_enabled
+        v_backup_enabled, v_backup_count, v_backup_base, v_frag_enabled,
+        v_upload_url, v_upload_interval
     };
 
     /* Check if existing file already has all matching values */
@@ -3399,9 +3397,7 @@ void printHelpAndUsage(char *argv[], bool moreInfo, int returnCode)
     printf("      --frag                        Enable fragmentation data collection (default: disabled)\n");
     printf("  -b, --backup <count>              Number of report files to keep in pre-run backup handling (default: %d, max: %d)\n", DEFAULT_BACKUP_COUNT, MAX_BACKUP_COUNT);
     printf("  -s, --smaps                       Force /proc/<pid>/smaps (disable auto smaps_rollup detection)\n");
-#ifdef ENABLE_HTTP_UPLOAD
-    printf("      --upload-url <url>                Override T2 upload endpoint (default: env or built-in)\n");
-#endif
+    printf("      --upload-url <url>                Upload endpoint for non-CSV reports, read by the upload service (default: env or built-in)\n");
     printf("      --top-procs <N>                   Limit T2 report to top N processes by PSS (default: 5)\n");
     printf("      --sort-by <field>                 Sort T2 processes by: RSS (default), PSS, CPU_TIME, delta_cpu_time\n");
 #ifdef TESTME
@@ -3450,151 +3446,6 @@ void printHelpAndUsage(char *argv[], bool moreInfo, int returnCode)
     }
     exit(returnCode);
 }
-
-#ifdef ENABLE_HTTP_UPLOAD
-/*
- * -----------------------------------------------------------------------
- * * HTTP UPLOAD — shell curl + GetConfigFile mTLS pattern
- * -----------------------------------------------------------------------
- * Constructs a shell pipeline per file:
- * GetConfigFile <pass_file> stdout | awk '{print "--pass " $0}' |
- * curl --cert-type P12 --cert <cert> --config /dev/stdin ...
- * This keeps the cert passphrase out of the process table (ps output).
- * -----------------------------------------------------------------------
- */
-
-/**
- * @brief Scan output directory for *.t2.json files and POST each to T2.
- *
- * Uses GetConfigFile pipe + system curl for mTLS (same pattern as T2 telemetry).
- * Files confirmed uploaded (HTTP 200) are deleted; failed files are retained locally.
- * @param[in] outDir  Directory to scan for .t2.json files.
- * @return Number of files successfully uploaded (informational only).
- */
-static int mi_upload_t2_files(const char *outDir)
-{
-    if (!g_uploadUrl || !outDir)
-        return 0;
-
-    /* Prefer dynamic xPKI cert; fall back to static xPKI cert */
-    const char *cert_path = NULL;
-    const char *pass_file = NULL;
-    if (access("/opt/certs/devicecert_1.pk12", F_OK) == 0) {
-        cert_path = "/opt/certs/devicecert_1.pk12";
-        pass_file = "/tmp/.cfgDynamicxpki";
-    } else if (access("/opt/certs/devicecert_2.pk12", F_OK) == 0) {
-        cert_path = "/opt/certs/devicecert_2.pk12";
-        pass_file = "/tmp/.cfgDynamicxpki";
-    } else if (access("/nvram/certs/devicecert_1.pk12", F_OK) == 0) {
-        cert_path = "/nvram/certs/devicecert_1.pk12";
-        pass_file = "/tmp/.cfgDynamicxpki";
-    } else if (access("/nvram/certs/devicecert_2.pk12", F_OK) == 0) {
-        cert_path = "/nvram/certs/devicecert_2.pk12";
-        pass_file = "/tmp/.cfgDynamicxpki";
-    } else if (access("/etc/ssl/certs/staticXpkiCrt.pk12", F_OK) == 0) {
-        cert_path = "/etc/ssl/certs/staticXpkiCrt.pk12";
-        pass_file = "/tmp/.cfgStaticxpki";
-    }
-    if (!cert_path) {
-        fprintf(stderr, "[MemInsight] Upload: No device cert available, skipping upload.\n");
-        return 0;
-    }
-
-    printf("[MemInsight] Upload: Using cert %s (pass via %s)\n", cert_path, pass_file);
-
-    /*
-     * HTTP code is written to a temp file; system() avoids fd conflicts with
-     * curl's --config /dev/stdin that popen() would introduce.
-     */
-    char http_out[PATH_MAX];
-    snprintf(http_out, sizeof(http_out), "%s/.mi_http_out_%d", outDir, (int)getpid());
-
-    DIR *dir = opendir(outDir);
-    if (!dir) {
-        fprintf(stderr, "[MemInsight] Upload: Cannot open directory %s: %s\n",
-                outDir, strerror(errno));
-        return 0;
-    }
-
-    int uploaded = 0;
-    int found = 0;
-    struct dirent *entry;
-    while ((entry = readdir(dir)) != NULL) {
-        size_t nlen = strlen(entry->d_name);
-        if (nlen < 9 || strcmp(entry->d_name + nlen - 8, ".t2.json") != 0)
-            continue;
-
-        char filepath[PATH_MAX];
-	int np = snprintf(filepath, sizeof(filepath), "%s/%s", outDir, entry->d_name);
-        if (np < 0 || (size_t)np >= sizeof(filepath))
-            continue;
-        if (access(filepath, R_OK) != 0)
-            continue;
-
-        found++;
-        char err_out[PATH_MAX];
-        snprintf(err_out, sizeof(err_out), "%s/.mi_curl_err_%d", outDir, (int)getpid());
-
-        /* Reject characters that can break shell quoting and lead to command injection. */
-         if (strpbrk(g_uploadUrl, "\"'`$\\\n\r") != NULL) {
-             fprintf(stderr, "[MemInsight] Upload: Invalid characters in upload URL; skipping upload.\n");
-             continue;
-         }
-
-        char cmd[PATH_MAX * 2 + 512];
-        int n = snprintf(cmd, sizeof(cmd),
-            "/usr/bin/GetConfigFile \"%s\" stdout 2>/dev/null | "
-            "awk '{print \"--pass \" $0}' | "
-            "curl --cert-type P12 --cert \"%s\" --config /dev/stdin "
-            "--tlsv1.2 -H \"Content-type: application/json\" "
-            "-X POST -d @\"%s\" \"%s\" "
-            "--connect-timeout 30 -m 30 -w '%%{http_code}' -s -o /dev/null >\"%s\" 2>\"%s\"",
-            pass_file, cert_path, filepath, g_uploadUrl, http_out, err_out);
-
-        if (n < 0 || (size_t)n >= sizeof(cmd)) {
-            fprintf(stderr, "[MemInsight] Upload: Command too long for %s\n", entry->d_name);
-            continue;
-        }
-
-        int status = system(cmd);
-        int curl_exit = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
-
-        char http_code_str[16] = {0};
-        FILE *fp = fopen(http_out, "r");
-        if (fp) {
-            if (fgets(http_code_str, sizeof(http_code_str), fp) != NULL)
-                http_code_str[strcspn(http_code_str, "\n")] = '\0';
-            fclose(fp);
-        }
-
-        int code = atoi(http_code_str);
-        if (code == 200) {
-            uploaded++;
-	    printf("[MemInsight] Upload: %s -> HTTP %d\n", entry->d_name, code);
-            if (remove(filepath) != 0)
-                fprintf(stderr, "[MemInsight] Upload: failed to delete %s after upload: %s\n",
-                        filepath, strerror(errno));
-        } else {
-            /* retain file locally for manual recovery */
-            fprintf(stderr, "[MemInsight] Upload: %s -> HTTP %s (curl_exit=%d), retaining for manual backup\n",
-                    entry->d_name, http_code_str[0] ? http_code_str : "0", curl_exit);
-            char errbuf[256] = {0};
-            FILE *ef = fopen(err_out, "r");
-            if (ef) {
-                if (fgets(errbuf, sizeof(errbuf), ef) != NULL)
-                    fprintf(stderr, "[MemInsight] Upload: curl stderr: %s\n", errbuf);
-                fclose(ef);
-            }
-        }
-        unlink(err_out);
-    }
-    closedir(dir);
-
-    unlink(http_out);
-    printf("[MemInsight] Upload: %d/%d file(s) uploaded to %s\n", uploaded, found, g_uploadUrl);
-    return uploaded;
-}
-#endif /* ENABLE_HTTP_UPLOAD */
 
 /**
  * @brief Run system-wide collection mode and emit CSV or JSON reports.
