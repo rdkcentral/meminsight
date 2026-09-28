@@ -812,7 +812,7 @@ static void writeConfigStore(const SetupInfo *setup, int iterations, int interva
     FILE *fp = fopen(configStorePath, "r");
     if (fp)
     {
-        int matched[13] = {0};
+        int matched[sizeof(keys) / sizeof(keys[0])] = {0};
         char line[PATH_MAX + 64];
         while (fgets(line, sizeof(line), fp))
         {
