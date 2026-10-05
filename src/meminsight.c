@@ -225,6 +225,25 @@ static void trimTrailingWhitespace(char *str);
 static bool readConfigStoreValue(const char *dir, const char *key, char *value, size_t valueLen);
 static bool outputDirHasMeminsightBase(const char *dir);
 
+static bool parseBoundedIntArg(const char *arg, int minVal, int maxVal, int *out)
+{
+    char *end = NULL;
+    long value;
+
+    if (!arg || !*arg || !out)
+        return false;
+
+    errno = 0;
+    value = strtol(arg, &end, 10);
+    if (errno == ERANGE || end == arg || *end != '\0')
+        return false;
+    if (value < (long)minVal || value > (long)maxVal)
+        return false;
+
+    *out = (int)value;
+    return true;
+}
+
 static FILE *openRegularFileForRead(const char *path)
 {
     if (!path || !*path)
@@ -252,6 +271,31 @@ static FILE *openRegularFileForRead(const char *path)
         close(fd);
     return stream;
 }
+
+#ifdef TESTME
+static bool acceptTestFixturePath(const char *arg, char *dest, size_t destLen)
+{
+    char resolved[PATH_MAX];
+    FILE *fp;
+
+    if (!arg || !*arg || !dest || destLen == 0 || strstr(arg, "..") != NULL ||
+        strlen(arg) >= destLen) {
+        errno = EINVAL;
+        return false;
+    }
+
+    if (!realpath(arg, resolved))
+        return false;
+
+    fp = openRegularFileForRead(resolved);
+    if (!fp)
+        return false;
+    fclose(fp);
+
+    memcpy(dest, arg, strlen(arg) + 1);
+    return true;
+}
+#endif
 
 static FILE *createRestrictedReportFile(const char *dir, const char *fileName)
 {
@@ -3588,8 +3632,8 @@ void printHelpAndUsage(char *argv[], bool moreInfo, int returnCode)
     printf("  -c, --config <file>               Path to configuration file with %s extension\n", CONFIG_EXTN);
     printf("  -h, --help                        Show this help message and exit\n");
     printf("  -o, --output <directory>          Output directory for generated report files (default: %s; basename must contain 'meminsight')\n", DEFAULT_OUT_DIR);
-    printf("      --interval <seconds>          Interval in seconds between iterations (overrides config)\n");
-    printf("      --iterations <count>          Number of iterations to run (overrides config)\n");
+    printf("      --interval <seconds>          Interval in seconds between iterations (overrides config, max: %d)\n", MAX_INTERVAL);
+    printf("      --iterations <count>          Number of iterations to run (overrides config, max: %d)\n", MAX_ITERATIONS);
     printf("      --upload-enable               Enable Cadence based upload\n");
     printf("      --upload-interval <seconds>   Report Upload Frequency\n");
     printf("      --frag                        Enable fragmentation data collection (default: disabled)\n");
@@ -4446,14 +4490,16 @@ void saveMeminfo(FILE *out)
         int skipCount = skipArray[1];
         int processIndex = learnt;
         size_t processValIndex = skipMemTotal;
-        while (fgets(tmp, 127, meminfo) && (processIndex < MEMINFO_NEEDED_FIELDS_COUNT)) {
+        while (fgets(tmp, 127, meminfo) && (processIndex >= 0) &&
+               (processIndex < MEMINFO_NEEDED_FIELDS_COUNT)) {
 #ifdef TESTME
             char tstname[64];
             if (sscanf(tmp, "%63s %lu kB", tstname, &value) != 2) {
                 PRINT_ERROR("%s: Error parsing [%s]\n", __FUNCTION__, tmp);
                 continue; 
             }
-            tstname[strlen(tstname)-1] = '\0';
+            if (tstname[0] != '\0')
+                tstname[strlen(tstname)-1] = '\0';
             for (int tsti=0; tsti<MEMINFO_NEEDED_FIELDS_COUNT; tsti++) {
                 if (!strcmp(tstname, meminfoNeeded[tsti])) {
                     bool prependComma = (tstprocessHeaderIndex != 0);
@@ -4476,9 +4522,12 @@ void saveMeminfo(FILE *out)
                         PRINT_ERROR("%s: Error parsing [%s]\n", __FUNCTION__, tmp);
                         continue; 
                     }
-                    processIndex++;
-                    if (processIndex < MEMINFO_NEEDED_FIELDS_COUNT)
+                    if (processIndex < MEMINFO_NEEDED_FIELDS_COUNT - 1) {
+                        processIndex++;
                         skipCount = skipArray[processIndex];
+                    } else {
+                        processIndex = MEMINFO_NEEDED_FIELDS_COUNT;
+                    }
                     if (!appendMeminfoValue(meminfoValue, sizeof(meminfoValue),
                                             &processValIndex, true, value)) {
                         PRINT_MUST("Meminfo value buffer insufficient\n");
@@ -4496,11 +4545,14 @@ void saveMeminfo(FILE *out)
                     continue; 
                 }
                 skipCount++;
-                name[strlen(name)-1] = '\0';
-                if (!strcmp(name, meminfoNeeded[processIndex])) {
+                if (name[0] != '\0')
+                    name[strlen(name)-1] = '\0';
+                if (processIndex >= 0 && processIndex < MEMINFO_NEEDED_FIELDS_COUNT &&
+                    !strcmp(name, meminfoNeeded[processIndex])) {
                     PRINT_DBG_INITIAL("Found %s storing at index %d\n", name, processIndex);
                     if (processIndex) { // For MemTotal, skip always since we've the constant value
-                        skipArray[processIndex++] = skipCount;
+                        skipArray[processIndex] = skipCount;
+                        processIndex++;
                         skipCount = 0;
                         if (!appendMeminfoValue(meminfoValue, sizeof(meminfoValue),
                                                 &processValIndex, true, value)) {
@@ -4532,7 +4584,8 @@ void saveMeminfo(FILE *out)
                             char *tmpp = meminfoNeeded[processIndex];
                             meminfoNeeded[processIndex] = meminfoNeeded[i];
                             meminfoNeeded[i] = tmpp;
-                            skipArray[processIndex++] = skipCount;
+                            skipArray[processIndex] = skipCount;
+                            processIndex++;
                             skipCount = 0;
                             if (!appendMeminfoValue(meminfoValue, sizeof(meminfoValue),
                                                     &processValIndex, true, value)) {
@@ -4551,6 +4604,8 @@ void saveMeminfo(FILE *out)
             PRINT_DBG_INITIAL("Total %d found %d\n", MEMINFO_NEEDED_FIELDS_COUNT, processIndex);
             learnt = 1;
             size_t index = 0;
+            if (processIndex > MEMINFO_NEEDED_FIELDS_COUNT)
+                processIndex = MEMINFO_NEEDED_FIELDS_COUNT;
             for (int i=0; i < processIndex; i++) {
                 PRINT_DBG_INITIAL("index %zu at %d..meminfo [%s] skip [%d]\n", index,i,meminfoNeeded[i],skipArray[i]);
                 if (!appendMeminfoHeader(meminfoHeader, sizeof(meminfoHeader), &index,
@@ -5381,23 +5436,13 @@ int main(int argc, char *argv[])
             isTestMode = 2;
             if ((i+2) < argc) {
                 i++;
-                FILE *testMapFd = fopen(argv[i], "r");
-                if (testMapFd) {
-                    fclose(testMapFd);
-                    strncpy(testSmap, argv[i], 128);
+                if (acceptTestFixturePath(argv[i], testSmap, sizeof(testSmap))) {
                     i++;
-                    testMapFd = fopen(argv[i], "r");
-                    if (testMapFd) {
-                        fclose(testMapFd);
-                        strncpy(testMeminfo, argv[i], 128);
+                    if (acceptTestFixturePath(argv[i], testMeminfo, sizeof(testMeminfo))) {
 
                         if ((i + 1) < argc && argv[i + 1][0] != '-') {
                             i++;
-                            testMapFd = fopen(argv[i], "r");
-                            if (testMapFd) {
-                                fclose(testMapFd);
-                                strncpy(testBuddyinfo, argv[i], 128);
-                            } else {
+                            if (!acceptTestFixturePath(argv[i], testBuddyinfo, sizeof(testBuddyinfo))) {
                                 PRINT_ERROR("Test buddyinfo file %s open error %d [%s]\n", argv[i], errno, strerror(errno));
                                 printHelpAndUsage(argv, false, 1);
                             }
@@ -5405,11 +5450,7 @@ int main(int argc, char *argv[])
 
                         if ((i + 1) < argc && argv[i + 1][0] != '-') {
                             i++;
-                            testMapFd = fopen(argv[i], "r");
-                            if (testMapFd) {
-                                fclose(testMapFd);
-                                strncpy(testPagetypeinfo, argv[i], 128);
-                            } else {
+                            if (!acceptTestFixturePath(argv[i], testPagetypeinfo, sizeof(testPagetypeinfo))) {
                                 PRINT_ERROR("Test pagetypeinfo file %s open error %d [%s]\n", argv[i], errno, strerror(errno));
                                 printHelpAndUsage(argv, false, 1);
                             }
@@ -5417,12 +5458,7 @@ int main(int argc, char *argv[])
 
                         if ((i + 1) < argc && argv[i + 1][0] != '-') {
                             i++;
-                            testMapFd = fopen(argv[i], "r");
-                            if (testMapFd) {
-                                fclose(testMapFd);
-                                strncpy(testStat, argv[i], sizeof(testStat) - 1);
-                                testStat[sizeof(testStat) - 1] = '\0';
-                            } else {
+                            if (!acceptTestFixturePath(argv[i], testStat, sizeof(testStat))) {
                                 PRINT_ERROR("Test stat file %s open error %d [%s]\n", argv[i], errno, strerror(errno));
                                 printHelpAndUsage(argv, false, 1);
                             }
@@ -5430,12 +5466,7 @@ int main(int argc, char *argv[])
 
                         if ((i + 1) < argc && argv[i + 1][0] != '-') {
                             i++;
-                            testMapFd = fopen(argv[i], "r");
-                            if (testMapFd) {
-                                fclose(testMapFd);
-                                strncpy(testBandwidth, argv[i], sizeof(testBandwidth) - 1);
-                                testBandwidth[sizeof(testBandwidth) - 1] = '\0';
-                            } else {
+                            if (!acceptTestFixturePath(argv[i], testBandwidth, sizeof(testBandwidth))) {
                                 PRINT_ERROR("Test bandwidth file %s open error %d [%s]\n", argv[i], errno, strerror(errno));
                                 printHelpAndUsage(argv, false, 1);
                             }
@@ -5474,7 +5505,11 @@ int main(int argc, char *argv[])
         { // interval
             if (i + 1 < argc)
             {
-                cli_interval = atoi(argv[i + 1]);
+                if (!parseBoundedIntArg(argv[i + 1], 0, MAX_INTERVAL, &cli_interval))
+                {
+                    PRINT_ERROR("Error: --interval value must be between 0 and %d\n", MAX_INTERVAL);
+                    printHelpAndUsage(argv, false, 1);
+                }
                 i++; // skip next arg (interval)
                 long_run = false; // If interval is specified, it's not a long run
             }
@@ -5488,7 +5523,11 @@ int main(int argc, char *argv[])
         { // iterations
             if (i + 1 < argc)
             {
-                cli_iterations = atoi(argv[i + 1]);
+                if (!parseBoundedIntArg(argv[i + 1], 1, MAX_ITERATIONS, &cli_iterations))
+                {
+                    PRINT_ERROR("Error: --iterations value must be between 1 and %d\n", MAX_ITERATIONS);
+                    printHelpAndUsage(argv, false, 1);
+                }
                 i++; // skip next arg (iterations)
                 long_run = false; // If iterations are specified, it's not a long run
             }

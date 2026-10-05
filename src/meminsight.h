@@ -121,6 +121,8 @@ This is used to ensure compatibility with older versions of the report parser. *
 #define MAC_LEN 32
 #define DEFAULT_ITERATIONS 1
 #define DEFAULT_INTERVAL 5
+#define MAX_ITERATIONS 10000
+#define MAX_INTERVAL 86400
 #define DEFAULT_LOG_LEVEL "INFO"
 #define DEFAULT_MAC "000000000000"
 #define DEFAULT_BACKUP_COUNT 30
