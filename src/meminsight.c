@@ -249,7 +249,7 @@ static FILE *openRegularFileForRead(const char *path)
     if (!path || !*path)
         return NULL;
 
-    int fd = open(path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+    int fd = open(path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK);
     if (fd == -1)
         return NULL;
 
@@ -266,6 +266,10 @@ static FILE *openRegularFileForRead(const char *path)
         return NULL;
     }
 
+    int fl = fcntl(fd, F_GETFL);
+    if (fl != -1)
+        (void)fcntl(fd, F_SETFL, fl & ~O_NONBLOCK);
+
     FILE *stream = fdopen(fd, "r");
     if (!stream)
         close(fd);
@@ -278,8 +282,7 @@ static bool acceptTestFixturePath(const char *arg, char *dest, size_t destLen)
     char resolved[PATH_MAX];
     FILE *fp;
 
-    if (!arg || !*arg || !dest || destLen == 0 || strstr(arg, "..") != NULL ||
-        strlen(arg) >= destLen) {
+    if (!arg || !*arg || !dest || destLen == 0 || strlen(arg) >= destLen) {
         errno = EINVAL;
         return false;
     }
@@ -297,35 +300,40 @@ static bool acceptTestFixturePath(const char *arg, char *dest, size_t destLen)
 }
 #endif
 
-static FILE *createRestrictedReportFile(const char *dir, const char *fileName)
+static FILE *createRestrictedReportFile(const SetupInfo *setup, const char *fileName)
 {
-    if (!outputDirHasMeminsightBase(dir) || !fileName || !*fileName ||
+    if (!setup || !outputDirHasMeminsightBase(setup->outputDir) || !fileName || !*fileName ||
         strcmp(fileName, ".") == 0 || strcmp(fileName, "..") == 0 ||
         strchr(fileName, '/') != NULL) {
         errno = EINVAL;
         return NULL;
     }
 
-    int dirfd = open(dir, O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
+    int dirfd = open(setup->outputDir, O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
     if (dirfd == -1)
         return NULL;
 
+    struct stat dirSt;
+    if (fstat(dirfd, &dirSt) != 0) {
+        int savedErrno = errno;
+        close(dirfd);
+        errno = savedErrno;
+        return NULL;
+    }
+    if (dirSt.st_dev != setup->outputDirDev || dirSt.st_ino != setup->outputDirIno) {
+        close(dirfd);
+        errno = EXDEV;
+        return NULL;
+    }
+
     /*
      * Never open an existing inode with O_TRUNC: a hard-linked report name
-     * would truncate the linked file. Unlink and O_EXCL-create a new inode.
+     * would truncate the linked file. O_EXCL creates a new inode or fails.
+     * Do not unlink on EEXIST — a colliding timestamped name must be kept.
      */
     const int createFlags = O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW;
     const mode_t createMode = S_IRUSR | S_IWUSR | S_IRGRP;
     int fd = openat(dirfd, fileName, createFlags, createMode);
-    if (fd == -1 && errno == EEXIST) {
-        if (unlinkat(dirfd, fileName, 0) != 0) {
-            int savedErrno = errno;
-            close(dirfd);
-            errno = savedErrno;
-            return NULL;
-        }
-        fd = openat(dirfd, fileName, createFlags, createMode);
-    }
     if (fd == -1) {
         int openErrno = errno;
         close(dirfd);
@@ -671,9 +679,11 @@ static int apply_backup_policy(int dirfd, const char *dir, int keepCount, const 
  * a single-level mkdir(2) is attempted.
  *
  * @param[in] dir  Path to the desired output directory.
+ * @param[out] dirDev  Receives the opened directory's st_dev for later revalidation.
+ * @param[out] dirIno  Receives the opened directory's st_ino for later revalidation.
  * @return true if the directory exists or was successfully created, false otherwise.
  */
-static bool ensure_output_dir(const char *dir, const char *runIdFallback)
+static bool ensure_output_dir(const char *dir, const char *runIdFallback, dev_t *dirDev, ino_t *dirIno)
 {
     if (!dir || !*dir)
         return false;
@@ -729,6 +739,18 @@ static bool ensure_output_dir(const char *dir, const char *runIdFallback)
             return false;
         }
     }
+
+    struct stat dirSt;
+    if (fstat(dirfd, &dirSt) != 0)
+    {
+        PRINT_MUST("Failed to stat output directory '%s': %s\n", normalizedDir, strerror(errno));
+        close(dirfd);
+        return false;
+    }
+    if (dirDev)
+        *dirDev = dirSt.st_dev;
+    if (dirIno)
+        *dirIno = dirSt.st_ino;
 
     if (apply_backup_policy(dirfd, normalizedDir, g_backupCount, runIdFallback) != 0)
     {
@@ -1109,7 +1131,8 @@ SetupInfo initializeSetupInfo(const char *outDir, Report_Format format)
                    info.outputDir);
         info.dirCreated = false;
     } else {
-        info.dirCreated = ensure_output_dir(info.outputDir, info.runHash);
+        info.dirCreated = ensure_output_dir(info.outputDir, info.runHash,
+                                            &info.outputDirDev, &info.outputDirIno);
     }
     info.reportFileName = (format == REPORT_T2)   ? T2_FILE_NAME
                         : (format == REPORT_JSON) ? JSON_FILE_NAME
@@ -1166,9 +1189,11 @@ static void updateBandwidthAvailability(void)
     {
         char modeBuf[16] = {0};
         ssize_t n = read(modeFd, modeBuf, sizeof(modeBuf) - 1);
-        modeReadable = true;
-        if (n > 0 && modeBuf[0] == '1')
-            modeEnabled = true;
+        if (n >= 0) {
+            modeReadable = true;
+            if (n > 0 && modeBuf[0] == '1')
+                modeEnabled = true;
+        }
         close(modeFd);
     }
 
@@ -3934,7 +3959,7 @@ int collectSystemMemoryStats(bool enableKThreads, const char *outDir, int iterat
 
         FILE *output = NULL;
         if (g_reportFormat == REPORT_CSV) {
-            output = createRestrictedReportFile(setup.outputDir, outputName);
+            output = createRestrictedReportFile(&setup, outputName);
             if (NULL == output) {
                 PRINT_MUST("%s: Open failed, %d [%s]\n", outputfile, errno, strerror(errno));
                 removeFileIfPresent(MEMINSIGHT_INPROGRESS_FILE);
@@ -4274,7 +4299,7 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, bool cli_out
 
         FILE *output = NULL;
         if (g_reportFormat == REPORT_CSV) {
-            output = createRestrictedReportFile(setup.outputDir, outputFileName);
+            output = createRestrictedReportFile(&setup, outputFileName);
             if (!output) {
                 PRINT_ERROR("Error: Failed to open output file '%s' for writing\n", outputFilePath);
                 for (unsigned j = 0; j < config.whiteListCount; j++)
@@ -4773,7 +4798,7 @@ int writeJSONToFile(const char *filepath, const SetupInfo *setup)
 
     const char *fileName = strrchr(filepath, '/');
     fileName = fileName ? fileName + 1 : filepath;
-    FILE *out = createRestrictedReportFile(setup->outputDir, fileName);
+    FILE *out = createRestrictedReportFile(setup, fileName);
     if (!out) {
         PRINT_ERROR("Failed to open %s for writing: %s\n", filepath, strerror(errno));
         g_cjson.Delete(g_rootObject);
@@ -5321,7 +5346,7 @@ int writeT2Report(const char *filepath, const SetupInfo *setup, int iteration, i
 
     const char *fileName = strrchr(filepath, '/');
     fileName = fileName ? fileName + 1 : filepath;
-    FILE *out = createRestrictedReportFile(setup->outputDir, fileName);
+    FILE *out = createRestrictedReportFile(setup, fileName);
     if (!out) {
         PRINT_ERROR("T2: Failed to open %s for writing: %s\n", filepath, strerror(errno));
         g_cjson.Delete(root);
@@ -5505,9 +5530,9 @@ int main(int argc, char *argv[])
         { // interval
             if (i + 1 < argc)
             {
-                if (!parseBoundedIntArg(argv[i + 1], 0, MAX_INTERVAL, &cli_interval))
+                if (!parseBoundedIntArg(argv[i + 1], 1, MAX_INTERVAL, &cli_interval))
                 {
-                    PRINT_ERROR("Error: --interval value must be between 0 and %d\n", MAX_INTERVAL);
+                    PRINT_ERROR("Error: --interval value must be between 1 and %d\n", MAX_INTERVAL);
                     printHelpAndUsage(argv, false, 1);
                 }
                 i++; // skip next arg (interval)

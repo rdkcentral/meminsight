@@ -206,6 +206,8 @@ typedef struct {
     const char *outputDir;
     const char *reportFileName;
     bool dirCreated;
+    dev_t outputDirDev;
+    ino_t outputDirIno;
 } SetupInfo;
 
 /*
