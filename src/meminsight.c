@@ -204,12 +204,12 @@ typedef struct {
 
 #ifdef TESTME
 unsigned isTestMode = 0;
-char testSmap[128];
-char testMeminfo[128];
-char testBuddyinfo[128];
-char testPagetypeinfo[128];
-char testStat[128];
-char testBandwidth[128];
+char testSmap[PATH_MAX];
+char testMeminfo[PATH_MAX];
+char testBuddyinfo[PATH_MAX];
+char testPagetypeinfo[PATH_MAX];
+char testStat[PATH_MAX];
+char testBandwidth[PATH_MAX];
 Process_Info processInfoTest;
 static int unitTestFailed = 0;
 #endif
@@ -246,7 +246,7 @@ static bool parseBoundedIntArg(const char *arg, int minVal, int maxVal, int *out
 
 static FILE *openRegularFileForRead(const char *path)
 {
-    if (!path || !*path)
+    if (!path || !*path || strstr(path, "..") != NULL)
         return NULL;
 
     int fd = open(path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK);
@@ -290,12 +290,17 @@ static bool acceptTestFixturePath(const char *arg, char *dest, size_t destLen)
     if (!realpath(arg, resolved))
         return false;
 
+    if (strstr(resolved, "..") != NULL || strlen(resolved) >= destLen) {
+        errno = EINVAL;
+        return false;
+    }
+
     fp = openRegularFileForRead(resolved);
     if (!fp)
         return false;
     fclose(fp);
 
-    memcpy(dest, arg, strlen(arg) + 1);
+    memcpy(dest, resolved, strlen(resolved) + 1);
     return true;
 }
 #endif
@@ -434,6 +439,25 @@ static int cmp_mtime_desc(const void *a, const void *b)
     return strcmp(ea->name, eb->name);
 }
 
+static bool isSafeRunId(const char *id)
+{
+    size_t i;
+
+    if (!id || !*id)
+        return false;
+
+    for (i = 0; id[i] != '\0'; i++) {
+        char c = id[i];
+        if (!((c >= '0' && c <= '9') ||
+              (c >= 'A' && c <= 'Z') ||
+              (c >= 'a' && c <= 'z') ||
+              c == '_' || c == '-'))
+            return false;
+    }
+
+    return true;
+}
+
 /**
  * @brief Apply the backup policy to an existing output directory.
  *
@@ -565,8 +589,8 @@ static int apply_backup_policy(int dirfd, const char *dir, int keepCount, const 
     if (readConfigStoreValue(dir, "RUN_ID", configRunId, sizeof(configRunId)) && configRunId[0] != '\0')
         runId = configRunId;
 
-    if (!runId || !*runId)
-        runId = "unknown";
+    if (!isSafeRunId(runId))
+        runId = isSafeRunId(runIdFallback) ? runIdFallback : "unknown";
 
     time_t epochNow = time(NULL);
     bool archiveCreated = false;
@@ -584,7 +608,8 @@ static int apply_backup_policy(int dirfd, const char *dir, int keepCount, const 
                                       (long long)epochNow, runId, BACKUP_BASE, suffix);
         }
 
-        if (archiveNameLen <= 0 || (size_t)archiveNameLen >= sizeof(archiveName))
+        if (archiveNameLen <= 0 || (size_t)archiveNameLen >= sizeof(archiveName) ||
+            strchr(archiveName, '/') != NULL || strchr(archiveName, '\\') != NULL)
         {
             PRINT_MUST("Failed to build backup archive name for '%s'\n", dir);
             free(entries);
@@ -1169,12 +1194,12 @@ static void updateBandwidthAvailability(void)
     /* In test mode, fixture availability determines bandwidth support. */
     if (isTestMode)
     {
-        int bwFd = -1;
+        FILE *bwFp = NULL;
         if (testBandwidth[0] != '\0')
-            bwFd = open(testBandwidth, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
-        g_bwDataAvailable = (bwFd >= 0);
-        if (bwFd >= 0)
-            close(bwFd);
+            bwFp = openRegularFileForRead(testBandwidth);
+        g_bwDataAvailable = (bwFp != NULL);
+        if (bwFp)
+            fclose(bwFp);
         return;
     }
 #endif
@@ -1505,7 +1530,7 @@ static bool readSystemCpuStat(CpuStatSnapshot *snapshot)
     FILE *fp = NULL;
 #ifdef TESTME
     if (isTestMode && testStat[0])
-        fp = fopen(testStat, "r");
+        fp = openRegularFileForRead(testStat);
     else
         fp = fopen(STAT_FILE, "r");
 #else
@@ -1580,7 +1605,7 @@ static int writePagetypeInfoCSV(FILE *out)
     if (isTestMode) {
         if (!testPagetypeinfo[0])
             return -1;
-        fp = fopen(testPagetypeinfo, "r");
+        fp = openRegularFileForRead(testPagetypeinfo);
     } else {
         fp = fopen(PGT_FILE, "r");
     }
@@ -1675,7 +1700,7 @@ static int writeBuddyinfoCSV(FILE *out)
     if (isTestMode) {
         if (!testBuddyinfo[0])
             return -1;
-        fp = fopen(testBuddyinfo, "r");
+        fp = openRegularFileForRead(testBuddyinfo);
     } else {
         fp = fopen(BUDDYINFO_FILE, "r");
     }
@@ -1817,7 +1842,7 @@ static int addPagetypeInfoJSON(cJSON_t *fragRoot)
     if (isTestMode) {
         if (!testPagetypeinfo[0])
             return -1;
-        fp = fopen(testPagetypeinfo, "r");
+        fp = openRegularFileForRead(testPagetypeinfo);
     } else {
         fp = fopen(PGT_FILE, "r");
     }
@@ -1912,7 +1937,7 @@ static int addBuddyinfoJSON(cJSON_t *fragRoot)
     if (isTestMode) {
         if (!testBuddyinfo[0])
             return -1;
-        fp = fopen(testBuddyinfo, "r");
+        fp = openRegularFileForRead(testBuddyinfo);
     } else {
         fp = fopen(BUDDYINFO_FILE, "r");
     }
@@ -2032,7 +2057,7 @@ static bool readBandwidthData(unsigned long *totalBandwidth, float *usagePercent
         if (!testBandwidth[0])
             return false;
 
-        fp = fopen(testBandwidth, "r");
+        fp = openRegularFileForRead(testBandwidth);
         if (!fp)
         {
             PRINT_ERROR("Failed to open test bandwidth fixture %s: %s\n", testBandwidth, strerror(errno));
@@ -3575,7 +3600,6 @@ int getProcessInfos(unsigned pid)
     prev_test_pss = 0;
     if (isTestMode)
     {
-        memcpy(tmp, testSmap, 128);
         if (strstr(testSmap, "smaps_rollup") != NULL)
         {
             smaps_rollup = 1;
@@ -3586,8 +3610,8 @@ int getProcessInfos(unsigned pid)
             smaps_rollup = 0;
             getProcessInfos_ptr = getProcessInfos_initial;
         }
-        PRINT_MUST("%s: Testing with %s\n", __FUNCTION__, tmp);
-        smap = fopen(tmp, "r");
+        PRINT_MUST("%s: Testing with %s\n", __FUNCTION__, testSmap);
+        smap = openRegularFileForRead(testSmap);
     }
     else
 #endif
@@ -4505,7 +4529,7 @@ void saveMeminfo(FILE *out)
     char tstmeminfoValue[MEMINFO_HEADER_TOTAL] = {0};
     size_t tstprocessHeaderIndex = 0;
     size_t tstprocessValueIndex = 0;
-    FILE *meminfo = fopen((isTestMode)?testMeminfo:MEMINFO_FILE, "r");
+    FILE *meminfo = isTestMode ? openRegularFileForRead(testMeminfo) : fopen(MEMINFO_FILE, "r");
 #else
     FILE *meminfo = fopen(MEMINFO_FILE, "r");
 #endif
@@ -4685,7 +4709,7 @@ void saveMeminfo_JSON(cJSON_t *root)
         return;
     }
 #ifdef TESTME
-    FILE *meminfo = fopen((isTestMode) ? testMeminfo : MEMINFO_FILE, "r");
+    FILE *meminfo = isTestMode ? openRegularFileForRead(testMeminfo) : fopen(MEMINFO_FILE, "r");
 #else
     FILE *meminfo = fopen(MEMINFO_FILE, "r");
 #endif
@@ -4973,7 +4997,7 @@ int writeT2Report(const char *filepath, const SetupInfo *setup, int iteration, i
         const int fieldCount = (int)(sizeof(meminfoNeeded) / sizeof(meminfoNeeded[0]));
 
 #ifdef TESTME
-        FILE *meminfo = fopen((isTestMode) ? testMeminfo : MEMINFO_FILE, "r");
+        FILE *meminfo = isTestMode ? openRegularFileForRead(testMeminfo) : fopen(MEMINFO_FILE, "r");
 #else
         FILE *meminfo = fopen(MEMINFO_FILE, "r");
 #endif
@@ -5053,7 +5077,7 @@ int writeT2Report(const char *filepath, const SetupInfo *setup, int iteration, i
 #ifdef TESTME
             if (isTestMode) {
                 if (testPagetypeinfo[0])
-                    fp = fopen(testPagetypeinfo, "r");
+                    fp = openRegularFileForRead(testPagetypeinfo);
             } else {
                 fp = fopen(PGT_FILE, "r");
             }
@@ -5122,7 +5146,7 @@ int writeT2Report(const char *filepath, const SetupInfo *setup, int iteration, i
 #ifdef TESTME
             if (isTestMode) {
                 if (testBuddyinfo[0])
-                    fp = fopen(testBuddyinfo, "r");
+                    fp = openRegularFileForRead(testBuddyinfo);
             } else {
                 fp = fopen(BUDDYINFO_FILE, "r");
             }

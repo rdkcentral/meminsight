@@ -233,12 +233,12 @@ extern int g_backupCount;             // Number of report files handled by pre-r
 
 #ifdef TESTME
 extern unsigned isTestMode;
-extern char testSmap[128];
-extern char testMeminfo[128];
-extern char testBuddyinfo[128];
-extern char testPagetypeinfo[128];
-extern char testStat[128];
-extern char testBandwidth[128];
+extern char testSmap[PATH_MAX];
+extern char testMeminfo[PATH_MAX];
+extern char testBuddyinfo[PATH_MAX];
+extern char testPagetypeinfo[PATH_MAX];
+extern char testStat[PATH_MAX];
+extern char testBandwidth[PATH_MAX];
 extern Process_Info processInfoTest;
 void checkAndFree();
 void testList();
