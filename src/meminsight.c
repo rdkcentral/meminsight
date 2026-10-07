@@ -204,12 +204,12 @@ typedef struct {
 
 #ifdef TESTME
 unsigned isTestMode = 0;
-char testSmap[128];
-char testMeminfo[128];
-char testBuddyinfo[128];
-char testPagetypeinfo[128];
-char testStat[128];
-char testBandwidth[128];
+char testSmap[PATH_MAX];
+char testMeminfo[PATH_MAX];
+char testBuddyinfo[PATH_MAX];
+char testPagetypeinfo[PATH_MAX];
+char testStat[PATH_MAX];
+char testBandwidth[PATH_MAX];
 Process_Info processInfoTest;
 static int unitTestFailed = 0;
 #endif
@@ -223,6 +223,211 @@ int (*getProcessInfos_ptr)(FILE*);
 /* Forward declarations for local helpers used before their definitions. */
 static void trimTrailingWhitespace(char *str);
 static bool readConfigStoreValue(const char *dir, const char *key, char *value, size_t valueLen);
+static bool outputDirHasMeminsightBase(const char *dir);
+
+static bool parseBoundedIntArg(const char *arg, int minVal, int maxVal, int *out)
+{
+    char *end = NULL;
+    long value;
+
+    if (!arg || !*arg || !out)
+        return false;
+
+    errno = 0;
+    value = strtol(arg, &end, 10);
+    if (errno == ERANGE || end == arg || *end != '\0')
+        return false;
+    if (value < (long)minVal || value > (long)maxVal)
+        return false;
+
+    *out = (int)value;
+    return true;
+}
+
+static bool pathHasDotDotComponent(const char *path)
+{
+    const char *p;
+
+    if (!path || !*path)
+        return true;
+
+    for (p = path; *p != '\0'; ) {
+        const char *sep = p;
+        while (*sep != '\0' && *sep != '/')
+            sep++;
+        if ((size_t)(sep - p) == 2 && p[0] == '.' && p[1] == '.')
+            return true;
+        if (*sep == '\0')
+            break;
+        p = sep + 1;
+    }
+    return false;
+}
+
+static FILE *openRegularFileForRead(const char *path)
+{
+    if (!path || !*path)
+        return NULL;
+
+    int fd = open(path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK);
+    if (fd == -1)
+        return NULL;
+
+    struct stat st;
+    if (fstat(fd, &st) != 0) {
+        int savedErrno = errno;
+        close(fd);
+        errno = savedErrno;
+        return NULL;
+    }
+    if (!S_ISREG(st.st_mode)) {
+        close(fd);
+        errno = EINVAL;
+        return NULL;
+    }
+
+    int fl = fcntl(fd, F_GETFL);
+    if (fl != -1)
+        (void)fcntl(fd, F_SETFL, fl & ~O_NONBLOCK);
+
+    FILE *stream = fdopen(fd, "r");
+    if (!stream)
+        close(fd);
+    return stream;
+}
+
+#ifdef TESTME
+static bool acceptTestFixturePath(const char *arg, char *dest, size_t destLen)
+{
+    char resolved[PATH_MAX];
+    FILE *fp;
+
+    if (!arg || !*arg || !dest || destLen == 0 || strlen(arg) >= destLen) {
+        errno = EINVAL;
+        return false;
+    }
+
+    if (!realpath(arg, resolved))
+        return false;
+
+    if (pathHasDotDotComponent(resolved) || strlen(resolved) >= destLen) {
+        errno = EINVAL;
+        return false;
+    }
+
+    fp = openRegularFileForRead(resolved);
+    if (!fp)
+        return false;
+    fclose(fp);
+
+    memcpy(dest, resolved, strlen(resolved) + 1);
+    return true;
+}
+#endif
+
+static FILE *createRestrictedReportFile(const SetupInfo *setup, const char *fileName)
+{
+    if (!setup || !outputDirHasMeminsightBase(setup->outputDir) || !fileName || !*fileName ||
+        strcmp(fileName, ".") == 0 || strcmp(fileName, "..") == 0 ||
+        strchr(fileName, '/') != NULL) {
+        errno = EINVAL;
+        return NULL;
+    }
+
+    int dirfd = open(setup->outputDir, O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
+    if (dirfd == -1)
+        return NULL;
+
+    struct stat dirSt;
+    if (fstat(dirfd, &dirSt) != 0) {
+        int savedErrno = errno;
+        close(dirfd);
+        errno = savedErrno;
+        return NULL;
+    }
+    if (dirSt.st_dev != setup->outputDirDev || dirSt.st_ino != setup->outputDirIno) {
+        close(dirfd);
+        errno = EXDEV;
+        return NULL;
+    }
+
+    /*
+     * Never open an existing inode with O_TRUNC: a hard-linked report name
+     * would truncate the linked file. O_EXCL creates a new inode or fails.
+     * Do not unlink on EEXIST — a colliding timestamped name must be kept.
+     */
+    const int createFlags = O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW;
+    const mode_t createMode = S_IRUSR | S_IWUSR | S_IRGRP;
+    int fd = openat(dirfd, fileName, createFlags, createMode);
+    if (fd == -1) {
+        int openErrno = errno;
+        close(dirfd);
+        errno = openErrno;
+        return NULL;
+    }
+
+    struct stat st;
+    if (fstat(fd, &st) != 0) {
+        int savedErrno = errno;
+        close(fd);
+        (void)unlinkat(dirfd, fileName, 0);
+        close(dirfd);
+        errno = savedErrno;
+        return NULL;
+    }
+    if (!S_ISREG(st.st_mode) || st.st_nlink != 1 || st.st_uid != geteuid()) {
+        close(fd);
+        (void)unlinkat(dirfd, fileName, 0);
+        close(dirfd);
+        errno = EINVAL;
+        return NULL;
+    }
+    close(dirfd);
+
+    if (fchmod(fd, S_IRUSR | S_IWUSR | S_IRGRP) != 0) {
+        int savedErrno = errno;
+        close(fd);
+        errno = savedErrno;
+        return NULL;
+    }
+
+    FILE *stream = fdopen(fd, "w");
+    if (!stream)
+        close(fd);
+    return stream;
+}
+
+static bool appendMeminfoValue(char *buffer, size_t bufferLen, size_t *used,
+                               bool prependComma, unsigned long value)
+{
+    if (!buffer || !used || *used >= bufferLen)
+        return false;
+
+    size_t remaining = bufferLen - *used;
+    int written = snprintf(buffer + *used, remaining,
+                           prependComma ? ",%lu" : "%lu", value);
+    if (written < 0 || (size_t)written >= remaining)
+        return false;
+
+    *used += (size_t)written;
+    return true;
+}
+
+static bool appendMeminfoHeader(char *buffer, size_t bufferLen, size_t *used,
+                                bool prependComma, const char *field)
+{
+    if (!buffer || !used || !field || *used >= bufferLen)
+        return false;
+
+    size_t remaining = bufferLen - *used;
+    int written = snprintf(buffer + *used, remaining,
+                           prependComma ? ",%s" : "%s", field);
+    if (written < 0 || (size_t)written >= remaining)
+        return false;
+
+    *used += (size_t)written;
+    return true;
+}
 
 // -----------------------------
 // Utility Functions
@@ -254,6 +459,25 @@ static int cmp_mtime_desc(const void *a, const void *b)
     return strcmp(ea->name, eb->name);
 }
 
+static bool isSafeRunId(const char *id)
+{
+    size_t i;
+
+    if (!id || !*id)
+        return false;
+
+    for (i = 0; id[i] != '\0'; i++) {
+        char c = id[i];
+        if (!((c >= '0' && c <= '9') ||
+              (c >= 'A' && c <= 'Z') ||
+              (c >= 'a' && c <= 'z') ||
+              c == '_' || c == '-'))
+            return false;
+    }
+
+    return true;
+}
+
 /**
  * @brief Apply the backup policy to an existing output directory.
  *
@@ -270,13 +494,17 @@ static int cmp_mtime_desc(const void *a, const void *b)
  * Non-report files/subdirectories are untouched. If no matching reports are
  * found, the function returns immediately without creating a backup dir.
  *
- * @param[in] dir     Output directory to apply policy to.
+ * @param[in] dirfd   Directory fd opened with O_DIRECTORY | O_NOFOLLOW.
+ * @param[in] dir     Output directory path (for log messages only).
  * @param[in] keepCount  Backup count (must be >= 1, capped by MAX_BACKUP_COUNT).
  * @return 0 on success, -1 on scan/allocation/archive-create failure,
  *         or when any archive/remove file operation fails.
  */
-static int apply_backup_policy(const char *dir, int keepCount, const char *runIdFallback)
+static int apply_backup_policy(int dirfd, const char *dir, int keepCount, const char *runIdFallback)
 {
+    if (dirfd < 0 || !dir || !*dir)
+        return -1;
+
     if (keepCount < 1)
     {
         PRINT_MUST("Invalid backup count %d (must be between 1 and %d)\n", keepCount, MAX_BACKUP_COUNT);
@@ -291,10 +519,24 @@ static int apply_backup_policy(const char *dir, int keepCount, const char *runId
     const char *activeExt = (g_reportFormat == REPORT_JSON) ? ".json" : ".csv";
     const size_t activeExtLen = strlen(activeExt);
 
-    DIR *d = opendir(dir);
+    int scanFd = dup(dirfd);
+    if (scanFd == -1)
+    {
+        PRINT_MUST("Failed to duplicate output dir fd for backup scan '%s': %s\n", dir, strerror(errno));
+        return -1;
+    }
+    if (fcntl(scanFd, F_SETFD, FD_CLOEXEC) == -1)
+    {
+        PRINT_MUST("Failed to set CLOEXEC on backup scan fd '%s': %s\n", dir, strerror(errno));
+        close(scanFd);
+        return -1;
+    }
+
+    DIR *d = fdopendir(scanFd);
     if (!d)
     {
         PRINT_MUST("Failed to open output dir for backup scan '%s': %s\n", dir, strerror(errno));
+        close(scanFd);
         return -1;
     }
 
@@ -305,15 +547,6 @@ static int apply_backup_policy(const char *dir, int keepCount, const char *runId
     if (!entries)
     {
         PRINT_MUST("Failed to allocate memory for backup scan\n");
-        closedir(d);
-        return -1;
-    }
-
-    int scanfd = dirfd(d);
-    if (scanfd == -1)
-    {
-        PRINT_MUST("Failed to get directory fd for backup scan '%s': %s\n", dir, strerror(errno));
-        free(entries);
         closedir(d);
         return -1;
     }
@@ -329,7 +562,7 @@ static int apply_backup_policy(const char *dir, int keepCount, const char *runId
             continue;
 
         struct stat st;
-        if (fstatat(scanfd, ent->d_name, &st, 0) != 0 || !S_ISREG(st.st_mode))
+        if (fstatat(scanFd, ent->d_name, &st, 0) != 0 || !S_ISREG(st.st_mode))
             continue;
 
         if (count >= capacity)
@@ -363,18 +596,10 @@ static int apply_backup_policy(const char *dir, int keepCount, const char *runId
     /* Sort newest first. */
     qsort(entries, count, sizeof(RetainEntry), cmp_mtime_desc);
 
-    int dirfd = open(dir, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
-    if (dirfd == -1)
-    {
-        PRINT_MUST("Failed to open output dir for backup operations '%s': %s\n", dir, strerror(errno));
-        free(entries);
-        return -1;
-    }
-
     /*
      * Create archive subdirectory inside output directory.
      *
-    * Runs can start within the same second, so <timestamp>_<RUN_ID>_<BACKUP_BASE>
+     * Runs can start within the same second, so <timestamp>_<RUN_ID>_<BACKUP_BASE>
      * may already exist. In that case retry with a numeric suffix.
      */
     char archiveName[PATH_MAX];
@@ -384,8 +609,8 @@ static int apply_backup_policy(const char *dir, int keepCount, const char *runId
     if (readConfigStoreValue(dir, "RUN_ID", configRunId, sizeof(configRunId)) && configRunId[0] != '\0')
         runId = configRunId;
 
-    if (!runId || !*runId)
-        runId = "unknown";
+    if (!isSafeRunId(runId))
+        runId = isSafeRunId(runIdFallback) ? runIdFallback : "unknown";
 
     time_t epochNow = time(NULL);
     bool archiveCreated = false;
@@ -403,10 +628,10 @@ static int apply_backup_policy(const char *dir, int keepCount, const char *runId
                                       (long long)epochNow, runId, BACKUP_BASE, suffix);
         }
 
-        if (archiveNameLen <= 0 || (size_t)archiveNameLen >= sizeof(archiveName))
+        if (archiveNameLen <= 0 || (size_t)archiveNameLen >= sizeof(archiveName) ||
+            strchr(archiveName, '/') != NULL || strchr(archiveName, '\\') != NULL)
         {
             PRINT_MUST("Failed to build backup archive name for '%s'\n", dir);
-            close(dirfd);
             free(entries);
             return -1;
         }
@@ -420,7 +645,6 @@ static int apply_backup_policy(const char *dir, int keepCount, const char *runId
         if (errno != EEXIST)
         {
             PRINT_MUST("Failed to create backup archive dir '%s/%s': %s\n", dir, archiveName, strerror(errno));
-            close(dirfd);
             free(entries);
             return -1;
         }
@@ -429,15 +653,13 @@ static int apply_backup_policy(const char *dir, int keepCount, const char *runId
     if (!archiveCreated)
     {
         PRINT_MUST("Failed to create unique backup archive dir under '%s'\n", dir);
-        close(dirfd);
         free(entries);
         return -1;
     }
-    int archivefd = openat(dirfd, archiveName, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    int archivefd = openat(dirfd, archiveName, O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
     if (archivefd == -1)
     {
         PRINT_MUST("Failed to open backup archive dir '%s/%s': %s\n", dir, archiveName, strerror(errno));
-        close(dirfd);
         free(entries);
         return -1;
     }
@@ -485,7 +707,6 @@ static int apply_backup_policy(const char *dir, int keepCount, const char *runId
     PRINT_MUST(".\n");
 
     close(archivefd);
-    close(dirfd);
     free(entries);
     return (opFailures == 0) ? 0 : -1;
 }
@@ -499,32 +720,88 @@ static int apply_backup_policy(const char *dir, int keepCount, const char *runId
  * <timestamp>_<RUN_ID>_<BACKUP_BASE> subdirectory.
  * Backup handling is best-effort; run setup continues if some archive/delete
  * operations fail and the output directory remains usable.
- * If @p dir does not exist a single-level mkdir(2) is attempted.
+ * A symlink in the final path component is rejected. If @p dir does not exist,
+ * a single-level mkdir(2) is attempted.
  *
  * @param[in] dir  Path to the desired output directory.
+ * @param[out] dirDev  Receives the opened directory's st_dev for later revalidation.
+ * @param[out] dirIno  Receives the opened directory's st_ino for later revalidation.
  * @return true if the directory exists or was successfully created, false otherwise.
  */
-static bool ensure_output_dir(const char *dir, const char *runIdFallback)
+static bool ensure_output_dir(const char *dir, const char *runIdFallback, dev_t *dirDev, ino_t *dirIno)
 {
-    struct stat st = {0};
-    if (stat(dir, &st) == 0) // Exists
+    if (!dir || !*dir)
+        return false;
+
+    size_t dirLen = strlen(dir);
+    if (dirLen >= PATH_MAX)
     {
-        if (S_ISDIR(st.st_mode)) // Is a directory
+        PRINT_MUST("Output directory path is too long\n");
+        return false;
+    }
+
+    char normalizedDir[PATH_MAX];
+    memcpy(normalizedDir, dir, dirLen + 1);
+    while (dirLen > 1 && normalizedDir[dirLen - 1] == '/')
+        normalizedDir[--dirLen] = '\0';
+
+    const int dirFlags = O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW;
+    int dirfd = open(normalizedDir, dirFlags);
+    if (dirfd == -1)
+    {
+        if (errno == ELOOP)
         {
-            if (apply_backup_policy(dir, g_backupCount, runIdFallback) != 0)
-            {
-                PRINT_MUST("Warning: backup policy had partial failures in '%s'; continuing run setup\n", dir);
-            }
-            return true;
+            PRINT_MUST("Output directory '%s' must not be a symbolic link\n", normalizedDir);
+            return false;
         }
-        PRINT_MUST("Path '%s' exists but is not a directory\n", dir);
-        return false;
+        if (errno != ENOENT)
+        {
+            if (errno == ENOTDIR)
+                PRINT_MUST("Path '%s' exists but is not a directory\n", normalizedDir);
+            else
+                PRINT_MUST("Failed to open output directory '%s': %s\n", normalizedDir, strerror(errno));
+            return false;
+        }
+
+        if (mkdir(normalizedDir, 0755) == -1)
+        {
+            if (errno != EEXIST)
+            {
+                PRINT_MUST("Failed to create output directory '%s': %s\n", normalizedDir, strerror(errno));
+                return false;
+            }
+        }
+
+        dirfd = open(normalizedDir, dirFlags);
+        if (dirfd == -1)
+        {
+            if (errno == ELOOP)
+                PRINT_MUST("Output directory '%s' must not be a symbolic link\n", normalizedDir);
+            else if (errno == ENOTDIR)
+                PRINT_MUST("Path '%s' exists but is not a directory\n", normalizedDir);
+            else
+                PRINT_MUST("Failed to open output directory '%s': %s\n", normalizedDir, strerror(errno));
+            return false;
+        }
     }
-    if (mkdir(dir, 0755) == -1) // Try to create
+
+    struct stat dirSt;
+    if (fstat(dirfd, &dirSt) != 0)
     {
-        PRINT_MUST("Failed to create output directory '%s': %s\n", dir, strerror(errno));
+        PRINT_MUST("Failed to stat output directory '%s': %s\n", normalizedDir, strerror(errno));
+        close(dirfd);
         return false;
     }
+    if (dirDev)
+        *dirDev = dirSt.st_dev;
+    if (dirIno)
+        *dirIno = dirSt.st_ino;
+
+    if (apply_backup_policy(dirfd, normalizedDir, g_backupCount, runIdFallback) != 0)
+    {
+        PRINT_MUST("Warning: backup policy had partial failures in '%s'; continuing run setup\n", normalizedDir);
+    }
+    close(dirfd);
     return true;
 }
 
@@ -886,8 +1163,7 @@ SetupInfo initializeSetupInfo(const char *outDir, Report_Format format)
 
     unsigned long long epoch = (unsigned long long)time(NULL);
     unsigned long long pid = (unsigned long long)getpid();
-    srand((unsigned int)(epoch ^ pid));
-    int random2Digit = rand() % 100;
+    int random2Digit = (int)((epoch ^ (pid * 1103515245ULL) ^ (epoch >> 17)) % 100ULL);
 #ifdef TESTME
     PRINT_INFO("Debug: epoch=%llu |  pid=%llu | random2Digit=%02d\n", epoch, pid, random2Digit);
 #endif
@@ -895,7 +1171,14 @@ SetupInfo initializeSetupInfo(const char *outDir, Report_Format format)
 
     /* One-time directory and file setup. */
     info.outputDir = (outDir && *outDir) ? outDir : DEFAULT_OUT_DIR;
-    info.dirCreated = ensure_output_dir(info.outputDir, info.runHash);
+    if (!outputDirHasMeminsightBase(info.outputDir)) {
+        PRINT_MUST("Output directory '%s' must have 'meminsight' in the final path component\n",
+                   info.outputDir);
+        info.dirCreated = false;
+    } else {
+        info.dirCreated = ensure_output_dir(info.outputDir, info.runHash,
+                                            &info.outputDirDev, &info.outputDirIno);
+    }
     info.reportFileName = (format == REPORT_T2)   ? T2_FILE_NAME
                         : (format == REPORT_JSON) ? JSON_FILE_NAME
                         :                           CSV_FILE_NAME;
@@ -931,26 +1214,46 @@ static void updateBandwidthAvailability(void)
     /* In test mode, fixture availability determines bandwidth support. */
     if (isTestMode)
     {
-        g_bwDataAvailable = (testBandwidth[0] != '\0' && access(testBandwidth, R_OK) == 0);
+        FILE *bwFp = NULL;
+        if (testBandwidth[0] != '\0')
+            bwFp = openRegularFileForRead(testBandwidth);
+        g_bwDataAvailable = (bwFp != NULL);
+        if (bwFp)
+            fclose(bwFp);
         return;
     }
 #endif
 
-    bool modeReadable = (access(BW_DDR_MODE_FILE, R_OK) == 0);
-    bool modeWritable = (access(BW_DDR_MODE_FILE, W_OK) == 0);
-    bool bwReadable = (access(BW_DDR_FILE, R_OK) == 0);
+    bool modeReadable = false;
+    bool modeWritable = false;
+    bool bwReadable = false;
     bool modeEnabled = false;
 
-    if (modeReadable)
+    int modeFd = open(BW_DDR_MODE_FILE, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+    if (modeFd >= 0)
     {
-        FILE *fp = fopen(BW_DDR_MODE_FILE, "r");
-        if (fp)
-        {
-            char modeBuf[16] = {0};
-            if (fgets(modeBuf, sizeof(modeBuf), fp) && modeBuf[0] == '1')
+        char modeBuf[16] = {0};
+        ssize_t n = read(modeFd, modeBuf, sizeof(modeBuf) - 1);
+        if (n >= 0) {
+            modeReadable = true;
+            if (n > 0 && modeBuf[0] == '1')
                 modeEnabled = true;
-            fclose(fp);
         }
+        close(modeFd);
+    }
+
+    modeFd = open(BW_DDR_MODE_FILE, O_WRONLY | O_CLOEXEC | O_NOFOLLOW);
+    if (modeFd >= 0)
+    {
+        modeWritable = true;
+        close(modeFd);
+    }
+
+    int bwFd = open(BW_DDR_FILE, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+    if (bwFd >= 0)
+    {
+        bwReadable = true;
+        close(bwFd);
     }
 
     g_bwDataAvailable = (bwReadable && modeReadable && (modeWritable || modeEnabled));
@@ -1247,7 +1550,7 @@ static bool readSystemCpuStat(CpuStatSnapshot *snapshot)
     FILE *fp = NULL;
 #ifdef TESTME
     if (isTestMode && testStat[0])
-        fp = fopen(testStat, "r");
+        fp = openRegularFileForRead(testStat);
     else
         fp = fopen(STAT_FILE, "r");
 #else
@@ -1322,7 +1625,7 @@ static int writePagetypeInfoCSV(FILE *out)
     if (isTestMode) {
         if (!testPagetypeinfo[0])
             return -1;
-        fp = fopen(testPagetypeinfo, "r");
+        fp = openRegularFileForRead(testPagetypeinfo);
     } else {
         fp = fopen(PGT_FILE, "r");
     }
@@ -1417,7 +1720,7 @@ static int writeBuddyinfoCSV(FILE *out)
     if (isTestMode) {
         if (!testBuddyinfo[0])
             return -1;
-        fp = fopen(testBuddyinfo, "r");
+        fp = openRegularFileForRead(testBuddyinfo);
     } else {
         fp = fopen(BUDDYINFO_FILE, "r");
     }
@@ -1559,7 +1862,7 @@ static int addPagetypeInfoJSON(cJSON_t *fragRoot)
     if (isTestMode) {
         if (!testPagetypeinfo[0])
             return -1;
-        fp = fopen(testPagetypeinfo, "r");
+        fp = openRegularFileForRead(testPagetypeinfo);
     } else {
         fp = fopen(PGT_FILE, "r");
     }
@@ -1654,7 +1957,7 @@ static int addBuddyinfoJSON(cJSON_t *fragRoot)
     if (isTestMode) {
         if (!testBuddyinfo[0])
             return -1;
-        fp = fopen(testBuddyinfo, "r");
+        fp = openRegularFileForRead(testBuddyinfo);
     } else {
         fp = fopen(BUDDYINFO_FILE, "r");
     }
@@ -1774,7 +2077,7 @@ static bool readBandwidthData(unsigned long *totalBandwidth, float *usagePercent
         if (!testBandwidth[0])
             return false;
 
-        fp = fopen(testBandwidth, "r");
+        fp = openRegularFileForRead(testBandwidth);
         if (!fp)
         {
             PRINT_ERROR("Failed to open test bandwidth fixture %s: %s\n", testBandwidth, strerror(errno));
@@ -1804,10 +2107,17 @@ static bool readBandwidthData(unsigned long *totalBandwidth, float *usagePercent
     if (!fgets(buffer, sizeof(buffer), fp) || buffer[0] != '1')
     {
         fclose(fp);
-        fp = fopen(BW_DDR_MODE_FILE, "w");
-        if (!fp)
+        int modeFd = open(BW_DDR_MODE_FILE, O_WRONLY | O_TRUNC | O_CLOEXEC | O_NOFOLLOW);
+        if (modeFd == -1)
         {
             PRINT_ERROR("Failed to open %s for writing: %s\n", BW_DDR_MODE_FILE, strerror(errno));
+            return false;
+        }
+        fp = fdopen(modeFd, "w");
+        if (!fp)
+        {
+            PRINT_ERROR("Failed to open %s stream for writing: %s\n", BW_DDR_MODE_FILE, strerror(errno));
+            close(modeFd);
             return false;
         }
         if (fputs("1\n", fp) == EOF)
@@ -2161,7 +2471,7 @@ int parseConfig(const char *configPath, Config_Data *config)
     config->interval = DEFAULT_INTERVAL;     // Default to 0 seconds interval
     strncpy(config->logLevel, DEFAULT_LOG_LEVEL, sizeof(config->logLevel) - 1);
 
-    FILE *fp = fopen(configPath, "r");
+    FILE *fp = openRegularFileForRead(configPath);
     if (!fp)
     {
         PRINT_ERROR("Failed to open config file: %s\n", configPath);
@@ -2440,7 +2750,7 @@ void testGetProcessInfos_Parse(char *tmp)
     if (!strncmp(tmp, "Rss:", 4))
     {
         PRINT_DBG("%s", tmp);
-        if (sscanf(tmp, "Rss: %u kB", &test_rss))
+        if (sscanf(tmp, "Rss: %u kB", &test_rss) == 1)
         {
             processInfoTest.rssTotal += test_rss;
         }
@@ -2448,7 +2758,7 @@ void testGetProcessInfos_Parse(char *tmp)
     else if (!strncmp(tmp, "Pss:", 4))
     {
         PRINT_DBG("%s", tmp);
-        if (sscanf(tmp, "Pss: %u kB", &test_pss))
+        if (sscanf(tmp, "Pss: %u kB", &test_pss) == 1)
         {
             processInfoTest.pssTotal += test_pss;
         }
@@ -2457,7 +2767,7 @@ void testGetProcessInfos_Parse(char *tmp)
     else if (!strncmp(tmp, "Shared_Clean:", 13))
     {
         PRINT_DBG("%s", tmp);
-        if (sscanf(tmp, "Shared_Clean: %u kB", &test_shared_clean))
+        if (sscanf(tmp, "Shared_Clean: %u kB", &test_shared_clean) == 1)
         {
          if (test_shared_clean) {
                 processInfoTest.shared_clean_total += ((!smaps_rollup)? prev_test_pss : test_shared_clean);
@@ -2467,7 +2777,7 @@ void testGetProcessInfos_Parse(char *tmp)
     else if (!strncmp(tmp, "Private_Clean:", 14))
     {
         PRINT_DBG("%s", tmp);
-        if (sscanf(tmp, "Private_Clean: %u kB", &test_private_clean))
+        if (sscanf(tmp, "Private_Clean: %u kB", &test_private_clean) == 1)
         {
             processInfoTest.private_clean_total += test_private_clean;
         }
@@ -2475,7 +2785,7 @@ void testGetProcessInfos_Parse(char *tmp)
     else if (!strncmp(tmp, "Private_Dirty:", 14))
     {
         PRINT_DBG("%s", tmp);
-        if (sscanf(tmp, "Private_Dirty: %u kB", &test_private_dirty))
+        if (sscanf(tmp, "Private_Dirty: %u kB", &test_private_dirty) == 1)
         {
             processInfoTest.private_dirty_total += test_private_dirty;
         }
@@ -2483,7 +2793,7 @@ void testGetProcessInfos_Parse(char *tmp)
     else if (!strncmp(tmp, "SwapPss:", 8))
     {
      PRINT_DBG("Test pss: %d %s\n", prev_test_pss, tmp);
-        if (sscanf(tmp, "SwapPss: %u kB", &test_swap_pss))
+        if (sscanf(tmp, "SwapPss: %u kB", &test_swap_pss) == 1)
         {
             processInfoTest.swap_pss_total += test_swap_pss;
         }
@@ -2590,7 +2900,7 @@ int getProcessInfos_rollup_learnt(FILE *smap)
         {
             if (expect_rss)
             {
-                if (sscanf(tmp, "Rss: %u kB", &rss))
+                if (sscanf(tmp, "Rss: %u kB", &rss) == 1)
                 {
                     PRINT_DBG_SCANNED("Read Rss (%u) after %u/%u lines --> %s\r", rss, skipped,
                                           lines_To_skip, tmp);
@@ -2605,7 +2915,7 @@ int getProcessInfos_rollup_learnt(FILE *smap)
             }
             else if (expect_pss)
             {
-                if (sscanf(tmp, "Pss: %u kB", &pss))
+                if (sscanf(tmp, "Pss: %u kB", &pss) == 1)
                 {
                     PRINT_DBG_SCANNED("Read Pss (%u) after %u/%u lines  --> %s\r", pss, skipped, lines_To_skip,
                                       tmp);
@@ -2619,7 +2929,7 @@ int getProcessInfos_rollup_learnt(FILE *smap)
             }
             else if (expect_shared_clean)
             {
-                if (sscanf(tmp, "Shared_Clean: %u kB", &shared_clean))
+                if (sscanf(tmp, "Shared_Clean: %u kB", &shared_clean) == 1)
                 {
                     PRINT_DBG_SCANNED("Read shared_clean (%u)  %u/%u lines --> %s\r", shared_clean, skipped,
                                       lines_To_skip, tmp);
@@ -2634,7 +2944,7 @@ int getProcessInfos_rollup_learnt(FILE *smap)
             }
             else if (expect_private_clean)
             {
-                if (sscanf(tmp, "Private_Clean: %u kB", &private_clean))
+                if (sscanf(tmp, "Private_Clean: %u kB", &private_clean) == 1)
                 {
                     expect_private_clean = 0;
                     PRINT_DBG_SCANNED("Read private_clean (%u)  %u/%u lines --> %s\r", private_clean, skipped,
@@ -2648,7 +2958,7 @@ int getProcessInfos_rollup_learnt(FILE *smap)
             }
             else if (expect_private_dirty)
             {
-                if (sscanf(tmp, "Private_Dirty: %u kB", &private_dirty))
+                if (sscanf(tmp, "Private_Dirty: %u kB", &private_dirty) == 1)
                 {
                     expect_private_dirty = 0;
                     PRINT_DBG_SCANNED("Read private_dirty (%u)  %u/%u lines --> %s\r", private_dirty, skipped,
@@ -2666,7 +2976,7 @@ int getProcessInfos_rollup_learnt(FILE *smap)
             }
             else if (expect_swap_pss)
             {
-                if (sscanf(tmp, "SwapPss: %u kB", &swap_pss))
+                if (sscanf(tmp, "SwapPss: %u kB", &swap_pss) == 1)
                 {
                     PRINT_DBG_SCANNED("Read swap_pss (%u)  %u/%u lines --> %s\r", swap_pss, skipped,
                                       lines_To_skip, tmp);
@@ -2721,7 +3031,7 @@ int getProcessInfos_rollup(FILE *smap)
         unsigned swap_pss = 0;
         if (!linesToSkipForRss_smaps_rollup)
         {
-            if (sscanf(tmp, "Rss: %u kB", &rss))
+            if (sscanf(tmp, "Rss: %u kB", &rss) == 1)
             {
                 getProcessInfo.rssTotal = rss;
                 linesToSkipForRss_smaps_rollup = linesSkippedForRss + 1;
@@ -2734,7 +3044,7 @@ int getProcessInfos_rollup(FILE *smap)
         }
         else if (!linesToSkipForPss_smaps_rollup)
         {
-            if (sscanf(tmp, "Pss: %u kB", &pss))
+            if (sscanf(tmp, "Pss: %u kB", &pss) == 1)
             {
                 getProcessInfo.pssTotal = pss;
                 linesToSkipForPss_smaps_rollup = linesSkippedForPss + 1;
@@ -2747,7 +3057,7 @@ int getProcessInfos_rollup(FILE *smap)
         }
         else if (!linesToSkipForSharedClean_smaps_rollup)
         {
-            if (sscanf(tmp, "Shared_Clean: %u kB", &shared_clean))
+            if (sscanf(tmp, "Shared_Clean: %u kB", &shared_clean) == 1)
             {
                 getProcessInfo.shared_clean_total = shared_clean;
                 linesToSkipForSharedClean_smaps_rollup = linesSkippedForSharedClean + 1;
@@ -2761,7 +3071,7 @@ int getProcessInfos_rollup(FILE *smap)
         }
         else if (!linesToSkipForPrivateClean_smaps_rollup)
         {
-            if (sscanf(tmp, "Private_Clean: %u kB", &private_clean))
+            if (sscanf(tmp, "Private_Clean: %u kB", &private_clean) == 1)
             {
                 getProcessInfo.private_clean_total = private_clean;
                 linesToSkipForPrivateClean_smaps_rollup = linesSkippedForPrivateClean + 1;
@@ -2775,7 +3085,7 @@ int getProcessInfos_rollup(FILE *smap)
         }
         else if (!linesToSkipForDirtyPrivate_smaps_rollup)
         {
-            if (sscanf(tmp, "Private_Dirty: %u kB", &private_dirty))
+            if (sscanf(tmp, "Private_Dirty: %u kB", &private_dirty) == 1)
             {
                 getProcessInfo.private_dirty_total = private_dirty;
                 linesToSkipForDirtyPrivate_smaps_rollup = linesSkippedForDirtyPrivate + 1;
@@ -2789,7 +3099,7 @@ int getProcessInfos_rollup(FILE *smap)
         }
         else if (!linesToSkipForSwapPss_smaps_rollup)
         {
-            if (sscanf(tmp, "SwapPss: %u kB", &swap_pss))
+            if (sscanf(tmp, "SwapPss: %u kB", &swap_pss) == 1)
             {
                 getProcessInfo.swap_pss_total = swap_pss;
                 linesToSkipForSwapPss_smaps_rollup = linesSkippedForSwapPss + 1;
@@ -2799,7 +3109,7 @@ int getProcessInfos_rollup(FILE *smap)
             else
             {
                 // check if smap doesn't contain swappss..
-                if (sscanf(tmp, "Locked: %u kB", &swap_pss))
+                if (sscanf(tmp, "Locked: %u kB", &swap_pss) == 1)
                 {
                     PRINT_DBG_INITIAL("*****No SwapPss....skipping\n");
                 linesToSkipForSwapPss_smaps_rollup = 0xFFFF;
@@ -2856,7 +3166,7 @@ int getProcessInfos_learnt(FILE *smap)
         {
             if (expect_rss)
             {
-                if (sscanf(tmp, "Rss: %u kB\n", &rss))
+                if (sscanf(tmp, "Rss: %u kB\n", &rss) == 1)
                 {
                     if (rss)
                     {
@@ -2881,7 +3191,7 @@ int getProcessInfos_learnt(FILE *smap)
             }
             else if (expect_pss)
             {
-                if (sscanf(tmp, "Pss: %u kB\n", &pss))
+                if (sscanf(tmp, "Pss: %u kB\n", &pss) == 1)
                 {
                     getProcessInfo.pssTotal += pss;
                     lines_To_skip = linesToSkipForSharedClean;
@@ -2894,7 +3204,7 @@ int getProcessInfos_learnt(FILE *smap)
             }
             else if (expect_shared_clean)
             {
-                if (sscanf(tmp, "Shared_Clean: %u kB\n", &shared_clean))
+                if (sscanf(tmp, "Shared_Clean: %u kB\n", &shared_clean) == 1)
                 {
                     if (shared_clean) {
                         getProcessInfo.shared_clean_total += prev_pss;
@@ -2909,7 +3219,7 @@ int getProcessInfos_learnt(FILE *smap)
             }
             else if (expect_private_clean)
             {
-                if (sscanf(tmp, "Private_Clean: %u kB\n", &private_clean))
+                if (sscanf(tmp, "Private_Clean: %u kB\n", &private_clean) == 1)
                 {
                     expect_private_clean = 0;
                     getProcessInfo.private_clean_total += private_clean;
@@ -2921,7 +3231,7 @@ int getProcessInfos_learnt(FILE *smap)
             }
             else if (expect_private_dirty)
             {
-                if (sscanf(tmp, "Private_Dirty: %u kB\n", &private_dirty))
+                if (sscanf(tmp, "Private_Dirty: %u kB\n", &private_dirty) == 1)
                 {
                     expect_private_dirty = 0;
                     getProcessInfo.private_dirty_total += private_dirty;
@@ -2941,7 +3251,7 @@ int getProcessInfos_learnt(FILE *smap)
             }
             else if (expect_swap_pss)
             {
-                if (sscanf(tmp, "SwapPss: %u kB\n", &swap_pss))
+                if (sscanf(tmp, "SwapPss: %u kB\n", &swap_pss) == 1)
                 {
                     expect_swap_pss = 0;
                     expect_rss = 1;
@@ -3033,7 +3343,7 @@ int getProcessInfos_initial(FILE *smap)
         { // Learn here
             if (!linesToSkipForRss)
             {
-                if (sscanf(tmp, "Rss: %u kB", &rss))
+                if (sscanf(tmp, "Rss: %u kB", &rss) == 1)
                 {
                     getProcessInfo.rssTotal += rss;
                     linesToSkipForRss = linesSkippedForRss + 1;
@@ -3046,7 +3356,7 @@ int getProcessInfos_initial(FILE *smap)
             }
             else if (!linesToSkipForPss)
             {
-                if (sscanf(tmp, "Pss: %u kB", &pss))
+                if (sscanf(tmp, "Pss: %u kB", &pss) == 1)
                 {
                     getProcessInfo.pssTotal += pss;
                     linesToSkipForPss = linesSkippedForPss + 1;
@@ -3060,7 +3370,7 @@ int getProcessInfos_initial(FILE *smap)
             }
             else if (!linesToSkipForSharedClean)
             {
-                if (sscanf(tmp, "Shared_Clean: %u kB", &shared_clean))
+                if (sscanf(tmp, "Shared_Clean: %u kB", &shared_clean) == 1)
                 {
                     if (shared_clean) {
                         getProcessInfo.shared_clean_total += prev_pss;
@@ -3076,7 +3386,7 @@ int getProcessInfos_initial(FILE *smap)
             }
             else if (!linesToSkipForPrivateClean)
             {
-                if (sscanf(tmp, "Private_Clean: %u kB", &private_clean))
+                if (sscanf(tmp, "Private_Clean: %u kB", &private_clean) == 1)
                 {
                     getProcessInfo.private_clean_total += private_clean;
                     linesToSkipForPrivateClean = linesSkippedForPrivateClean + 1;
@@ -3090,7 +3400,7 @@ int getProcessInfos_initial(FILE *smap)
             }
             else if (!linesToSkipForDirtyPrivate)
             {
-                if (sscanf(tmp, "Private_Dirty: %u kB", &private_dirty))
+                if (sscanf(tmp, "Private_Dirty: %u kB", &private_dirty) == 1)
                 {
                     getProcessInfo.private_dirty_total += private_dirty;
                     linesToSkipForDirtyPrivate = linesSkippedForDirtyPrivate + 1;
@@ -3104,7 +3414,7 @@ int getProcessInfos_initial(FILE *smap)
             }
             else if (!linesToSkipForSwapPss)
             {
-                if (sscanf(tmp, "SwapPss: %u kB", &swap_pss))
+                if (sscanf(tmp, "SwapPss: %u kB", &swap_pss) == 1)
                 {
                     getProcessInfo.swap_pss_total += swap_pss;
                     linesToSkipForSwapPss = linesSkippedForSwapPss + 1;
@@ -3115,7 +3425,7 @@ int getProcessInfos_initial(FILE *smap)
                 else
                 {
                     // check if smap doesn't contain swappss..
-                    if (sscanf(tmp, "Rss: %u kB", &rss))
+                    if (sscanf(tmp, "Rss: %u kB", &rss) == 1)
                     {
                         getProcessInfo.rssTotal += rss;
                         linesToSkipForRollover = linesSkippedForSwapPss + 1;
@@ -3138,7 +3448,7 @@ int getProcessInfos_initial(FILE *smap)
             }
             else if (!linesToSkipForRollover)
             {
-                if (sscanf(tmp, "Rss: %u kB", &rss))
+                if (sscanf(tmp, "Rss: %u kB", &rss) == 1)
                 {
                     getProcessInfo.rssTotal += rss;
                     linesToSkipForRollover = linesSkippedForRollover + 1;
@@ -3171,7 +3481,7 @@ int getProcessInfos_initial(FILE *smap)
             {
                 if (expect_rss)
                 {
-                    if (sscanf(tmp, "Rss: %u kB", &rss))
+                    if (sscanf(tmp, "Rss: %u kB", &rss) == 1)
                     {
                         PRINT_DBG_SCANNED("Read Rss (%u) after %u/%u lines --> %s\r", rss, skipped,
                                               lines_To_skip, tmp);
@@ -3199,7 +3509,7 @@ int getProcessInfos_initial(FILE *smap)
                 }
                 else if (expect_pss)
                 {
-                    if (sscanf(tmp, "Pss: %u kB", &pss))
+                    if (sscanf(tmp, "Pss: %u kB", &pss) == 1)
                     {
                         PRINT_DBG_SCANNED("Read Pss (%u) after %u/%u lines  --> %s\r", pss, skipped, lines_To_skip,
                                           tmp);
@@ -3214,7 +3524,7 @@ int getProcessInfos_initial(FILE *smap)
                 }
                 else if (expect_shared_clean)
                 {
-                    if (sscanf(tmp, "Shared_Clean: %u kB", &shared_clean))
+                    if (sscanf(tmp, "Shared_Clean: %u kB", &shared_clean) == 1)
                     {
                         PRINT_DBG_SCANNED("Read shared_clean (%u)  %u/%u lines --> %s\r", shared_clean, skipped,
                                           lines_To_skip, tmp);
@@ -3231,7 +3541,7 @@ int getProcessInfos_initial(FILE *smap)
                 }
                 else if (expect_private_clean)
                 {
-                    if (sscanf(tmp, "Private_Clean: %u kB", &private_clean))
+                    if (sscanf(tmp, "Private_Clean: %u kB", &private_clean) == 1)
                     {
                         expect_private_clean = 0;
                         PRINT_DBG_SCANNED("Read private_clean (%u)  %u/%u lines --> %s\r", private_clean, skipped,
@@ -3245,7 +3555,7 @@ int getProcessInfos_initial(FILE *smap)
                 }
                 else if (expect_private_dirty)
                 {
-                    if (sscanf(tmp, "Private_Dirty: %u kB", &private_dirty))
+                    if (sscanf(tmp, "Private_Dirty: %u kB", &private_dirty) == 1)
                     {
                         expect_private_dirty = 0;
                         PRINT_DBG_SCANNED("Read private_dirty (%u)  %u/%u lines --> %s\r", private_dirty, skipped,
@@ -3267,7 +3577,7 @@ int getProcessInfos_initial(FILE *smap)
                 }
                 else if (expect_swap_pss)
                 {
-                    if (sscanf(tmp, "SwapPss: %u kB", &swap_pss))
+                    if (sscanf(tmp, "SwapPss: %u kB", &swap_pss) == 1)
                     {
                         expect_swap_pss = 0;
                         expect_rss = 1;
@@ -3310,7 +3620,6 @@ int getProcessInfos(unsigned pid)
     prev_test_pss = 0;
     if (isTestMode)
     {
-        memcpy(tmp, testSmap, 128);
         if (strstr(testSmap, "smaps_rollup") != NULL)
         {
             smaps_rollup = 1;
@@ -3321,8 +3630,8 @@ int getProcessInfos(unsigned pid)
             smaps_rollup = 0;
             getProcessInfos_ptr = getProcessInfos_initial;
         }
-        PRINT_MUST("%s: Testing with %s\n", __FUNCTION__, tmp);
-        smap = fopen(tmp, "r");
+        PRINT_MUST("%s: Testing with %s\n", __FUNCTION__, testSmap);
+        smap = openRegularFileForRead(testSmap);
     }
     else
 #endif
@@ -3392,8 +3701,8 @@ void printHelpAndUsage(char *argv[], bool moreInfo, int returnCode)
     printf("  -c, --config <file>               Path to configuration file with %s extension\n", CONFIG_EXTN);
     printf("  -h, --help                        Show this help message and exit\n");
     printf("  -o, --output <directory>          Output directory for generated report files (default: %s; basename must contain 'meminsight')\n", DEFAULT_OUT_DIR);
-    printf("      --interval <seconds>          Interval in seconds between iterations (overrides config)\n");
-    printf("      --iterations <count>          Number of iterations to run (overrides config)\n");
+    printf("      --interval <seconds>          Interval in seconds between iterations (overrides config, max: %d)\n", MAX_INTERVAL);
+    printf("      --iterations <count>          Number of iterations to run (overrides config, max: %d)\n", MAX_ITERATIONS);
     printf("      --upload-enable               Enable Cadence based upload\n");
     printf("      --upload-interval <seconds>   Report Upload Frequency\n");
     printf("      --frag                        Enable fragmentation data collection (default: disabled)\n");
@@ -3631,7 +3940,8 @@ int collectSystemMemoryStats(bool enableKThreads, const char *outDir, int iterat
     (void)touchFile(MEMINSIGHT_INPROGRESS_FILE);
 
     PRINT_MUST("Capturing System wide stats into directory %s\n", setup.outputDir);
-    char outputfile[512];
+    char outputfile[PATH_MAX * 2];
+    char outputName[256];
 
     for (int iter = 0; long_run || iter < iterations; iter++)
     {
@@ -3640,14 +3950,29 @@ int collectSystemMemoryStats(bool enableKThreads, const char *outDir, int iterat
 
         // Current timestamp
         time_t timenow = time(NULL);
-        struct tm *tm_info = localtime(&timenow);
+        struct tm tm_info;
         char timestamp[32] = {0};
         char ts[32] = {0};
-        strftime(ts, sizeof(ts), "%Y-%m-%d %H:%M:%S", tm_info);
-        strftime(timestamp, sizeof(timestamp), "%Y%m%d%H%M%S", tm_info);
 
-        snprintf(outputfile, sizeof(outputfile), "%s/%s_%s_iter%d_%s",
-                 setup.outputDir, setup.mac, timestamp, iter + 1, setup.reportFileName);
+        if (localtime_r(&timenow, &tm_info) == NULL ||
+            strftime(ts, sizeof(ts), "%Y-%m-%d %H:%M:%S", &tm_info) == 0 ||
+            strftime(timestamp, sizeof(timestamp), "%Y%m%d%H%M%S", &tm_info) == 0) {
+            PRINT_ERROR("%s: Failed to generate timestamp\n", __FUNCTION__);
+            removeFileIfPresent(MEMINSIGHT_INPROGRESS_FILE);
+            return -1;
+        }
+        int nameLen = snprintf(outputName, sizeof(outputName), "%s_%s_iter%d_%s", setup.mac, timestamp, iter + 1, setup.reportFileName);
+        if (nameLen <= 0 || (size_t)nameLen >= sizeof(outputName)) {
+            PRINT_ERROR("%s: Failed to build output file name\n", __FUNCTION__);
+            removeFileIfPresent(MEMINSIGHT_INPROGRESS_FILE);
+            return -1;
+        }
+        int pathLen = snprintf(outputfile, sizeof(outputfile), "%s/%s", setup.outputDir, outputName);
+        if (pathLen <= 0 || (size_t)pathLen >= sizeof(outputfile)) {
+            PRINT_ERROR("%s: Failed to build output file path\n", __FUNCTION__);
+            removeFileIfPresent(MEMINSIGHT_INPROGRESS_FILE);
+            return -1;
+        }
         PRINT_INFO("Capturing Process stats into: %s\n", outputfile);
 
         /* Recalculate uptime fresh on each iteration. */
@@ -3678,7 +4003,7 @@ int collectSystemMemoryStats(bool enableKThreads, const char *outDir, int iterat
 
         FILE *output = NULL;
         if (g_reportFormat == REPORT_CSV) {
-            output = fopen(outputfile, "w");
+            output = createRestrictedReportFile(&setup, outputName);
             if (NULL == output) {
                 PRINT_MUST("%s: Open failed, %d [%s]\n", outputfile, errno, strerror(errno));
                 removeFileIfPresent(MEMINSIGHT_INPROGRESS_FILE);
@@ -3948,16 +4273,43 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, bool cli_out
 
         // Get timestamp
         time_t timenow = time(NULL);
-        struct tm *tm_info = localtime(&timenow);
+        struct tm tm_info;
         char timestamp[32] = {0};
         char ts[32] = {0};
-        strftime(ts, sizeof(ts), "%Y-%m-%d %H:%M:%S", tm_info);
-        strftime(timestamp, sizeof(timestamp), "%Y%m%d%H%M%S", tm_info);
+        if (localtime_r(&timenow, &tm_info) == NULL ||
+            strftime(ts, sizeof(ts), "%Y-%m-%d %H:%M:%S", &tm_info) == 0 ||
+            strftime(timestamp, sizeof(timestamp), "%Y%m%d%H%M%S", &tm_info) == 0) {
+            PRINT_ERROR("%s: Failed to generate timestamp\n", __FUNCTION__);
+            for (unsigned j = 0; j < config.whiteListCount; j++)
+                if (config.whitelist[j]) free(config.whitelist[j]);
+            if (config.whitelist) free(config.whitelist);
+            removeFileIfPresent(MEMINSIGHT_INPROGRESS_FILE);
+            return -1;
+        }
 
         // Generate output file name
         char outputFilePath[PATH_MAX * 2] = {0};
-        snprintf(outputFilePath, sizeof(outputFilePath), "%s/%s_%s_iter%d_%s",
-                 setup.outputDir, setup.mac, timestamp, iter + 1, setup.reportFileName);
+        char outputFileName[256] = {0};
+        int nameLen = snprintf(outputFileName, sizeof(outputFileName), "%s_%s_iter%d_%s",
+             setup.mac, timestamp, iter + 1, setup.reportFileName);
+        if (nameLen <= 0 || (size_t)nameLen >= sizeof(outputFileName)) {
+            PRINT_ERROR("%s: Failed to build output file name\n", __FUNCTION__);
+            for (unsigned j = 0; j < config.whiteListCount; j++)
+                if (config.whitelist[j]) free(config.whitelist[j]);
+            if (config.whitelist) free(config.whitelist);
+            removeFileIfPresent(MEMINSIGHT_INPROGRESS_FILE);
+            return -1;
+        }
+        int pathLen = snprintf(outputFilePath, sizeof(outputFilePath), "%s/%s",
+             setup.outputDir, outputFileName);
+        if (pathLen <= 0 || (size_t)pathLen >= sizeof(outputFilePath)) {
+            PRINT_ERROR("%s: Failed to build output file path\n", __FUNCTION__);
+            for (unsigned j = 0; j < config.whiteListCount; j++)
+                if (config.whitelist[j]) free(config.whitelist[j]);
+            if (config.whitelist) free(config.whitelist);
+            removeFileIfPresent(MEMINSIGHT_INPROGRESS_FILE);
+            return -1;
+        }
         PRINT_INFO("Capturing Process stats into %s\n", outputFilePath);
 
         /* Recalculate uptime fresh on each iteration */
@@ -3991,7 +4343,7 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, bool cli_out
 
         FILE *output = NULL;
         if (g_reportFormat == REPORT_CSV) {
-            output = fopen(outputFilePath, "w");
+            output = createRestrictedReportFile(&setup, outputFileName);
             if (!output) {
                 PRINT_ERROR("Error: Failed to open output file '%s' for writing\n", outputFilePath);
                 for (unsigned j = 0; j < config.whiteListCount; j++)
@@ -4188,16 +4540,16 @@ void saveMeminfo(FILE *out)
 	"VmallocUsed","CmaFree","CmaTotal"};
     static char meminfoHeader[MEMINFO_HEADER_TOTAL] = {0};
     static char meminfoValue[MEMINFO_HEADER_TOTAL] = {0};
-    static int skipMemTotal = 0;
+    static size_t skipMemTotal = 0;
     static int skipArray[MEMINFO_NEEDED_FIELDS_COUNT] = {0};
     static int learnt = 0;
 
 #ifdef TESTME
     char tstmeminfoHeader[MEMINFO_HEADER_TOTAL] = {0};
     char tstmeminfoValue[MEMINFO_HEADER_TOTAL] = {0};
-    int tstprocessHeaderIndex = 0;
-    int tstprocessValueIndex = 0;
-    FILE *meminfo = fopen((isTestMode)?testMeminfo:MEMINFO_FILE, "r");
+    size_t tstprocessHeaderIndex = 0;
+    size_t tstprocessValueIndex = 0;
+    FILE *meminfo = isTestMode ? openRegularFileForRead(testMeminfo) : fopen(MEMINFO_FILE, "r");
 #else
     FILE *meminfo = fopen(MEMINFO_FILE, "r");
 #endif
@@ -4206,58 +4558,86 @@ void saveMeminfo(FILE *out)
         char tmp[128];
         int skipCount = skipArray[1];
         int processIndex = learnt;
-        int processValIndex = skipMemTotal;
-        while (fgets(tmp, 127, meminfo) && (processIndex < MEMINFO_NEEDED_FIELDS_COUNT)) {
+        size_t processValIndex = skipMemTotal;
+        while (fgets(tmp, 127, meminfo) && (processIndex >= 0) &&
+               (processIndex < MEMINFO_NEEDED_FIELDS_COUNT)) {
 #ifdef TESTME
             char tstname[64];
-            if (!sscanf(tmp, "%s %lu kB", tstname, &value)) {
+            if (sscanf(tmp, "%63s %lu kB", tstname, &value) != 2) {
                 PRINT_ERROR("%s: Error parsing [%s]\n", __FUNCTION__, tmp);
                 continue; 
             }
-            tstname[strlen(tstname)-1] = '\0';
+            if (tstname[0] != '\0')
+                tstname[strlen(tstname)-1] = '\0';
             for (int tsti=0; tsti<MEMINFO_NEEDED_FIELDS_COUNT; tsti++) {
                 if (!strcmp(tstname, meminfoNeeded[tsti])) {
-                    if (!tstprocessHeaderIndex) {
-                        tstprocessHeaderIndex += sprintf(tstmeminfoHeader+tstprocessHeaderIndex, "%s", meminfoNeeded[tsti]);
-                        tstprocessValueIndex += sprintf(tstmeminfoValue+tstprocessValueIndex, "%lu", value);
-                    }
-                    else {
-                        tstprocessHeaderIndex += sprintf(tstmeminfoHeader+tstprocessHeaderIndex, ",%s", meminfoNeeded[tsti]);
-                        tstprocessValueIndex += sprintf(tstmeminfoValue+tstprocessValueIndex, ",%lu", value);
+                    bool prependComma = (tstprocessHeaderIndex != 0);
+                    if (!appendMeminfoHeader(tstmeminfoHeader, sizeof(tstmeminfoHeader),
+                                             &tstprocessHeaderIndex, prependComma,
+                                             meminfoNeeded[tsti]) ||
+                        !appendMeminfoValue(tstmeminfoValue, sizeof(tstmeminfoValue),
+                                            &tstprocessValueIndex, prependComma, value)) {
+                        PRINT_ERROR("%s: Test meminfo buffer insufficient\n", __FUNCTION__);
+                        fclose(meminfo);
+                        unitTestFailed = 1;
+                        return;
                     }
                 }
             }
 #endif
             if (learnt) {
                 if (! --skipCount) {
-                    if (!sscanf(tmp, "%*s %lu kB", &value)) {
+                    if (sscanf(tmp, "%*s %lu kB", &value) != 1) {
                         PRINT_ERROR("%s: Error parsing [%s]\n", __FUNCTION__, tmp);
                         continue; 
                     }
-                    skipCount = skipArray[++processIndex];
-                    processValIndex += sprintf(meminfoValue+processValIndex, ",%lu", value);
+                    if (processIndex < MEMINFO_NEEDED_FIELDS_COUNT - 1) {
+                        processIndex++;
+                        skipCount = skipArray[processIndex];
+                    } else {
+                        processIndex = MEMINFO_NEEDED_FIELDS_COUNT;
+                    }
+                    if (!appendMeminfoValue(meminfoValue, sizeof(meminfoValue),
+                                            &processValIndex, true, value)) {
+                        PRINT_MUST("Meminfo value buffer insufficient\n");
+                        fclose(meminfo);
+                        return;
+                    }
                 }
             }
             else 
             {
                 char name[64];
                 // Below lines repeat, but okay..for clarity and not needed to check whether learnt again
-                if (!sscanf(tmp, "%s %lu kB", name, &value)) {
+                if (sscanf(tmp, "%63s %lu kB", name, &value) != 2) {
                     PRINT_ERROR("%s: Error parsing [%s]\n", __FUNCTION__, tmp);
                     continue; 
                 }
                 skipCount++;
-                name[strlen(name)-1] = '\0';
-                if (!strcmp(name, meminfoNeeded[processIndex])) {
+                if (name[0] != '\0')
+                    name[strlen(name)-1] = '\0';
+                if (processIndex >= 0 && processIndex < MEMINFO_NEEDED_FIELDS_COUNT &&
+                    !strcmp(name, meminfoNeeded[processIndex])) {
                     PRINT_DBG_INITIAL("Found %s storing at index %d\n", name, processIndex);
                     if (processIndex) { // For MemTotal, skip always since we've the constant value
-                        skipArray[processIndex++] = skipCount;
+                        skipArray[processIndex] = skipCount;
+                        processIndex++;
                         skipCount = 0;
-                        processValIndex += sprintf(meminfoValue+processValIndex, ",%lu", value);
+                        if (!appendMeminfoValue(meminfoValue, sizeof(meminfoValue),
+                                                &processValIndex, true, value)) {
+                            PRINT_MUST("Meminfo value buffer insufficient\n");
+                            fclose(meminfo);
+                            return;
+                        }
                     }
                     else {
                         processIndex++;
-                        processValIndex += sprintf(meminfoValue+processValIndex, "%lu", value);
+                        if (!appendMeminfoValue(meminfoValue, sizeof(meminfoValue),
+                                                &processValIndex, false, value)) {
+                            PRINT_MUST("Meminfo value buffer insufficient\n");
+                            fclose(meminfo);
+                            return;
+                        }
                         skipMemTotal = processValIndex;
                     }
                     }
@@ -4273,9 +4653,15 @@ void saveMeminfo(FILE *out)
                             char *tmpp = meminfoNeeded[processIndex];
                             meminfoNeeded[processIndex] = meminfoNeeded[i];
                             meminfoNeeded[i] = tmpp;
-                            skipArray[processIndex++] = skipCount;
+                            skipArray[processIndex] = skipCount;
+                            processIndex++;
                             skipCount = 0;
-                            processValIndex += sprintf(meminfoValue+processValIndex, ",%lu", value);
+                            if (!appendMeminfoValue(meminfoValue, sizeof(meminfoValue),
+                                                    &processValIndex, true, value)) {
+                                PRINT_MUST("Meminfo value buffer insufficient\n");
+                                fclose(meminfo);
+                                return;
+                            }
                             break;
                         }
                     }
@@ -4286,18 +4672,16 @@ void saveMeminfo(FILE *out)
         if (!learnt) {
             PRINT_DBG_INITIAL("Total %d found %d\n", MEMINFO_NEEDED_FIELDS_COUNT, processIndex);
             learnt = 1;
-            int index = 0;
+            size_t index = 0;
+            if (processIndex > MEMINFO_NEEDED_FIELDS_COUNT)
+                processIndex = MEMINFO_NEEDED_FIELDS_COUNT;
             for (int i=0; i < processIndex; i++) {
-                if ((MEMINFO_HEADER_TOTAL - 16) < index) {
-                    PRINT_MUST("Buffer insufficient....\n");
-                    exit(0);
-                }
-                PRINT_DBG_INITIAL("index %d at %d..meminfo [%s] skip [%d]\n", index,i,meminfoNeeded[i],skipArray[i]);
-                if (index) {
-                    index += sprintf(meminfoHeader+index, ",%s", meminfoNeeded[i]);
-                }
-                else {
-                    index += sprintf(meminfoHeader+index, "%s", meminfoNeeded[i]);
+                PRINT_DBG_INITIAL("index %zu at %d..meminfo [%s] skip [%d]\n", index,i,meminfoNeeded[i],skipArray[i]);
+                if (!appendMeminfoHeader(meminfoHeader, sizeof(meminfoHeader), &index,
+                                         index != 0, meminfoNeeded[i])) {
+                    PRINT_MUST("Meminfo header buffer insufficient\n");
+                    meminfoHeader[0] = '\0';
+                    return;
                 }
             }
         }
@@ -4345,7 +4729,7 @@ void saveMeminfo_JSON(cJSON_t *root)
         return;
     }
 #ifdef TESTME
-    FILE *meminfo = fopen((isTestMode) ? testMeminfo : MEMINFO_FILE, "r");
+    FILE *meminfo = isTestMode ? openRegularFileForRead(testMeminfo) : fopen(MEMINFO_FILE, "r");
 #else
     FILE *meminfo = fopen(MEMINFO_FILE, "r");
 #endif
@@ -4451,14 +4835,14 @@ void writeProcessInfo_JSON(cJSON_t *processesArray)
  */
 int writeJSONToFile(const char *filepath, const SetupInfo *setup)
 {
-    (void)setup; /* metadata already written into g_rootObject at creation */
-
     if (!g_rootObject) {
         PRINT_ERROR("No JSON data to write\n");
         return -1;
     }
 
-    FILE *out = fopen(filepath, "w");
+    const char *fileName = strrchr(filepath, '/');
+    fileName = fileName ? fileName + 1 : filepath;
+    FILE *out = createRestrictedReportFile(setup, fileName);
     if (!out) {
         PRINT_ERROR("Failed to open %s for writing: %s\n", filepath, strerror(errno));
         g_cjson.Delete(g_rootObject);
@@ -4513,6 +4897,7 @@ int writeT2Report(const char *filepath, const SetupInfo *setup, int iteration, i
     cJSON_t *root = g_cjson.CreateObject();
     if (!root) {
         PRINT_ERROR("T2: Failed to create root object\n");
+        freeProcessInfoList();
         return -1;
     }
 
@@ -4520,6 +4905,7 @@ int writeT2Report(const char *filepath, const SetupInfo *setup, int iteration, i
     if (!reportArray) {
         PRINT_ERROR("T2: Failed to create Report array\n");
         g_cjson.Delete(root);
+        freeProcessInfoList();
         return -1;
     }
 
@@ -4596,11 +4982,18 @@ int writeT2Report(const char *filepath, const SetupInfo *setup, int iteration, i
 
     /* Timestamp, Date, Uptime, Iteration */
     time_t timenow = time(NULL);
-    struct tm *tm_info = localtime(&timenow);
+    struct tm tm_info;
     char ts[32] = {0};
     char dateStr[16] = {0};
-    strftime(ts, sizeof(ts), "%Y-%m-%d %H:%M:%S", tm_info);
-    strftime(dateStr, sizeof(dateStr), "%Y-%m-%d", tm_info);
+    if (localtime_r(&timenow, &tm_info) == NULL ||
+        strftime(ts, sizeof(ts), "%Y-%m-%d %H:%M:%S", &tm_info) == 0 ||
+        strftime(dateStr, sizeof(dateStr), "%Y-%m-%d", &tm_info) == 0) {
+        PRINT_ERROR("T2: Failed to generate timestamp\n");
+        g_cjson.Delete(reportArray);
+        g_cjson.Delete(root);
+        freeProcessInfoList();
+        return -1;
+    }
     T2_ADD_STRING("Time", ts);
     T2_ADD_STRING("Date", dateStr);
 
@@ -4624,7 +5017,7 @@ int writeT2Report(const char *filepath, const SetupInfo *setup, int iteration, i
         const int fieldCount = (int)(sizeof(meminfoNeeded) / sizeof(meminfoNeeded[0]));
 
 #ifdef TESTME
-        FILE *meminfo = fopen((isTestMode) ? testMeminfo : MEMINFO_FILE, "r");
+        FILE *meminfo = isTestMode ? openRegularFileForRead(testMeminfo) : fopen(MEMINFO_FILE, "r");
 #else
         FILE *meminfo = fopen(MEMINFO_FILE, "r");
 #endif
@@ -4704,7 +5097,7 @@ int writeT2Report(const char *filepath, const SetupInfo *setup, int iteration, i
 #ifdef TESTME
             if (isTestMode) {
                 if (testPagetypeinfo[0])
-                    fp = fopen(testPagetypeinfo, "r");
+                    fp = openRegularFileForRead(testPagetypeinfo);
             } else {
                 fp = fopen(PGT_FILE, "r");
             }
@@ -4773,7 +5166,7 @@ int writeT2Report(const char *filepath, const SetupInfo *setup, int iteration, i
 #ifdef TESTME
             if (isTestMode) {
                 if (testBuddyinfo[0])
-                    fp = fopen(testBuddyinfo, "r");
+                    fp = openRegularFileForRead(testBuddyinfo);
             } else {
                 fp = fopen(BUDDYINFO_FILE, "r");
             }
@@ -4995,10 +5388,13 @@ int writeT2Report(const char *filepath, const SetupInfo *setup, int iteration, i
     /* --- Assemble and write --- */
     g_cjson.AddItemToObject(root, "Report", reportArray);
 
-    FILE *out = fopen(filepath, "w");
+    const char *fileName = strrchr(filepath, '/');
+    fileName = fileName ? fileName + 1 : filepath;
+    FILE *out = createRestrictedReportFile(setup, fileName);
     if (!out) {
         PRINT_ERROR("T2: Failed to open %s for writing: %s\n", filepath, strerror(errno));
         g_cjson.Delete(root);
+        freeProcessInfoList();
         return -1;
     }
 
@@ -5080,14 +5476,11 @@ int main(int argc, char *argv[])
         { // config file
             if (i + 1 < argc)
             {
-                strncpy(confFile, argv[i + 1], PATH_MAX - 1);
-                FILE *fp = fopen(confFile, "r");
-                if (!fp)
+                if (!realpath(argv[i + 1], confFile))
                 {
-                    PRINT_ERROR("Error: Config file '%s' does not exist or cannot be opened.\n", confFile);
+                    PRINT_ERROR("Error: Config file '%s' does not exist or cannot be resolved.\n", argv[i + 1]);
                     printHelpAndUsage(argv, true, 1);
                 }
-                fclose(fp);
                 isSystemWide = false; // Config mode implies not system-wide
                 isConfigPresent = true;
                 i++; // Skip next arg (conf file)
@@ -5112,23 +5505,13 @@ int main(int argc, char *argv[])
             isTestMode = 2;
             if ((i+2) < argc) {
                 i++;
-                FILE *testMapFd = fopen(argv[i], "r");
-                if (testMapFd) {
-                    fclose(testMapFd);
-                    strncpy(testSmap, argv[i], 128);
+                if (acceptTestFixturePath(argv[i], testSmap, sizeof(testSmap))) {
                     i++;
-                    testMapFd = fopen(argv[i], "r");
-                    if (testMapFd) {
-                        fclose(testMapFd);
-                        strncpy(testMeminfo, argv[i], 128);
+                    if (acceptTestFixturePath(argv[i], testMeminfo, sizeof(testMeminfo))) {
 
                         if ((i + 1) < argc && argv[i + 1][0] != '-') {
                             i++;
-                            testMapFd = fopen(argv[i], "r");
-                            if (testMapFd) {
-                                fclose(testMapFd);
-                                strncpy(testBuddyinfo, argv[i], 128);
-                            } else {
+                            if (!acceptTestFixturePath(argv[i], testBuddyinfo, sizeof(testBuddyinfo))) {
                                 PRINT_ERROR("Test buddyinfo file %s open error %d [%s]\n", argv[i], errno, strerror(errno));
                                 printHelpAndUsage(argv, false, 1);
                             }
@@ -5136,11 +5519,7 @@ int main(int argc, char *argv[])
 
                         if ((i + 1) < argc && argv[i + 1][0] != '-') {
                             i++;
-                            testMapFd = fopen(argv[i], "r");
-                            if (testMapFd) {
-                                fclose(testMapFd);
-                                strncpy(testPagetypeinfo, argv[i], 128);
-                            } else {
+                            if (!acceptTestFixturePath(argv[i], testPagetypeinfo, sizeof(testPagetypeinfo))) {
                                 PRINT_ERROR("Test pagetypeinfo file %s open error %d [%s]\n", argv[i], errno, strerror(errno));
                                 printHelpAndUsage(argv, false, 1);
                             }
@@ -5148,12 +5527,7 @@ int main(int argc, char *argv[])
 
                         if ((i + 1) < argc && argv[i + 1][0] != '-') {
                             i++;
-                            testMapFd = fopen(argv[i], "r");
-                            if (testMapFd) {
-                                fclose(testMapFd);
-                                strncpy(testStat, argv[i], sizeof(testStat) - 1);
-                                testStat[sizeof(testStat) - 1] = '\0';
-                            } else {
+                            if (!acceptTestFixturePath(argv[i], testStat, sizeof(testStat))) {
                                 PRINT_ERROR("Test stat file %s open error %d [%s]\n", argv[i], errno, strerror(errno));
                                 printHelpAndUsage(argv, false, 1);
                             }
@@ -5161,12 +5535,7 @@ int main(int argc, char *argv[])
 
                         if ((i + 1) < argc && argv[i + 1][0] != '-') {
                             i++;
-                            testMapFd = fopen(argv[i], "r");
-                            if (testMapFd) {
-                                fclose(testMapFd);
-                                strncpy(testBandwidth, argv[i], sizeof(testBandwidth) - 1);
-                                testBandwidth[sizeof(testBandwidth) - 1] = '\0';
-                            } else {
+                            if (!acceptTestFixturePath(argv[i], testBandwidth, sizeof(testBandwidth))) {
                                 PRINT_ERROR("Test bandwidth file %s open error %d [%s]\n", argv[i], errno, strerror(errno));
                                 printHelpAndUsage(argv, false, 1);
                             }
@@ -5205,7 +5574,11 @@ int main(int argc, char *argv[])
         { // interval
             if (i + 1 < argc)
             {
-                cli_interval = atoi(argv[i + 1]);
+                if (!parseBoundedIntArg(argv[i + 1], 1, MAX_INTERVAL, &cli_interval))
+                {
+                    PRINT_ERROR("Error: --interval value must be between 1 and %d\n", MAX_INTERVAL);
+                    printHelpAndUsage(argv, false, 1);
+                }
                 i++; // skip next arg (interval)
                 long_run = false; // If interval is specified, it's not a long run
             }
@@ -5219,7 +5592,11 @@ int main(int argc, char *argv[])
         { // iterations
             if (i + 1 < argc)
             {
-                cli_iterations = atoi(argv[i + 1]);
+                if (!parseBoundedIntArg(argv[i + 1], 1, MAX_ITERATIONS, &cli_iterations))
+                {
+                    PRINT_ERROR("Error: --iterations value must be between 1 and %d\n", MAX_ITERATIONS);
+                    printHelpAndUsage(argv, false, 1);
+                }
                 i++; // skip next arg (iterations)
                 long_run = false; // If iterations are specified, it's not a long run
             }

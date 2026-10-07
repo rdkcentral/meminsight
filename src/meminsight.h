@@ -121,6 +121,8 @@ This is used to ensure compatibility with older versions of the report parser. *
 #define MAC_LEN 32
 #define DEFAULT_ITERATIONS 1
 #define DEFAULT_INTERVAL 5
+#define MAX_ITERATIONS 10000
+#define MAX_INTERVAL 86400
 #define DEFAULT_LOG_LEVEL "INFO"
 #define DEFAULT_MAC "000000000000"
 #define DEFAULT_BACKUP_COUNT 30
@@ -204,6 +206,8 @@ typedef struct {
     const char *outputDir;
     const char *reportFileName;
     bool dirCreated;
+    dev_t outputDirDev;
+    ino_t outputDirIno;
 } SetupInfo;
 
 /*
@@ -229,12 +233,12 @@ extern int g_backupCount;             // Number of report files handled by pre-r
 
 #ifdef TESTME
 extern unsigned isTestMode;
-extern char testSmap[128];
-extern char testMeminfo[128];
-extern char testBuddyinfo[128];
-extern char testPagetypeinfo[128];
-extern char testStat[128];
-extern char testBandwidth[128];
+extern char testSmap[PATH_MAX];
+extern char testMeminfo[PATH_MAX];
+extern char testBuddyinfo[PATH_MAX];
+extern char testPagetypeinfo[PATH_MAX];
+extern char testStat[PATH_MAX];
+extern char testBandwidth[PATH_MAX];
 extern Process_Info processInfoTest;
 void checkAndFree();
 void testList();
