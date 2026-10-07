@@ -244,9 +244,29 @@ static bool parseBoundedIntArg(const char *arg, int minVal, int maxVal, int *out
     return true;
 }
 
+static bool pathHasDotDotComponent(const char *path)
+{
+    const char *p;
+
+    if (!path || !*path)
+        return true;
+
+    for (p = path; *p != '\0'; ) {
+        const char *sep = p;
+        while (*sep != '\0' && *sep != '/')
+            sep++;
+        if ((size_t)(sep - p) == 2 && p[0] == '.' && p[1] == '.')
+            return true;
+        if (*sep == '\0')
+            break;
+        p = sep + 1;
+    }
+    return false;
+}
+
 static FILE *openRegularFileForRead(const char *path)
 {
-    if (!path || !*path || strstr(path, "..") != NULL)
+    if (!path || !*path)
         return NULL;
 
     int fd = open(path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK);
@@ -290,7 +310,7 @@ static bool acceptTestFixturePath(const char *arg, char *dest, size_t destLen)
     if (!realpath(arg, resolved))
         return false;
 
-    if (strstr(resolved, "..") != NULL || strlen(resolved) >= destLen) {
+    if (pathHasDotDotComponent(resolved) || strlen(resolved) >= destLen) {
         errno = EINVAL;
         return false;
     }
