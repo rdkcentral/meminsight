@@ -705,6 +705,11 @@ static bool readConfigStoreValue(const char *dir, const char *key, char *value, 
     return found;
 }
 
+static bool isValidUploadUrl(const char *upload_url)
+{
+    return !upload_url || strpbrk(upload_url, "\r\n") == NULL;
+}
+
 /**
  * @brief Resolve upload URL with CLI-over-environment priority.
  *
@@ -5260,6 +5265,12 @@ int main(int argc, char *argv[])
 
     const char *resolved_upload_url = resolveUploadUrl(cli_upload_url, cli_upload_url_set);
     bool effective_upload_enable = cli_upload_enable;
+
+    if (effective_upload_enable && !isValidUploadUrl(resolved_upload_url))
+    {
+        PRINT_ERROR("Error: Upload URL must not contain CR or LF characters\n");
+        return 1;
+    }
 
     printf("\nExecuting: ");
     for (int i = 0; i < argc; i++)
