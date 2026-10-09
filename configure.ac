@@ -74,23 +74,6 @@ AS_IF([test "x$enable_test" = "xyes"], [
 ])
 
 # ---------------------------------------------------------------------------
-# Optional feature: HTTP upload to T2 Elastic (libcurl with mTLS)
-# ---------------------------------------------------------------------------
-AC_ARG_ENABLE([http-upload],
-  [AS_HELP_STRING([--enable-http-upload],
-    [Enable HTTP upload support (libcurl with mTLS) @<:@default=no@:>@])],
-  [case "${enableval}" in
-    yes) enable_http_upload=yes ;;
-    no)  enable_http_upload=no  ;;
-    *)   AC_MSG_ERROR([bad value ${enableval} for --enable-http-upload]) ;;
-   esac],
-  [enable_http_upload=no])
-
-AS_IF([test "x$enable_http_upload" = "xyes"], [
-  AC_DEFINE([ENABLE_HTTP_UPLOAD], [1], [Define to enable HTTP upload via shell curl + GetConfigFile])
-])
-
-# ---------------------------------------------------------------------------
 # Optional feature: rdkcertselector (linked at build time, like telemetry)
 # ---------------------------------------------------------------------------
 AC_ARG_ENABLE([certselector],
@@ -109,7 +92,6 @@ AS_IF([test "x$enable_certselector" = "xyes"], [
 
 AM_CONDITIONAL([ENABLE_CJSON], [test "x$enable_cjson" = "xyes"])
 AM_CONDITIONAL([ENABLE_TEST],  [test "x$enable_test"  = "xyes"])
-AM_CONDITIONAL([ENABLE_HTTP_UPLOAD], [test "x$enable_http_upload" = "xyes"])
 AM_CONDITIONAL([ENABLE_CERTSELECTOR], [test "x$enable_certselector" = "xyes"])
 
 AC_CONFIG_FILES([Makefile])

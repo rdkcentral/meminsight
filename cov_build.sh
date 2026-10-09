@@ -21,7 +21,6 @@ set -e
 
 ENABLE_CJSON="no"
 ENABLE_TEST="no"
-ENABLE_HTTP_UPLOAD="no"
 
 # Display help message
 show_help() {
@@ -34,13 +33,11 @@ show_help() {
     echo "  --clean                 Clean build artifacts"
     echo "  --enable-cjson          Enable JSON output support"
     echo "                          (cJSON loaded at runtime via dlopen; libcjson NOT linked)"
-    echo "  --enable-http-upload    Enable HTTP upload support (libcurl via dlopen)"
     echo "  --test, --enable-test   Build with TESTME flag (enables -t/--test option)"
     echo ""
     echo "EXAMPLES:"
     echo "  $0                                          CSV-only build (default)"
     echo "  $0 --enable-cjson                           Build with JSON support (--fmt json)"
-    echo "  $0 --enable-cjson --enable-http-upload      Build with JSON + HTTP upload"
     echo "  $0 --test                                   Build with test fixtures support"
     echo "  $0 --enable-cjson --test                    Build with both features"
     echo "  $0 --clean                                  Clean all build artifacts"
@@ -76,11 +73,6 @@ while [ "$#" -gt 0 ]; do
             echo "Building with JSON support (--fmt json; cJSON via dlopen at runtime)"
             shift
             ;;
-        --enable-http-upload)
-            ENABLE_HTTP_UPLOAD="yes"
-            echo "Building with HTTP upload support (libcurl via dlopen at runtime)"
-            shift
-            ;;
         --test|--enable-test)
             ENABLE_TEST="yes"
             echo "Building with test mode (TESTME flag)..."
@@ -88,7 +80,7 @@ while [ "$#" -gt 0 ]; do
             ;;
         *)
             echo "Unknown option: $1"
-            echo "Usage: $0 [--help] [--clean] [--enable-cjson] [--enable-http-upload] [--test]"
+            echo "Usage: $0 [--help] [--clean] [--enable-cjson] [--test]"
             exit 1
             ;;
     esac
@@ -132,9 +124,6 @@ echo "Running configure..."
 CONFIG_OPTIONS=""
 if [ "$ENABLE_CJSON" = "yes" ]; then
     CONFIG_OPTIONS="$CONFIG_OPTIONS --enable-cjson"
-fi
-if [ "$ENABLE_HTTP_UPLOAD" = "yes" ]; then
-    CONFIG_OPTIONS="$CONFIG_OPTIONS --enable-http-upload"
 fi
 if [ "$ENABLE_TEST" = "yes" ]; then
     CONFIG_OPTIONS="$CONFIG_OPTIONS --enable-test"
