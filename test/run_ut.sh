@@ -1242,7 +1242,7 @@ echo "dummy report" > "$UP35_DIR/report1.csv"
 if PATH="$UP_FAKEBIN:$PATH" MEMINSIGHT_UPLOAD_TRIGGER="$UP35_DIR/.meminsight_upload_trigger" \
     MEMINSIGHT_OUTPUT_DIR="$UP35_DIR" MEMINSIGHT_LOG_FILE="$UP35_DIR/meminsight.log" MEMINSIGHT_S3_UPLOAD_URL="https://example.test/s3" \
    MEMINSIGHT_CERT_PATH="$UP_FAKE_CERT" MEMINSIGHT_CERT_PASS_FILE="$UP_FAKE_PASS" \
-   MEMINSIGHT_TEST_HTTP_CODE=200 sh "$UP_SCRIPT" >/tmp/meminsight_up35.log 2>&1; then
+    MEMINSIGHT_TEST_HTTP_CODE=200 MEMINSIGHT_NOW_UPTIME=0 sh "$UP_SCRIPT" >/tmp/meminsight_up35.log 2>&1; then
     if grep -F "S3 artifacts" "$UP35_DIR/meminsight.log" >/dev/null 2>&1 && \
        grep -F "HTTP 200" "$UP35_DIR/meminsight.log" >/dev/null 2>&1 && \
        [ ! -e "$UP35_DIR/report1.csv" ]; then
@@ -1285,7 +1285,7 @@ echo "{}" > "$UP36_DIR/report1.t2.json"
 if PATH="$UP_FAKEBIN:$PATH" MEMINSIGHT_UPLOAD_TRIGGER="$UP36_DIR/.meminsight_upload_trigger" \
     MEMINSIGHT_OUTPUT_DIR="$UP36_DIR" MEMINSIGHT_LOG_FILE="$UP36_DIR/meminsight.log" \
    MEMINSIGHT_CERT_PATH="$UP_FAKE_CERT" MEMINSIGHT_CERT_PASS_FILE="$UP_FAKE_PASS" \
-   MEMINSIGHT_TEST_HTTP_CODE=302 sh "$UP_SCRIPT" >/tmp/meminsight_up36.log 2>&1; then
+    MEMINSIGHT_TEST_HTTP_CODE=302 MEMINSIGHT_NOW_UPTIME=0 sh "$UP_SCRIPT" >/tmp/meminsight_up36.log 2>&1; then
     if grep -F "ELK destination 'https://example.test/elk'" "$UP36_DIR/meminsight.log" >/dev/null 2>&1 && \
        grep -F "HTTP 302" "$UP36_DIR/meminsight.log" >/dev/null 2>&1 && \
        [ ! -e "$UP36_DIR/report1.t2.json" ]; then
@@ -1329,7 +1329,7 @@ if PATH="$UP_FAKEBIN:$PATH" MEMINSIGHT_UPLOAD_TRIGGER="$UP37_DIR/.meminsight_upl
     MEMINSIGHT_OUTPUT_DIR="$UP37_DIR" MEMINSIGHT_LOG_FILE="$UP37_DIR/meminsight.log" \
    MEMINSIGHT_CERT_PATH="$UP_FAKE_CERT" MEMINSIGHT_CERT_PASS_FILE="$UP_FAKE_PASS" \
    MEMINSIGHT_UPLOAD_RETRIES=2 MEMINSIGHT_UPLOAD_RETRY_DELAY=0 \
-   MEMINSIGHT_TEST_HTTP_CODE=500 sh "$UP_SCRIPT" >/tmp/meminsight_up37.log 2>&1; then
+    MEMINSIGHT_TEST_HTTP_CODE=500 MEMINSIGHT_NOW_UPTIME=0 sh "$UP_SCRIPT" >/tmp/meminsight_up37.log 2>&1; then
     RETRY_COUNT=$(grep -c "Response status.*HTTP 500" "$UP37_DIR/meminsight.log" 2>/dev/null || echo 0)
     if [ "$RETRY_COUNT" -eq 2 ] && [ -e "$UP37_DIR/report1.t2.json" ] && \
        grep -F "retained locally after 2 failed attempt(s)" "$UP37_DIR/meminsight.log" >/dev/null 2>&1; then
@@ -1370,6 +1370,7 @@ EOF
 echo "{}" > "$UP38_DIR/report1.json"
 
 if MEMINSIGHT_UPLOAD_TRIGGER="$UP38_DIR/.meminsight_upload_trigger" MEMINSIGHT_OUTPUT_DIR="$UP38_DIR" MEMINSIGHT_LOG_FILE="$UP38_DIR/meminsight.log" \
+    MEMINSIGHT_NOW_UPTIME=0 \
    sh "$UP_SCRIPT" >/tmp/meminsight_up38.log 2>&1; then
     if grep -F "[WARN]" "$UP38_DIR/meminsight.log" >/dev/null 2>&1 && \
        grep -F "no upload destination configured" "$UP38_DIR/meminsight.log" >/dev/null 2>&1 && \
