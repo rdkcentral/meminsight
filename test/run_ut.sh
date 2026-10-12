@@ -1012,8 +1012,8 @@ else
 fi
 echo ""
 
-# Test 30: configstore saves format/destination/interval; trigger activates the upload service
-META_DESC6="Test 30: Upload configuration saved to configstore and service activated"
+# Test 30: upload marker carries upload settings; configstore carries persistent state
+META_DESC6="Test 30: Upload marker and configstore key separation"
 META_OUT6="$RET_BASE/meminsight_case11_upload_handoff"
 META_MARKER="/tmp/.meminsight_upload"
 
@@ -1026,25 +1026,27 @@ rm -rf "$META_OUT6"
 rm -f "$META_MARKER" /tmp/.meminsight_configstore
 if $MEM_BIN --upload-enable --upload-interval 1800 --upload-url https://example.test/upload -o "$META_OUT6" -t "$RET_SMAP_FILE" "$RET_MEMINFO_FILE" >/tmp/meminsight_upload_handoff.log 2>&1; then
     META_CONFIG="$META_OUT6/.meminsight_configstore"
-    if [ -f "$META_CONFIG" ] && [ -e "$META_MARKER" ] && [ ! -e /tmp/.meminsight_configstore ] && \
+    if [ -f "$META_CONFIG" ] && [ -s "$META_MARKER" ] && [ ! -e /tmp/.meminsight_configstore ] && \
        grep -F "RUN_ID=" "$META_CONFIG" >/dev/null 2>&1 && \
-       grep -F "OUTPUT_FORMAT=" "$META_CONFIG" >/dev/null 2>&1 && \
-       grep -F "UPLOAD_INTERVAL=1800" "$META_CONFIG" >/dev/null 2>&1 && \
-       ! grep -E 'HTTP|curl|Upload: .*->' /tmp/meminsight_upload_handoff.log >/dev/null 2>&1; then
+       ! grep -E '^(UPLOAD_ENABLED|UPLOAD_INTERVAL)=' "$META_CONFIG" >/dev/null 2>&1 && \
+       grep -F "CONFIGSTORE_PATH=$META_CONFIG" "$META_MARKER" >/dev/null 2>&1 && \
+       grep -E '^RUN_ID=' "$META_MARKER" >/dev/null 2>&1 && \
+       grep -F "UPLOAD_ENABLED=1" "$META_MARKER" >/dev/null 2>&1 && \
+       grep -F "UPLOAD_INTERVAL=1800" "$META_MARKER" >/dev/null 2>&1; then
         echo "✓ $META_DESC6 PASSED"
-        record_tc_result "30" "Upload configuration saved to configstore and service activated" "SUCCESS"
+        record_tc_result "30" "Upload marker/configstore key separation" "SUCCESS"
     else
-        echo "✗ $META_DESC6 FAILED (configstore/trigger contents mismatch)"
+        echo "✗ $META_DESC6 FAILED (marker/configstore ownership mismatch)"
         [ -f "$META_CONFIG" ] && cat "$META_CONFIG"
         [ -f "$META_MARKER" ] && cat "$META_MARKER"
         TEST_FAILED=$((TEST_FAILED + 1))
-        record_tc_result "30" "Upload configuration saved to configstore and service activated" "FAILURE"
+        record_tc_result "30" "Upload marker/configstore key separation" "FAILURE"
     fi
 else
     echo "✗ $META_DESC6 FAILED (command execution failed)"
     cat /tmp/meminsight_upload_handoff.log
     TEST_FAILED=$((TEST_FAILED + 1))
-    record_tc_result "30" "Upload configuration saved to configstore and service activated" "FAILURE"
+    record_tc_result "30" "Upload marker/configstore key separation" "FAILURE"
 fi
 rm -f "$META_MARKER"
 echo ""
@@ -1307,13 +1309,13 @@ echo "------------------------------------------"
 echo "Command: $MEM_BIN --help"
 
 if $MEM_BIN --help 2>&1 | grep -E -- '--iterations .*max: 100000' >/dev/null 2>&1; then
-    echo "✓ $ITER_HELP_DESC PASSED"
-    record_tc_result "34" "Help documents --iterations maximum" "SUCCESS"
+echo "✓ $ITER_HELP_DESC PASSED"
+record_tc_result "34" "Help documents --iterations maximum" "SUCCESS"
 else
-    echo "✗ $ITER_HELP_DESC FAILED (--iterations max not documented in help)"
-    $MEM_BIN --help 2>&1 | grep -F -- "--iterations" || true
-    TEST_FAILED=$((TEST_FAILED + 1))
-    record_tc_result "34" "Help documents --iterations maximum" "FAILURE"
+echo "✗ $ITER_HELP_DESC FAILED (--iterations max not documented in help)"
+$MEM_BIN --help 2>&1 | grep -F -- "--iterations" || true
+TEST_FAILED=$((TEST_FAILED + 1))
+record_tc_result "34" "Help documents --iterations maximum" "FAILURE"
 fi
 echo ""
 
@@ -1333,27 +1335,27 @@ rm -rf "$ITER_CAP_OUT"
 mkdir -p "$ITER_CAP_OUT"
 
 if $MEM_BIN --iterations 999999 --interval 0 -o "$ITER_CAP_OUT" -t "$ITER_CAP_SMAP" "$ITER_CAP_MEMINFO" >"$ITER_CAP_LOG" 2>&1; then
-    CSV_FILE=$(ls "$ITER_CAP_OUT"/*.csv 2>/dev/null | head -n 1)
-    if [ -n "$CSV_FILE" ] && \
-       grep -F "Iterations 999999 exceeds max 100000; capping to 100000" "$ITER_CAP_LOG" >/dev/null 2>&1 && \
-       grep -E '^RUN_ITERATIONS=100000$' "$ITER_CAP_OUT/.meminsight_configstore" >/dev/null 2>&1 && \
-       head -n 1 "$CSV_FILE" | grep -F "RUN_ITERATIONS" >/dev/null 2>&1 && \
-       sed -n '2p' "$CSV_FILE" | awk -F',' '{exit ($8 == 100000) ? 0 : 1}'; then
-        echo "✓ $ITER_CAP_DESC PASSED"
-        record_tc_result "35" "Oversized --iterations is capped at 100000" "SUCCESS"
-    else
-        echo "✗ $ITER_CAP_DESC FAILED (iteration cap not reflected in metadata or missing sanitization message)"
-        cat "$ITER_CAP_LOG"
-        [ -f "$ITER_CAP_OUT/.meminsight_configstore" ] && cat "$ITER_CAP_OUT/.meminsight_configstore"
-        [ -n "$CSV_FILE" ] && head -n 2 "$CSV_FILE"
-        TEST_FAILED=$((TEST_FAILED + 1))
-        record_tc_result "35" "Oversized --iterations is capped at 100000" "FAILURE"
-    fi
+CSV_FILE=$(ls "$ITER_CAP_OUT"/*.csv 2>/dev/null | head -n 1)
+if [ -n "$CSV_FILE" ] && \
+grep -F "Iterations 999999 exceeds max 100000; capping to 100000" "$ITER_CAP_LOG" >/dev/null 2>&1 && \
+grep -E '^RUN_ITERATIONS=100000$' "$ITER_CAP_OUT/.meminsight_configstore" >/dev/null 2>&1 && \
+head -n 1 "$CSV_FILE" | grep -F "RUN_ITERATIONS" >/dev/null 2>&1 && \
+sed -n '2p' "$CSV_FILE" | awk -F',' '{exit ($8 == 100000) ? 0 : 1}'; then
+echo "✓ $ITER_CAP_DESC PASSED"
+record_tc_result "35" "Oversized --iterations is capped at 100000" "SUCCESS"
 else
-    echo "✗ $ITER_CAP_DESC FAILED (command execution failed)"
-    cat "$ITER_CAP_LOG"
-    TEST_FAILED=$((TEST_FAILED + 1))
-    record_tc_result "35" "Oversized --iterations is capped at 100000" "FAILURE"
+echo "✗ $ITER_CAP_DESC FAILED (iteration cap not reflected in metadata or missing sanitization message)"
+cat "$ITER_CAP_LOG"
+[ -f "$ITER_CAP_OUT/.meminsight_configstore" ] && cat "$ITER_CAP_OUT/.meminsight_configstore"
+[ -n "$CSV_FILE" ] && head -n 2 "$CSV_FILE"
+TEST_FAILED=$((TEST_FAILED + 1))
+record_tc_result "35" "Oversized --iterations is capped at 100000" "FAILURE"
+fi
+else
+echo "✗ $ITER_CAP_DESC FAILED (command execution failed)"
+cat "$ITER_CAP_LOG"
+TEST_FAILED=$((TEST_FAILED + 1))
+record_tc_result "35" "Oversized --iterations is capped at 100000" "FAILURE"
 fi
 echo ""
 
@@ -1381,22 +1383,22 @@ log_level=INFO
 EOF
 
 if $MEM_BIN --config "$ITER_ZERO_CONF" --iterations 0 --interval 0 -o "$ITER_ZERO_OUT" -t "$ITER_ZERO_SMAP" "$ITER_ZERO_MEMINFO" >"$ITER_ZERO_LOG" 2>&1; then
-    if grep -F "Invalid iterations 0 (must be between 1 and 100000); using default 1" "$ITER_ZERO_LOG" >/dev/null 2>&1 && \
-       grep -E '^RUN_ITERATIONS=1$' "$ITER_ZERO_OUT/.meminsight_configstore" >/dev/null 2>&1; then
-        echo "✓ $ITER_ZERO_DESC PASSED"
-        record_tc_result "38" "--iterations 0 is sanitized and overrides config" "SUCCESS"
-    else
-        echo "✗ $ITER_ZERO_DESC FAILED (expected default 1 and sanitization message, not config 10)"
-        cat "$ITER_ZERO_LOG"
-        [ -f "$ITER_ZERO_OUT/.meminsight_configstore" ] && cat "$ITER_ZERO_OUT/.meminsight_configstore"
-        TEST_FAILED=$((TEST_FAILED + 1))
-        record_tc_result "38" "--iterations 0 is sanitized and overrides config" "FAILURE"
-    fi
+if grep -F "Invalid iterations 0 (must be between 1 and 100000); using default 1" "$ITER_ZERO_LOG" >/dev/null 2>&1 && \
+grep -E '^RUN_ITERATIONS=1$' "$ITER_ZERO_OUT/.meminsight_configstore" >/dev/null 2>&1; then
+echo "✓ $ITER_ZERO_DESC PASSED"
+record_tc_result "38" "--iterations 0 is sanitized and overrides config" "SUCCESS"
 else
-    echo "✗ $ITER_ZERO_DESC FAILED (command execution failed)"
-    cat "$ITER_ZERO_LOG"
-    TEST_FAILED=$((TEST_FAILED + 1))
-    record_tc_result "38" "--iterations 0 is sanitized and overrides config" "FAILURE"
+echo "✗ $ITER_ZERO_DESC FAILED (expected default 1 and sanitization message, not config 10)"
+cat "$ITER_ZERO_LOG"
+[ -f "$ITER_ZERO_OUT/.meminsight_configstore" ] && cat "$ITER_ZERO_OUT/.meminsight_configstore"
+TEST_FAILED=$((TEST_FAILED + 1))
+record_tc_result "38" "--iterations 0 is sanitized and overrides config" "FAILURE"
+fi
+else
+echo "✗ $ITER_ZERO_DESC FAILED (command execution failed)"
+cat "$ITER_ZERO_LOG"
+TEST_FAILED=$((TEST_FAILED + 1))
+record_tc_result "38" "--iterations 0 is sanitized and overrides config" "FAILURE"
 fi
 echo ""
 rm -f "$ITER_ZERO_CONF"
@@ -1412,13 +1414,13 @@ echo "------------------------------------------"
 echo "Command: $MEM_BIN -o /tmp/../tmp/meminsight -t $CQL_SMAP $CQL_MEMINFO"
 PATH_OUT_LOG="/tmp/meminsight_cql_output_dotdot.log"
 if $MEM_BIN -o /tmp/../tmp/meminsight -t "$CQL_SMAP" "$CQL_MEMINFO" >"$PATH_OUT_LOG" 2>&1; then
-    echo "✗ $PATH_OUT_DESC FAILED (path traversal was accepted)"
-    cat "$PATH_OUT_LOG"
-    TEST_FAILED=$((TEST_FAILED + 1))
-    record_tc_result "36" "--output path with .. is rejected" "FAILURE"
+echo "✗ $PATH_OUT_DESC FAILED (path traversal was accepted)"
+cat "$PATH_OUT_LOG"
+TEST_FAILED=$((TEST_FAILED + 1))
+record_tc_result "36" "--output path with .. is rejected" "FAILURE"
 else
-    echo "✓ $PATH_OUT_DESC PASSED"
-    record_tc_result "36" "--output path with .. is rejected" "SUCCESS"
+echo "✓ $PATH_OUT_DESC PASSED"
+record_tc_result "36" "--output path with .. is rejected" "SUCCESS"
 fi
 echo ""
 
@@ -1430,13 +1432,13 @@ echo "------------------------------------------"
 echo "Command: $MEM_BIN -c ../evil.conf"
 PATH_CFG_LOG="/tmp/meminsight_cql_config_dotdot.log"
 if $MEM_BIN -c ../evil.conf >"$PATH_CFG_LOG" 2>&1; then
-    echo "✗ $PATH_CFG_DESC FAILED (path traversal was accepted)"
-    cat "$PATH_CFG_LOG"
-    TEST_FAILED=$((TEST_FAILED + 1))
-    record_tc_result "37" "--config path with .. is rejected" "FAILURE"
+echo "✗ $PATH_CFG_DESC FAILED (path traversal was accepted)"
+cat "$PATH_CFG_LOG"
+TEST_FAILED=$((TEST_FAILED + 1))
+record_tc_result "37" "--config path with .. is rejected" "FAILURE"
 else
-    echo "✓ $PATH_CFG_DESC PASSED"
-    record_tc_result "37" "--config path with .. is rejected" "SUCCESS"
+echo "✓ $PATH_CFG_DESC PASSED"
+record_tc_result "37" "--config path with .. is rejected" "SUCCESS"
 # --- upload_MemReports.sh test setup -------------------------------------
 UP_SCRIPT="scripts/upload_MemReports.sh"
 UP_FAKEBIN="/tmp/meminsight_upload_fakebin"
@@ -1475,21 +1477,21 @@ UP34_TRIGGER="$UP34_DIR/.meminsight_upload_trigger"
 rm -f "$UP34_TRIGGER"
 
 if MEMINSIGHT_UPLOAD_TRIGGER="$UP34_TRIGGER" MEMINSIGHT_OUTPUT_DIR="$UP34_DIR" MEMINSIGHT_LOG_FILE="$UP34_DIR/meminsight.log" sh "$UP_SCRIPT" >/tmp/meminsight_up34.log 2>&1; then
-    if grep -F "upload not enabled" "$UP34_DIR/meminsight.log" >/dev/null 2>&1 && \
-       ! grep -E 'S3|ELK|HTTP' "$UP34_DIR/meminsight.log" >/dev/null 2>&1; then
-        echo "✓ $UP34_DESC PASSED"
-        record_tc_result "34" "Upload service is not activated without a trigger" "SUCCESS"
-    else
-        echo "✗ $UP34_DESC FAILED (unexpected activation or upload attempt)"
-        cat "$UP34_DIR/meminsight.log" 2>/dev/null
-        TEST_FAILED=$((TEST_FAILED + 1))
-        record_tc_result "34" "Upload service is not activated without a trigger" "FAILURE"
-    fi
+if grep -F "upload not enabled" "$UP34_DIR/meminsight.log" >/dev/null 2>&1 && \
+! grep -E 'S3|ELK|HTTP' "$UP34_DIR/meminsight.log" >/dev/null 2>&1; then
+echo "✓ $UP34_DESC PASSED"
+record_tc_result "34" "Upload service is not activated without a trigger" "SUCCESS"
 else
-    echo "✗ $UP34_DESC FAILED (script exited non-zero on absent trigger)"
-    cat /tmp/meminsight_up34.log
-    TEST_FAILED=$((TEST_FAILED + 1))
-    record_tc_result "34" "Upload service is not activated without a trigger" "FAILURE"
+echo "✗ $UP34_DESC FAILED (unexpected activation or upload attempt)"
+cat "$UP34_DIR/meminsight.log" 2>/dev/null
+TEST_FAILED=$((TEST_FAILED + 1))
+record_tc_result "34" "Upload service is not activated without a trigger" "FAILURE"
+fi
+else
+echo "✗ $UP34_DESC FAILED (script exited non-zero on absent trigger)"
+cat /tmp/meminsight_up34.log
+TEST_FAILED=$((TEST_FAILED + 1))
+record_tc_result "34" "Upload service is not activated without a trigger" "FAILURE"
 fi
 echo ""
 
@@ -1528,11 +1530,25 @@ if PATH="$UP_FAKEBIN:$PATH" MEMINSIGHT_UPLOAD_TRIGGER="$UP35_DIR/.meminsight_upl
         TEST_FAILED=$((TEST_FAILED + 1))
         record_tc_result "35" "CSV format uploads to S3 and HTTP 200 deletes the report" "FAILURE"
     fi
+MEMINSIGHT_OUTPUT_DIR="$UP35_DIR" MEMINSIGHT_LOG_FILE="$UP35_DIR/meminsight.log" MEMINSIGHT_S3_UPLOAD_URL="https://example.test/s3" \
+MEMINSIGHT_CERT_PATH="$UP_FAKE_CERT" MEMINSIGHT_CERT_PASS_FILE="$UP_FAKE_PASS" \
+MEMINSIGHT_TEST_HTTP_CODE=200 MEMINSIGHT_NOW_UPTIME=0 sh "$UP_SCRIPT" >/tmp/meminsight_up35.log 2>&1; then
+if grep -F "S3 artifacts" "$UP35_DIR/meminsight.log" >/dev/null 2>&1 && \
+grep -F "HTTP 200" "$UP35_DIR/meminsight.log" >/dev/null 2>&1 && \
+[ ! -e "$UP35_DIR/report1.csv" ]; then
+echo "✓ $UP35_DESC PASSED"
+record_tc_result "35" "CSV format uploads to S3 and HTTP 200 deletes the report" "SUCCESS"
 else
-    echo "✗ $UP35_DESC FAILED (script exited non-zero)"
-    cat /tmp/meminsight_up35.log
-    TEST_FAILED=$((TEST_FAILED + 1))
-    record_tc_result "35" "CSV format uploads to S3 and HTTP 200 deletes the report" "FAILURE"
+echo "✗ $UP35_DESC FAILED (did not route to S3 or delete on success)"
+cat "$UP35_DIR/meminsight.log" 2>/dev/null
+TEST_FAILED=$((TEST_FAILED + 1))
+record_tc_result "35" "CSV format uploads to S3 and HTTP 200 deletes the report" "FAILURE"
+fi
+else
+echo "✗ $UP35_DESC FAILED (script exited non-zero)"
+cat /tmp/meminsight_up35.log
+TEST_FAILED=$((TEST_FAILED + 1))
+record_tc_result "35" "CSV format uploads to S3 and HTTP 200 deletes the report" "FAILURE"
 fi
 echo ""
 
@@ -1571,11 +1587,25 @@ if PATH="$UP_FAKEBIN:$PATH" MEMINSIGHT_UPLOAD_TRIGGER="$UP36_DIR/.meminsight_upl
         TEST_FAILED=$((TEST_FAILED + 1))
         record_tc_result "36" "T2/JSON format uploads to ELK and HTTP 302 deletes the report" "FAILURE"
     fi
+MEMINSIGHT_OUTPUT_DIR="$UP36_DIR" MEMINSIGHT_LOG_FILE="$UP36_DIR/meminsight.log" \
+MEMINSIGHT_CERT_PATH="$UP_FAKE_CERT" MEMINSIGHT_CERT_PASS_FILE="$UP_FAKE_PASS" \
+MEMINSIGHT_TEST_HTTP_CODE=302 MEMINSIGHT_NOW_UPTIME=0 sh "$UP_SCRIPT" >/tmp/meminsight_up36.log 2>&1; then
+if grep -F "ELK destination 'https://example.test/elk'" "$UP36_DIR/meminsight.log" >/dev/null 2>&1 && \
+grep -F "HTTP 302" "$UP36_DIR/meminsight.log" >/dev/null 2>&1 && \
+[ ! -e "$UP36_DIR/report1.t2.json" ]; then
+echo "✓ $UP36_DESC PASSED"
+record_tc_result "36" "T2/JSON format uploads to ELK and HTTP 302 deletes the report" "SUCCESS"
 else
-    echo "✗ $UP36_DESC FAILED (script exited non-zero)"
-    cat /tmp/meminsight_up36.log
-    TEST_FAILED=$((TEST_FAILED + 1))
-    record_tc_result "36" "T2/JSON format uploads to ELK and HTTP 302 deletes the report" "FAILURE"
+echo "✗ $UP36_DESC FAILED (did not route to ELK or delete on 302)"
+cat "$UP36_DIR/meminsight.log" 2>/dev/null
+TEST_FAILED=$((TEST_FAILED + 1))
+record_tc_result "36" "T2/JSON format uploads to ELK and HTTP 302 deletes the report" "FAILURE"
+fi
+else
+echo "✗ $UP36_DESC FAILED (script exited non-zero)"
+cat /tmp/meminsight_up36.log
+TEST_FAILED=$((TEST_FAILED + 1))
+record_tc_result "36" "T2/JSON format uploads to ELK and HTTP 302 deletes the report" "FAILURE"
 fi
 echo ""
 
@@ -1615,11 +1645,26 @@ if PATH="$UP_FAKEBIN:$PATH" MEMINSIGHT_UPLOAD_TRIGGER="$UP37_DIR/.meminsight_upl
         TEST_FAILED=$((TEST_FAILED + 1))
         record_tc_result "37" "Failed upload retries then retains the report" "FAILURE"
     fi
+MEMINSIGHT_OUTPUT_DIR="$UP37_DIR" MEMINSIGHT_LOG_FILE="$UP37_DIR/meminsight.log" \
+MEMINSIGHT_CERT_PATH="$UP_FAKE_CERT" MEMINSIGHT_CERT_PASS_FILE="$UP_FAKE_PASS" \
+MEMINSIGHT_UPLOAD_RETRIES=2 MEMINSIGHT_UPLOAD_RETRY_DELAY=0 \
+MEMINSIGHT_TEST_HTTP_CODE=500 MEMINSIGHT_NOW_UPTIME=0 sh "$UP_SCRIPT" >/tmp/meminsight_up37.log 2>&1; then
+RETRY_COUNT=$(grep -c "Response status.*HTTP 500" "$UP37_DIR/meminsight.log" 2>/dev/null || echo 0)
+if [ "$RETRY_COUNT" -eq 2 ] && [ -e "$UP37_DIR/report1.t2.json" ] && \
+grep -F "retained locally after 2 failed attempt(s)" "$UP37_DIR/meminsight.log" >/dev/null 2>&1; then
+echo "✓ $UP37_DESC PASSED"
+record_tc_result "37" "Failed upload retries then retains the report" "SUCCESS"
 else
-    echo "✗ $UP37_DESC FAILED (script exited non-zero)"
-    cat /tmp/meminsight_up37.log
-    TEST_FAILED=$((TEST_FAILED + 1))
-    record_tc_result "37" "Failed upload retries then retains the report" "FAILURE"
+echo "✗ $UP37_DESC FAILED (retry/retain behavior mismatch)"
+cat "$UP37_DIR/meminsight.log" 2>/dev/null
+TEST_FAILED=$((TEST_FAILED + 1))
+record_tc_result "37" "Failed upload retries then retains the report" "FAILURE"
+fi
+else
+echo "✗ $UP37_DESC FAILED (script exited non-zero)"
+cat /tmp/meminsight_up37.log
+TEST_FAILED=$((TEST_FAILED + 1))
+record_tc_result "37" "Failed upload retries then retains the report" "FAILURE"
 fi
 echo ""
 
@@ -1656,11 +1701,24 @@ if MEMINSIGHT_UPLOAD_TRIGGER="$UP38_DIR/.meminsight_upload_trigger" MEMINSIGHT_O
         TEST_FAILED=$((TEST_FAILED + 1))
         record_tc_result "38" "Missing destination for JSON/T2 warns and skips safely" "FAILURE"
     fi
+MEMINSIGHT_NOW_UPTIME=0 \
+sh "$UP_SCRIPT" >/tmp/meminsight_up38.log 2>&1; then
+if grep -F "[WARN]" "$UP38_DIR/meminsight.log" >/dev/null 2>&1 && \
+grep -F "no upload destination configured" "$UP38_DIR/meminsight.log" >/dev/null 2>&1 && \
+[ -e "$UP38_DIR/report1.json" ]; then
+echo "✓ $UP38_DESC PASSED"
+record_tc_result "38" "Missing destination for JSON/T2 warns and skips safely" "SUCCESS"
 else
-    echo "✗ $UP38_DESC FAILED (script exited non-zero instead of skipping)"
-    cat /tmp/meminsight_up38.log
-    TEST_FAILED=$((TEST_FAILED + 1))
-    record_tc_result "38" "Missing destination for JSON/T2 warns and skips safely" "FAILURE"
+echo "✗ $UP38_DESC FAILED (missing warning or file incorrectly removed)"
+cat "$UP38_DIR/meminsight.log" 2>/dev/null
+TEST_FAILED=$((TEST_FAILED + 1))
+record_tc_result "38" "Missing destination for JSON/T2 warns and skips safely" "FAILURE"
+fi
+else
+echo "✗ $UP38_DESC FAILED (script exited non-zero instead of skipping)"
+cat /tmp/meminsight_up38.log
+TEST_FAILED=$((TEST_FAILED + 1))
+record_tc_result "38" "Missing destination for JSON/T2 warns and skips safely" "FAILURE"
 fi
 echo ""
 
