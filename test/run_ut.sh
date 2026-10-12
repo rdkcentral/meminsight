@@ -1012,8 +1012,8 @@ else
 fi
 echo ""
 
-# Test 30: upload marker carries upload settings; configstore carries persistent state
-META_DESC6="Test 30: Upload marker and configstore key separation"
+# Test 30: configstore saves format/destination/interval; trigger activates the upload service
+META_DESC6="Test 30: Upload configuration saved to configstore and service activated"
 META_OUT6="$RET_BASE/meminsight_case11_upload_handoff"
 META_MARKER="/tmp/.meminsight_upload"
 
@@ -1026,27 +1026,25 @@ rm -rf "$META_OUT6"
 rm -f "$META_MARKER" /tmp/.meminsight_configstore
 if $MEM_BIN --upload-enable --upload-interval 1800 --upload-url https://example.test/upload -o "$META_OUT6" -t "$RET_SMAP_FILE" "$RET_MEMINFO_FILE" >/tmp/meminsight_upload_handoff.log 2>&1; then
     META_CONFIG="$META_OUT6/.meminsight_configstore"
-    if [ -f "$META_CONFIG" ] && [ -s "$META_MARKER" ] && [ ! -e /tmp/.meminsight_configstore ] && \
+    if [ -f "$META_CONFIG" ] && [ -e "$META_MARKER" ] && [ ! -e /tmp/.meminsight_configstore ] && \
        grep -F "RUN_ID=" "$META_CONFIG" >/dev/null 2>&1 && \
-       ! grep -E '^(UPLOAD_ENABLED|UPLOAD_INTERVAL)=' "$META_CONFIG" >/dev/null 2>&1 && \
-       grep -F "CONFIGSTORE_PATH=$META_CONFIG" "$META_MARKER" >/dev/null 2>&1 && \
-       grep -E '^RUN_ID=' "$META_MARKER" >/dev/null 2>&1 && \
-       grep -F "UPLOAD_ENABLED=1" "$META_MARKER" >/dev/null 2>&1 && \
-       grep -F "UPLOAD_INTERVAL=1800" "$META_MARKER" >/dev/null 2>&1; then
+       grep -F "OUTPUT_FORMAT=" "$META_CONFIG" >/dev/null 2>&1 && \
+       grep -F "UPLOAD_INTERVAL=1800" "$META_CONFIG" >/dev/null 2>&1 && \
+       ! grep -E 'HTTP|curl|Upload: .*->' /tmp/meminsight_upload_handoff.log >/dev/null 2>&1; then
         echo "✓ $META_DESC6 PASSED"
-        record_tc_result "30" "Upload marker/configstore key separation" "SUCCESS"
+        record_tc_result "30" "Upload configuration saved to configstore and service activated" "SUCCESS"
     else
-        echo "✗ $META_DESC6 FAILED (marker/configstore ownership mismatch)"
+        echo "✗ $META_DESC6 FAILED (configstore/trigger contents mismatch)"
         [ -f "$META_CONFIG" ] && cat "$META_CONFIG"
         [ -f "$META_MARKER" ] && cat "$META_MARKER"
         TEST_FAILED=$((TEST_FAILED + 1))
-        record_tc_result "30" "Upload marker/configstore key separation" "FAILURE"
+        record_tc_result "30" "Upload configuration saved to configstore and service activated" "FAILURE"
     fi
 else
     echo "✗ $META_DESC6 FAILED (command execution failed)"
     cat /tmp/meminsight_upload_handoff.log
     TEST_FAILED=$((TEST_FAILED + 1))
-    record_tc_result "30" "Upload marker/configstore key separation" "FAILURE"
+    record_tc_result "30" "Upload configuration saved to configstore and service activated" "FAILURE"
 fi
 rm -f "$META_MARKER"
 echo ""
@@ -1746,6 +1744,38 @@ else
         TEST_FAILED=$((TEST_FAILED + 1))
         record_tc_result "38b" "Reject malformed --upload-interval values" "FAILURE"
     fi
+UPLOAD_INTERVAL_VALIDATION_FAILED=0
+if $MEM_BIN --upload-enable --upload-interval >"$UP38B_LOG" 2>&1; then
+    echo "✗ $UP38B_DESC FAILED (accepted a missing interval value)"
+    cat "$UP38B_LOG"
+    UPLOAD_INTERVAL_VALIDATION_FAILED=1
+elif ! grep -F "Missing upload interval value after --upload-interval" "$UP38B_LOG" >/dev/null 2>&1; then
+    echo "✗ $UP38B_DESC FAILED (missing-value error not reported)"
+    cat "$UP38B_LOG"
+    UPLOAD_INTERVAL_VALIDATION_FAILED=1
+fi
+
+for INVALID_UPLOAD_INTERVAL in --upload-url 12seconds 0 -1 999999999999999999999999999999999999999 ""; do
+    [ "$UPLOAD_INTERVAL_VALIDATION_FAILED" -eq 0 ] || break
+    if $MEM_BIN --upload-enable --upload-interval "$INVALID_UPLOAD_INTERVAL" >"$UP38B_LOG" 2>&1; then
+        echo "✗ $UP38B_DESC FAILED (accepted '$INVALID_UPLOAD_INTERVAL')"
+        cat "$UP38B_LOG"
+        UPLOAD_INTERVAL_VALIDATION_FAILED=1
+        break
+    elif ! grep -F "Invalid upload interval value '$INVALID_UPLOAD_INTERVAL' after --upload-interval" "$UP38B_LOG" >/dev/null 2>&1; then
+        echo "✗ $UP38B_DESC FAILED (validation error missing for '$INVALID_UPLOAD_INTERVAL')"
+        cat "$UP38B_LOG"
+        UPLOAD_INTERVAL_VALIDATION_FAILED=1
+        break
+    fi
+done
+
+if [ "$UPLOAD_INTERVAL_VALIDATION_FAILED" -eq 0 ]; then
+    echo "✓ $UP38B_DESC PASSED"
+    record_tc_result "38b" "Reject malformed --upload-interval values" "SUCCESS"
+else
+    TEST_FAILED=$((TEST_FAILED + 1))
+    record_tc_result "38b" "Reject malformed --upload-interval values" "FAILURE"
 fi
 echo ""
 
