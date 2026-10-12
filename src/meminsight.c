@@ -19,6 +19,8 @@
 #include "config.h"
 #include "meminsight.h"
 #include <inttypes.h>
+#include <errno.h>
+#include <limits.h>
 
 #define MEMINSIGHT_UPLOAD_URL_ENV "MEMINSIGHT_UPLOAD_URL"
 #define MEMINSIGHT_UPLOAD_URL_MAX 1024
@@ -5112,12 +5114,30 @@ int main(int argc, char *argv[])
         }
         else if (!strncmp(argv[i], "--upload-interval", 18))
         {
-            cli_upload_interval_set = true;
             /* Compatibility flag: Handled via RFC handlers. */
             if (i + 1 < argc)
             {
+                const char *interval_text = argv[i + 1];
+                bool valid_interval = interval_text[0] != '\0';
+                for (const char *digit = interval_text; valid_interval && *digit; digit++)
+                {
+                    if (*digit < '0' || *digit > '9')
+                        valid_interval = false;
+                }
+
+                errno = 0;
+                char *end = NULL;
+                long parsed_interval = strtol(interval_text, &end, 10);
+                if (!valid_interval || errno == ERANGE || end == interval_text ||
+                    *end != '\0' || parsed_interval < 1 || parsed_interval > INT_MAX)
+                {
+                    PRINT_ERROR("Error: Invalid upload interval value '%s' after --upload-interval\n", interval_text);
+                    printHelpAndUsage(argv, false, 1);
+                }
+
+                cli_upload_interval = (int)parsed_interval;
+                cli_upload_interval_set = true;
                 i++; // skip next arg (upload interval)
-                cli_upload_interval = atoi(argv[i]);
             }
             else
             {
