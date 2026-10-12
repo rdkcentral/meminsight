@@ -4421,9 +4421,20 @@ int writeT2Report(const char *filepath, const SetupInfo *setup, int iteration, i
 } while(0)
 
     /* --- Standard T2 metadata --- */
+    char t2Mac[MAC_LEN + 6];
+    if (strlen(setup->mac) == 12)
+    {
+        snprintf(t2Mac, sizeof(t2Mac), "%.2s:%.2s:%.2s:%.2s:%.2s:%.2s",
+                 setup->mac, setup->mac + 2, setup->mac + 4,
+                 setup->mac + 6, setup->mac + 8, setup->mac + 10);
+    }
+    else
+    {
+        snprintf(t2Mac, sizeof(t2Mac), "%s", setup->mac);
+    }
     T2_ADD_STRING("Profile_Name", "MEMINSIGHT_REPORT");
     T2_ADD_STRING("Profile",      "RDKB");
-    T2_ADD_STRING("mac",          setup->mac);
+    T2_ADD_STRING("mac",          t2Mac);
     T2_ADD_STRING("Version",      setup->fwName);
 
     /* Parse device.model, device.version, device.environment from firmware name.
