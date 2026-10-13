@@ -1165,6 +1165,60 @@ else
 fi
 echo ""
 
+# Coverity COV-123: help text documents the iterations cap
+ITER_HELP_DESC="Test 34: Help documents --iterations maximum"
+echo "------------------------------------------"
+echo "$ITER_HELP_DESC"
+echo "------------------------------------------"
+echo "Command: $MEM_BIN --help"
+
+if $MEM_BIN --help 2>&1 | grep -E -- '--iterations .*max: 100000' >/dev/null 2>&1; then
+    echo "✓ $ITER_HELP_DESC PASSED"
+    record_tc_result "34" "Help documents --iterations maximum" "SUCCESS"
+else
+    echo "✗ $ITER_HELP_DESC FAILED (--iterations max not documented in help)"
+    $MEM_BIN --help 2>&1 | grep -F -- "--iterations" || true
+    TEST_FAILED=$((TEST_FAILED + 1))
+    record_tc_result "34" "Help documents --iterations maximum" "FAILURE"
+fi
+echo ""
+
+# Coverity COV-123: untrusted iteration counts are clamped before use as a loop bound
+ITER_CAP_DESC="Test 35: Oversized --iterations is capped at 100000"
+ITER_CAP_SMAP="test/1-non-zero-swap-entry/meminsight_testSmap.txt"
+ITER_CAP_MEMINFO="test/1-non-zero-swap-entry/meminsight_testMeminfo.txt"
+ITER_CAP_OUT="/tmp/meminsight_iterations_cap"
+
+echo "------------------------------------------"
+echo "$ITER_CAP_DESC"
+echo "------------------------------------------"
+echo "Command: $MEM_BIN --iterations 999999 --interval 0 -o $ITER_CAP_OUT -t $ITER_CAP_SMAP $ITER_CAP_MEMINFO"
+
+rm -rf "$ITER_CAP_OUT"
+mkdir -p "$ITER_CAP_OUT"
+
+if $MEM_BIN --iterations 999999 --interval 0 -o "$ITER_CAP_OUT" -t "$ITER_CAP_SMAP" "$ITER_CAP_MEMINFO"; then
+    CSV_FILE=$(ls "$ITER_CAP_OUT"/*.csv 2>/dev/null | head -n 1)
+    if [ -n "$CSV_FILE" ] && \
+       grep -E '^RUN_ITERATIONS=100000$' "$ITER_CAP_OUT/.meminsight_configstore" >/dev/null 2>&1 && \
+       head -n 1 "$CSV_FILE" | grep -F "RUN_ITERATIONS" >/dev/null 2>&1 && \
+       sed -n '2p' "$CSV_FILE" | awk -F',' '{exit ($8 == 100000) ? 0 : 1}'; then
+        echo "✓ $ITER_CAP_DESC PASSED"
+        record_tc_result "35" "Oversized --iterations is capped at 100000" "SUCCESS"
+    else
+        echo "✗ $ITER_CAP_DESC FAILED (iteration cap not reflected in metadata)"
+        [ -f "$ITER_CAP_OUT/.meminsight_configstore" ] && cat "$ITER_CAP_OUT/.meminsight_configstore"
+        [ -n "$CSV_FILE" ] && head -n 2 "$CSV_FILE"
+        TEST_FAILED=$((TEST_FAILED + 1))
+        record_tc_result "35" "Oversized --iterations is capped at 100000" "FAILURE"
+    fi
+else
+    echo "✗ $ITER_CAP_DESC FAILED (command execution failed)"
+    TEST_FAILED=$((TEST_FAILED + 1))
+    record_tc_result "35" "Oversized --iterations is capped at 100000" "FAILURE"
+fi
+echo ""
+
 # Summary
 echo "===================================================================================="
 echo "Test Summary"

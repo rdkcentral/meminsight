@@ -151,6 +151,7 @@ Audit outcomes currently tracked in repository documentation and planning notes 
 **Status**: 
 - ✅ Code audit and findings complete
 - ✅ CRITICAL resource leak fixes completed
+- ✅ Coverity findings COV-123 through COV-127 addressed (iteration-bound sanitization, meminfo skip-array bounds, mkdir-first output-dir creation, sysfs open-instead-of-access, `/dev/urandom` run-id suffix)
 - ℹ️ Integrated memleakutil for runtime leak detection in CI/CD
 
 ## Development Setup
@@ -208,7 +209,7 @@ OPTIONS:
    -c, --config FILE           Path to configuration file (must end with .conf)
    -o, --output DIR            Output directory for generated reports (default: /opt/meminsight)
    -b, --backup N              Pre-run backup count for existing reports (1-100, default: 30)
-         --iterations N          Number of iterations to run (overrides config)
+         --iterations N          Number of iterations to run (overrides config, max: 100000)
          --interval SECONDS      Seconds between iterations (overrides config)
       --fmt FORMAT            Report format: csv (default) or json
       --json-pretty           Pretty-print JSON output (only with --fmt json)
@@ -224,7 +225,7 @@ OPTIONS:
 
 If you run `./meminsight` with no flags, it runs in a long-running mode (indefinite iterations) with a 15-minute interval and writes CSV reports under `/opt/meminsight/`.
 
-To run a finite capture, specify `--iterations` and/or `--interval`.
+To run a finite capture, specify `--iterations` and/or `--interval`. Iteration counts below 1 fall back to `1`; values above `100000` are capped.
 
 ### Basic Usage Examples
 
@@ -346,7 +347,7 @@ log_level=INFO
 |-----------|-------------|---------------|---------|
 | `process_whitelist` | Comma-separated list of process names/PIDs | All processes | `apache2,mysql,1234` |
 | `output_dir` | Directory for output files | `/opt/meminsight` | `/var/log/monitoring` |
-| `iterations` | Number of sampling cycles | `1` | `10` |
+| `iterations` | Number of sampling cycles (capped at `100000`) | `1` | `10` |
 | `interval` | Seconds between samples | `5` | `60` |
 | `log_level` | Logging verbosity (parsed from config; current builds may not print logs unless debug is enabled) | `INFO` | `DEBUG`, `ERROR` |
 
@@ -482,6 +483,8 @@ CPU stat fixture coverage includes:
 Bandwidth fixture coverage includes:
 - `test/12-bandwidth-sample/meminsight_testBandwidth.txt` for deterministic CSV/JSON bandwidth validation under TESTME without relying on platform sysfs
 
+`test/run_ut.sh` also checks that `--help` documents the `--iterations` maximum and that an oversized `--iterations` value is capped at `100000` in report metadata.
+
 When JSON output is enabled, the unit tests validate `cpu_stat` content with whitespace-tolerant numeric matching, accept `30543.0`-style rendering, and treat runtime cJSON-to-CSV fallback as a skip instead of a failure.
 
 ### CPUStat and Bandwidth Compatibility Notes
@@ -531,11 +534,11 @@ make install
 ### Execution Flow (Manual and Automatic)
 
 1. **Argument parsing** — Parse CLI options including output directory and upload flags.
-2. **Startup backup preparation** — `ensure_output_dir()` creates the output directory when absent. If present, it applies format-scoped pre-run backup handling (`.csv` in CSV mode, `.json` in JSON mode):
+2. **Startup backup preparation** — `ensure_output_dir()` creates the output directory with `mkdir` first (and treats `EEXIST` as already present) to avoid a stat-then-create race. If the path is already a directory, it applies format-scoped pre-run backup handling (`.csv` in CSV mode, `.json` in JSON mode):
    - If report count is `<= backup count`, move all matching reports into `<timestamp>_<RUN_ID>_backup`.
    - If report count is `> backup count`, move the newest `N` matching reports into backup and delete the older matching ones.
    - Non-matching files are untouched.
-3. **Setup initialization** — Cache MAC address, firmware name, kernel version, and generate a per-run `RUN_ID` by concatenating epoch seconds + PID + a randomly generated 2-digit suffix.
+3. **Setup initialization** — Cache MAC address, firmware name, kernel version, and generate a per-run `RUN_ID` by concatenating epoch seconds + PID + a 2-digit suffix from `/dev/urandom` (falls back to a time/pid mix if `/dev/urandom` is unavailable).
 4. **State file creation** — Write `<output-dir>/.meminsight_configstore` with resolved run parameters. This file persists across runs and is selectively updated.
 5. **Upload marker creation** — If `--upload-enable` was passed, create `/tmp/.meminsight_upload` to signal the systemd upload service.
 6. **In-progress sentinel** — Create `/tmp/.meminsight_inprogress` to mark an active run.
@@ -664,7 +667,7 @@ Every report file (CSV and JSON) begins with a metadata row containing the follo
 | `ITERATION` | Current iteration number (1-based) within this run |
 | `RUN_ITERATIONS` | Total iterations configured for this run |
 | `RUN_INTERVAL` | Interval in seconds between iterations |
-| `RUN_ID` | Per-run identifier built as `<epoch_seconds><pid><2-digit-random-suffix>` |
+| `RUN_ID` | Per-run identifier built as `<epoch_seconds><pid><2-digit-suffix>` where the suffix comes from `/dev/urandom` |
 | `BACKUP_ARG_PASSED` | `1` when `--backup/-b` was explicitly provided, otherwise `0` |
 | `BACKUP_COUNT` | Effective backup count used for the run (default `30`, or CLI-provided value) |
 

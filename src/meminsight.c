@@ -20,6 +20,10 @@
 #include "meminsight.h"
 #include <inttypes.h>
 
+#ifndef O_DIRECTORY
+#define O_DIRECTORY 0
+#endif
+
 #define MEMINSIGHT_UPLOAD_URL_ENV "MEMINSIGHT_UPLOAD_URL"
 #define MEMINSIGHT_UPLOAD_URL_MAX 1024
 
@@ -223,6 +227,20 @@ int (*getProcessInfos_ptr)(FILE*);
 /* Forward declarations for local helpers used before their definitions. */
 static void trimTrailingWhitespace(char *str);
 static bool readConfigStoreValue(const char *dir, const char *key, char *value, size_t valueLen);
+
+/**
+ * Clamp a parsed iteration count into a trusted range before it is used
+ * as a loop bound. Values below 1 fall back to DEFAULT_ITERATIONS.
+ * COV-123: TAINTED_SCALAR — untrusted loop bound from CLI/config.
+ */
+static int sanitizeIterationCount(int value)
+{
+    if (value < 1)
+        return DEFAULT_ITERATIONS;
+    if (value > MAX_ITERATIONS)
+        return MAX_ITERATIONS;
+    return value;
+}
 
 // -----------------------------
 // Utility Functions
@@ -506,24 +524,34 @@ static int apply_backup_policy(const char *dir, int keepCount, const char *runId
  */
 static bool ensure_output_dir(const char *dir, const char *runIdFallback)
 {
-    struct stat st = {0};
-    if (stat(dir, &st) == 0) // Exists
-    {
-        if (S_ISDIR(st.st_mode)) // Is a directory
-        {
-            if (apply_backup_policy(dir, g_backupCount, runIdFallback) != 0)
-            {
-                PRINT_MUST("Warning: backup policy had partial failures in '%s'; continuing run setup\n", dir);
-            }
-            return true;
-        }
-        PRINT_MUST("Path '%s' exists but is not a directory\n", dir);
-        return false;
-    }
-    if (mkdir(dir, 0755) == -1) // Try to create
+    /* COV-125: mkdir first, then inspect — avoid stat-then-mkdir TOCTOU. */
+    if (mkdir(dir, 0755) == 0)
+        return true;
+
+    if (errno != EEXIST)
     {
         PRINT_MUST("Failed to create output directory '%s': %s\n", dir, strerror(errno));
         return false;
+    }
+
+    int dfd = open(dir, O_RDONLY | O_DIRECTORY);
+    if (dfd < 0)
+    {
+        PRINT_MUST("Path '%s' exists but is not a directory\n", dir);
+        return false;
+    }
+    struct stat st = {0};
+    if (fstat(dfd, &st) != 0 || !S_ISDIR(st.st_mode))
+    {
+        close(dfd);
+        PRINT_MUST("Path '%s' exists but is not a directory\n", dir);
+        return false;
+    }
+    close(dfd);
+
+    if (apply_backup_policy(dir, g_backupCount, runIdFallback) != 0)
+    {
+        PRINT_MUST("Warning: backup policy had partial failures in '%s'; continuing run setup\n", dir);
     }
     return true;
 }
@@ -886,8 +914,21 @@ SetupInfo initializeSetupInfo(const char *outDir, Report_Format format)
 
     unsigned long long epoch = (unsigned long long)time(NULL);
     unsigned long long pid = (unsigned long long)getpid();
-    srand((unsigned int)(epoch ^ pid));
-    int random2Digit = rand() % 100;
+    /* COV-127: do not use rand()/srand() for the run-id suffix. */
+    int random2Digit;
+    unsigned char rnd = 0;
+    int got_rnd = 0;
+    int urfd = open("/dev/urandom", O_RDONLY);
+    if (urfd >= 0)
+    {
+        if (read(urfd, &rnd, sizeof(rnd)) == (ssize_t)sizeof(rnd))
+            got_rnd = 1;
+        close(urfd);
+    }
+    if (got_rnd)
+        random2Digit = (int)(rnd % 100);
+    else
+        random2Digit = (int)((epoch ^ pid) % 100);
 #ifdef TESTME
     PRINT_INFO("Debug: epoch=%llu |  pid=%llu | random2Digit=%02d\n", epoch, pid, random2Digit);
 #endif
@@ -931,26 +972,49 @@ static void updateBandwidthAvailability(void)
     /* In test mode, fixture availability determines bandwidth support. */
     if (isTestMode)
     {
-        g_bwDataAvailable = (testBandwidth[0] != '\0' && access(testBandwidth, R_OK) == 0);
+        g_bwDataAvailable = false;
+        if (testBandwidth[0] != '\0')
+        {
+            int tfd = open(testBandwidth, O_RDONLY);
+            if (tfd >= 0)
+            {
+                g_bwDataAvailable = true;
+                close(tfd);
+            }
+        }
         return;
     }
 #endif
 
-    bool modeReadable = (access(BW_DDR_MODE_FILE, R_OK) == 0);
-    bool modeWritable = (access(BW_DDR_MODE_FILE, W_OK) == 0);
-    bool bwReadable = (access(BW_DDR_FILE, R_OK) == 0);
+    /* COV-126: open the nodes directly instead of access()-then-fopen TOCTOU. */
+    bool modeReadable = false;
+    bool modeWritable = false;
+    bool bwReadable = false;
     bool modeEnabled = false;
 
-    if (modeReadable)
+    int modeRfd = open(BW_DDR_MODE_FILE, O_RDONLY);
+    if (modeRfd >= 0)
     {
-        FILE *fp = fopen(BW_DDR_MODE_FILE, "r");
-        if (fp)
-        {
-            char modeBuf[16] = {0};
-            if (fgets(modeBuf, sizeof(modeBuf), fp) && modeBuf[0] == '1')
-                modeEnabled = true;
-            fclose(fp);
-        }
+        char modeBuf[16] = {0};
+        ssize_t n = read(modeRfd, modeBuf, sizeof(modeBuf) - 1);
+        modeReadable = true;
+        if (n > 0 && modeBuf[0] == '1')
+            modeEnabled = true;
+        close(modeRfd);
+    }
+
+    int modeWfd = open(BW_DDR_MODE_FILE, O_WRONLY);
+    if (modeWfd >= 0)
+    {
+        modeWritable = true;
+        close(modeWfd);
+    }
+
+    int bwfd = open(BW_DDR_FILE, O_RDONLY);
+    if (bwfd >= 0)
+    {
+        bwReadable = true;
+        close(bwfd);
     }
 
     g_bwDataAvailable = (bwReadable && modeReadable && (modeWritable || modeEnabled));
@@ -2225,7 +2289,7 @@ int parseConfig(const char *configPath, Config_Data *config)
         }
         else if (strcmp(key, "iterations") == 0)
         {
-            config->iterations = atoi(val);
+            config->iterations = sanitizeIterationCount(atoi(val)); /* COV-123 */
         }
         else if (strcmp(key, "interval") == 0)
         {
@@ -3393,7 +3457,7 @@ void printHelpAndUsage(char *argv[], bool moreInfo, int returnCode)
     printf("  -h, --help                        Show this help message and exit\n");
     printf("  -o, --output <directory>          Output directory for generated report files (default: %s; basename must contain 'meminsight')\n", DEFAULT_OUT_DIR);
     printf("      --interval <seconds>          Interval in seconds between iterations (overrides config)\n");
-    printf("      --iterations <count>          Number of iterations to run (overrides config)\n");
+    printf("      --iterations <count>          Number of iterations to run (overrides config, max: %d)\n", MAX_ITERATIONS);
     printf("      --upload-enable               Enable Cadence based upload\n");
     printf("      --upload-interval <seconds>   Report Upload Frequency\n");
     printf("      --frag                        Enable fragmentation data collection (default: disabled)\n");
@@ -3633,6 +3697,7 @@ int collectSystemMemoryStats(bool enableKThreads, const char *outDir, int iterat
     PRINT_MUST("Capturing System wide stats into directory %s\n", setup.outputDir);
     char outputfile[512];
 
+    iterations = sanitizeIterationCount(iterations); /* COV-123 */
     for (int iter = 0; long_run || iter < iterations; iter++)
     {
         PRINT_INFO("\n==== Iteration %d%s ====\n", iter + 1, long_run ? "/∞" : "");
@@ -3923,6 +3988,7 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, bool cli_out
         final_iterations = DEFAULT_ITERATIONS;
     if (final_interval < 0)
         final_interval = DEFAULT_INTERVAL;
+    final_iterations = sanitizeIterationCount(final_iterations); /* COV-123 */
 
     config.iterations = final_iterations;
     config.interval = final_interval;
@@ -4214,7 +4280,10 @@ void saveMeminfo(FILE *out)
                 PRINT_ERROR("%s: Error parsing [%s]\n", __FUNCTION__, tmp);
                 continue; 
             }
-            tstname[strlen(tstname)-1] = '\0';
+            size_t tstnlen = strlen(tstname);
+            if (tstnlen == 0)
+                continue;
+            tstname[tstnlen - 1] = '\0';
             for (int tsti=0; tsti<MEMINFO_NEEDED_FIELDS_COUNT; tsti++) {
                 if (!strcmp(tstname, meminfoNeeded[tsti])) {
                     if (!tstprocessHeaderIndex) {
@@ -4234,8 +4303,14 @@ void saveMeminfo(FILE *out)
                         PRINT_ERROR("%s: Error parsing [%s]\n", __FUNCTION__, tmp);
                         continue; 
                     }
-                    skipCount = skipArray[++processIndex];
-                    processValIndex += sprintf(meminfoValue+processValIndex, ",%lu", value);
+                    /* COV-124: skipArray is sized MEMINFO_NEEDED_FIELDS_COUNT. */
+                    processIndex++;
+                    if (processIndex < MEMINFO_NEEDED_FIELDS_COUNT)
+                        skipCount = skipArray[processIndex];
+                    if (processValIndex < (int)(MEMINFO_HEADER_TOTAL - 24))
+                        processValIndex += sprintf(meminfoValue+processValIndex, ",%lu", value);
+                    else
+                        break;
                 }
             }
             else 
@@ -4247,7 +4322,11 @@ void saveMeminfo(FILE *out)
                     continue; 
                 }
                 skipCount++;
-                name[strlen(name)-1] = '\0';
+                /* COV-124: require a non-empty token before stripping the trailing ':'. */
+                size_t nlen = strlen(name);
+                if (nlen == 0)
+                    continue;
+                name[nlen - 1] = '\0';
                 if (!strcmp(name, meminfoNeeded[processIndex])) {
                     PRINT_DBG_INITIAL("Found %s storing at index %d\n", name, processIndex);
                     if (processIndex) { // For MemTotal, skip always since we've the constant value
@@ -5220,6 +5299,8 @@ int main(int argc, char *argv[])
             if (i + 1 < argc)
             {
                 cli_iterations = atoi(argv[i + 1]);
+                if (cli_iterations > 0)
+                    cli_iterations = sanitizeIterationCount(cli_iterations); /* COV-123 */
                 i++; // skip next arg (iterations)
                 long_run = false; // If iterations are specified, it's not a long run
             }
@@ -5473,6 +5554,8 @@ int main(int argc, char *argv[])
 
     if (isConfigPresent)
     {
+        if (cli_iterations > 0)
+            cli_iterations = sanitizeIterationCount(cli_iterations); /* COV-123 */
 #ifdef TESTME
     return (handleConfigMode(confFile, out_dir, cli_output_set, cli_iterations, cli_interval, enableKThreads, long_run, effective_upload_enable, cli_upload_interval, resolved_upload_url) == 0) ? 0 : 1;
 #else
@@ -5491,6 +5574,7 @@ int main(int argc, char *argv[])
             final_interval = (0 < cli_interval)? cli_interval : DEFAULT_INTERVAL;
             final_iterations = (0 < cli_iterations) ? cli_iterations : DEFAULT_ITERATIONS;
         }
+        final_iterations = sanitizeIterationCount(final_iterations); /* COV-123 */
         PRINT_MUST("* Running %d iterations with %ds interval (indefinitely?: %s)\n", final_iterations, final_interval, long_run ? "yes" : "no");
 #ifdef TESTME
         return (collectSystemMemoryStats(enableKThreads, out_dir, final_iterations, final_interval, long_run, effective_upload_enable, cli_upload_interval, resolved_upload_url) == 0) ? 0 : 1;
