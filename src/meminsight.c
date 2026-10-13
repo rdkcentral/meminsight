@@ -242,6 +242,43 @@ static int sanitizeIterationCount(int value)
     return value;
 }
 
+/**
+ * True when @p path contains a ".." component (CQL-117, CQL-118).
+ * Used only on one-time CLI/config paths, not on the per-iteration collect loop.
+ */
+static bool pathHasDotDotComponent(const char *path)
+{
+    const char *p = path;
+
+    if (!p)
+        return true;
+    while (*p)
+    {
+        if (p[0] == '.' && p[1] == '.' &&
+            (p[2] == '\0' || p[2] == '/') &&
+            (p == path || p[-1] == '/'))
+            return true;
+        while (*p && *p != '/')
+            p++;
+        while (*p == '/')
+            p++;
+    }
+    return false;
+}
+
+/**
+ * Reject empty paths and ".." traversal in user-supplied CLI/config paths.
+ * CQL-117, CQL-118: cpp/path-injection sanitizer (startup only).
+ */
+static bool isSafeUserPath(const char *path)
+{
+    if (!path || !*path)
+        return false;
+    if (pathHasDotDotComponent(path))
+        return false;
+    return true;
+}
+
 // -----------------------------
 // Utility Functions
 // -----------------------------
@@ -524,6 +561,11 @@ static int apply_backup_policy(const char *dir, int keepCount, const char *runId
  */
 static bool ensure_output_dir(const char *dir, const char *runIdFallback)
 {
+    if (!isSafeUserPath(dir))
+    {
+        PRINT_MUST("Unsafe output directory '%s'\n", dir);
+        return false;
+    }
     /* COV-125: mkdir first, then inspect — avoid stat-then-mkdir TOCTOU. */
     if (mkdir(dir, 0755) == 0)
         return true;
@@ -1868,6 +1910,7 @@ static bool readBandwidthData(unsigned long *totalBandwidth, float *usagePercent
     if (!fgets(buffer, sizeof(buffer), fp) || buffer[0] != '1')
     {
         fclose(fp);
+        /* CQL-112: fopen kept here — this runs in the collect loop; extra open/fdopen would add overhead. */
         fp = fopen(BW_DDR_MODE_FILE, "w");
         if (!fp)
         {
@@ -2210,6 +2253,13 @@ int parseConfig(const char *configPath, Config_Data *config)
         return -1;
     }
 
+    /* CQL-117: reject traversal before fopen of the config path. */
+    if (!isSafeUserPath(configPath))
+    {
+        PRINT_ERROR("Unsafe config file path: %s\n", configPath);
+        return -1;
+    }
+
     const char *dot = strrchr(configPath, '.');
     if (!dot || (strncmp(dot, ".conf", 6) != 0))
     {
@@ -2504,7 +2554,7 @@ void testGetProcessInfos_Parse(char *tmp)
     if (!strncmp(tmp, "Rss:", 4))
     {
         PRINT_DBG("%s", tmp);
-        if (sscanf(tmp, "Rss: %u kB", &test_rss))
+        if (sscanf(tmp, "Rss: %u kB", &test_rss) == 1)
         {
             processInfoTest.rssTotal += test_rss;
         }
@@ -2512,7 +2562,7 @@ void testGetProcessInfos_Parse(char *tmp)
     else if (!strncmp(tmp, "Pss:", 4))
     {
         PRINT_DBG("%s", tmp);
-        if (sscanf(tmp, "Pss: %u kB", &test_pss))
+        if (sscanf(tmp, "Pss: %u kB", &test_pss) == 1)
         {
             processInfoTest.pssTotal += test_pss;
         }
@@ -2521,7 +2571,7 @@ void testGetProcessInfos_Parse(char *tmp)
     else if (!strncmp(tmp, "Shared_Clean:", 13))
     {
         PRINT_DBG("%s", tmp);
-        if (sscanf(tmp, "Shared_Clean: %u kB", &test_shared_clean))
+        if (sscanf(tmp, "Shared_Clean: %u kB", &test_shared_clean) == 1)
         {
          if (test_shared_clean) {
                 processInfoTest.shared_clean_total += ((!smaps_rollup)? prev_test_pss : test_shared_clean);
@@ -2531,7 +2581,7 @@ void testGetProcessInfos_Parse(char *tmp)
     else if (!strncmp(tmp, "Private_Clean:", 14))
     {
         PRINT_DBG("%s", tmp);
-        if (sscanf(tmp, "Private_Clean: %u kB", &test_private_clean))
+        if (sscanf(tmp, "Private_Clean: %u kB", &test_private_clean) == 1)
         {
             processInfoTest.private_clean_total += test_private_clean;
         }
@@ -2539,7 +2589,7 @@ void testGetProcessInfos_Parse(char *tmp)
     else if (!strncmp(tmp, "Private_Dirty:", 14))
     {
         PRINT_DBG("%s", tmp);
-        if (sscanf(tmp, "Private_Dirty: %u kB", &test_private_dirty))
+        if (sscanf(tmp, "Private_Dirty: %u kB", &test_private_dirty) == 1)
         {
             processInfoTest.private_dirty_total += test_private_dirty;
         }
@@ -2547,7 +2597,7 @@ void testGetProcessInfos_Parse(char *tmp)
     else if (!strncmp(tmp, "SwapPss:", 8))
     {
      PRINT_DBG("Test pss: %d %s\n", prev_test_pss, tmp);
-        if (sscanf(tmp, "SwapPss: %u kB", &test_swap_pss))
+        if (sscanf(tmp, "SwapPss: %u kB", &test_swap_pss) == 1)
         {
             processInfoTest.swap_pss_total += test_swap_pss;
         }
@@ -2605,6 +2655,7 @@ unsigned linesToSkipForSwapPssIfRss0 = 0;
  */
 int getProcessInfos_rollup_learnt(FILE *smap)
 {
+    /* CQL-104..CQL-109: require sscanf conversion count == 1 (EOF is not success). */
     char tmp[256];
 
     unsigned lines_To_skip = linesToSkipForRss_smaps_rollup;
@@ -2654,7 +2705,7 @@ int getProcessInfos_rollup_learnt(FILE *smap)
         {
             if (expect_rss)
             {
-                if (sscanf(tmp, "Rss: %u kB", &rss))
+                if (sscanf(tmp, "Rss: %u kB", &rss) == 1) /* CQL-104 */
                 {
                     PRINT_DBG_SCANNED("Read Rss (%u) after %u/%u lines --> %s\r", rss, skipped,
                                           lines_To_skip, tmp);
@@ -2669,7 +2720,7 @@ int getProcessInfos_rollup_learnt(FILE *smap)
             }
             else if (expect_pss)
             {
-                if (sscanf(tmp, "Pss: %u kB", &pss))
+                if (sscanf(tmp, "Pss: %u kB", &pss) == 1) /* CQL-105 */
                 {
                     PRINT_DBG_SCANNED("Read Pss (%u) after %u/%u lines  --> %s\r", pss, skipped, lines_To_skip,
                                       tmp);
@@ -2683,7 +2734,7 @@ int getProcessInfos_rollup_learnt(FILE *smap)
             }
             else if (expect_shared_clean)
             {
-                if (sscanf(tmp, "Shared_Clean: %u kB", &shared_clean))
+                if (sscanf(tmp, "Shared_Clean: %u kB", &shared_clean) == 1) /* CQL-106 */
                 {
                     PRINT_DBG_SCANNED("Read shared_clean (%u)  %u/%u lines --> %s\r", shared_clean, skipped,
                                       lines_To_skip, tmp);
@@ -2698,7 +2749,7 @@ int getProcessInfos_rollup_learnt(FILE *smap)
             }
             else if (expect_private_clean)
             {
-                if (sscanf(tmp, "Private_Clean: %u kB", &private_clean))
+                if (sscanf(tmp, "Private_Clean: %u kB", &private_clean) == 1) /* CQL-107 */
                 {
                     expect_private_clean = 0;
                     PRINT_DBG_SCANNED("Read private_clean (%u)  %u/%u lines --> %s\r", private_clean, skipped,
@@ -2712,7 +2763,7 @@ int getProcessInfos_rollup_learnt(FILE *smap)
             }
             else if (expect_private_dirty)
             {
-                if (sscanf(tmp, "Private_Dirty: %u kB", &private_dirty))
+                if (sscanf(tmp, "Private_Dirty: %u kB", &private_dirty) == 1) /* CQL-108 */
                 {
                     expect_private_dirty = 0;
                     PRINT_DBG_SCANNED("Read private_dirty (%u)  %u/%u lines --> %s\r", private_dirty, skipped,
@@ -2730,7 +2781,7 @@ int getProcessInfos_rollup_learnt(FILE *smap)
             }
             else if (expect_swap_pss)
             {
-                if (sscanf(tmp, "SwapPss: %u kB", &swap_pss))
+                if (sscanf(tmp, "SwapPss: %u kB", &swap_pss) == 1) /* CQL-109 */
                 {
                     PRINT_DBG_SCANNED("Read swap_pss (%u)  %u/%u lines --> %s\r", swap_pss, skipped,
                                       lines_To_skip, tmp);
@@ -2760,6 +2811,7 @@ int getProcessInfos_rollup_learnt(FILE *smap)
  */
 int getProcessInfos_rollup(FILE *smap)
 {
+    /* CQL-97..CQL-103: require sscanf conversion count == 1 (EOF is not success). */
     char tmp[256];
     unsigned expect_rss = 1;
     unsigned expect_pss = 0;
@@ -2785,7 +2837,7 @@ int getProcessInfos_rollup(FILE *smap)
         unsigned swap_pss = 0;
         if (!linesToSkipForRss_smaps_rollup)
         {
-            if (sscanf(tmp, "Rss: %u kB", &rss))
+            if (sscanf(tmp, "Rss: %u kB", &rss) == 1) /* CQL-97 */
             {
                 getProcessInfo.rssTotal = rss;
                 linesToSkipForRss_smaps_rollup = linesSkippedForRss + 1;
@@ -2798,7 +2850,7 @@ int getProcessInfos_rollup(FILE *smap)
         }
         else if (!linesToSkipForPss_smaps_rollup)
         {
-            if (sscanf(tmp, "Pss: %u kB", &pss))
+            if (sscanf(tmp, "Pss: %u kB", &pss) == 1) /* CQL-98 */
             {
                 getProcessInfo.pssTotal = pss;
                 linesToSkipForPss_smaps_rollup = linesSkippedForPss + 1;
@@ -2811,7 +2863,7 @@ int getProcessInfos_rollup(FILE *smap)
         }
         else if (!linesToSkipForSharedClean_smaps_rollup)
         {
-            if (sscanf(tmp, "Shared_Clean: %u kB", &shared_clean))
+            if (sscanf(tmp, "Shared_Clean: %u kB", &shared_clean) == 1) /* CQL-99 */
             {
                 getProcessInfo.shared_clean_total = shared_clean;
                 linesToSkipForSharedClean_smaps_rollup = linesSkippedForSharedClean + 1;
@@ -2825,7 +2877,7 @@ int getProcessInfos_rollup(FILE *smap)
         }
         else if (!linesToSkipForPrivateClean_smaps_rollup)
         {
-            if (sscanf(tmp, "Private_Clean: %u kB", &private_clean))
+            if (sscanf(tmp, "Private_Clean: %u kB", &private_clean) == 1) /* CQL-100 */
             {
                 getProcessInfo.private_clean_total = private_clean;
                 linesToSkipForPrivateClean_smaps_rollup = linesSkippedForPrivateClean + 1;
@@ -2839,7 +2891,7 @@ int getProcessInfos_rollup(FILE *smap)
         }
         else if (!linesToSkipForDirtyPrivate_smaps_rollup)
         {
-            if (sscanf(tmp, "Private_Dirty: %u kB", &private_dirty))
+            if (sscanf(tmp, "Private_Dirty: %u kB", &private_dirty) == 1) /* CQL-101 */
             {
                 getProcessInfo.private_dirty_total = private_dirty;
                 linesToSkipForDirtyPrivate_smaps_rollup = linesSkippedForDirtyPrivate + 1;
@@ -2853,7 +2905,7 @@ int getProcessInfos_rollup(FILE *smap)
         }
         else if (!linesToSkipForSwapPss_smaps_rollup)
         {
-            if (sscanf(tmp, "SwapPss: %u kB", &swap_pss))
+            if (sscanf(tmp, "SwapPss: %u kB", &swap_pss) == 1) /* CQL-102 */
             {
                 getProcessInfo.swap_pss_total = swap_pss;
                 linesToSkipForSwapPss_smaps_rollup = linesSkippedForSwapPss + 1;
@@ -2863,7 +2915,7 @@ int getProcessInfos_rollup(FILE *smap)
             else
             {
                 // check if smap doesn't contain swappss..
-                if (sscanf(tmp, "Locked: %u kB", &swap_pss))
+                if (sscanf(tmp, "Locked: %u kB", &swap_pss) == 1) /* CQL-103 */
                 {
                     PRINT_DBG_INITIAL("*****No SwapPss....skipping\n");
                 linesToSkipForSwapPss_smaps_rollup = 0xFFFF;
@@ -2895,6 +2947,7 @@ int getProcessInfos_rollup(FILE *smap)
  */
 int getProcessInfos_learnt(FILE *smap)
 {
+    /* CQL-91..CQL-96: require sscanf conversion count == 1 (EOF is not success). */
     char tmp[256];
     
     unsigned lines_To_skip = linesToSkipForRss;
@@ -2920,7 +2973,7 @@ int getProcessInfos_learnt(FILE *smap)
         {
             if (expect_rss)
             {
-                if (sscanf(tmp, "Rss: %u kB\n", &rss))
+                if (sscanf(tmp, "Rss: %u kB\n", &rss) == 1) /* CQL-91 */
                 {
                     if (rss)
                     {
@@ -2945,7 +2998,7 @@ int getProcessInfos_learnt(FILE *smap)
             }
             else if (expect_pss)
             {
-                if (sscanf(tmp, "Pss: %u kB\n", &pss))
+                if (sscanf(tmp, "Pss: %u kB\n", &pss) == 1) /* CQL-92 */
                 {
                     getProcessInfo.pssTotal += pss;
                     lines_To_skip = linesToSkipForSharedClean;
@@ -2958,7 +3011,7 @@ int getProcessInfos_learnt(FILE *smap)
             }
             else if (expect_shared_clean)
             {
-                if (sscanf(tmp, "Shared_Clean: %u kB\n", &shared_clean))
+                if (sscanf(tmp, "Shared_Clean: %u kB\n", &shared_clean) == 1) /* CQL-93 */
                 {
                     if (shared_clean) {
                         getProcessInfo.shared_clean_total += prev_pss;
@@ -2973,7 +3026,7 @@ int getProcessInfos_learnt(FILE *smap)
             }
             else if (expect_private_clean)
             {
-                if (sscanf(tmp, "Private_Clean: %u kB\n", &private_clean))
+                if (sscanf(tmp, "Private_Clean: %u kB\n", &private_clean) == 1) /* CQL-94 */
                 {
                     expect_private_clean = 0;
                     getProcessInfo.private_clean_total += private_clean;
@@ -2985,7 +3038,7 @@ int getProcessInfos_learnt(FILE *smap)
             }
             else if (expect_private_dirty)
             {
-                if (sscanf(tmp, "Private_Dirty: %u kB\n", &private_dirty))
+                if (sscanf(tmp, "Private_Dirty: %u kB\n", &private_dirty) == 1) /* CQL-95 */
                 {
                     expect_private_dirty = 0;
                     getProcessInfo.private_dirty_total += private_dirty;
@@ -3005,7 +3058,7 @@ int getProcessInfos_learnt(FILE *smap)
             }
             else if (expect_swap_pss)
             {
-                if (sscanf(tmp, "SwapPss: %u kB\n", &swap_pss))
+                if (sscanf(tmp, "SwapPss: %u kB\n", &swap_pss) == 1) /* CQL-96 */
                 {
                     expect_swap_pss = 0;
                     expect_rss = 1;
@@ -3035,6 +3088,7 @@ int getProcessInfos_learnt(FILE *smap)
  */
 int getProcessInfos_initial(FILE *smap)
 {
+    /* CQL-77..CQL-90: require sscanf conversion count == 1 (EOF is not success). */
     char tmp[256];
 
     unsigned lines_To_skip = linesToSkipForRss;
@@ -3097,7 +3151,7 @@ int getProcessInfos_initial(FILE *smap)
         { // Learn here
             if (!linesToSkipForRss)
             {
-                if (sscanf(tmp, "Rss: %u kB", &rss))
+                if (sscanf(tmp, "Rss: %u kB", &rss) == 1) /* CQL-77 */
                 {
                     getProcessInfo.rssTotal += rss;
                     linesToSkipForRss = linesSkippedForRss + 1;
@@ -3110,7 +3164,7 @@ int getProcessInfos_initial(FILE *smap)
             }
             else if (!linesToSkipForPss)
             {
-                if (sscanf(tmp, "Pss: %u kB", &pss))
+                if (sscanf(tmp, "Pss: %u kB", &pss) == 1) /* CQL-78 */
                 {
                     getProcessInfo.pssTotal += pss;
                     linesToSkipForPss = linesSkippedForPss + 1;
@@ -3124,7 +3178,7 @@ int getProcessInfos_initial(FILE *smap)
             }
             else if (!linesToSkipForSharedClean)
             {
-                if (sscanf(tmp, "Shared_Clean: %u kB", &shared_clean))
+                if (sscanf(tmp, "Shared_Clean: %u kB", &shared_clean) == 1) /* CQL-79 */
                 {
                     if (shared_clean) {
                         getProcessInfo.shared_clean_total += prev_pss;
@@ -3140,7 +3194,7 @@ int getProcessInfos_initial(FILE *smap)
             }
             else if (!linesToSkipForPrivateClean)
             {
-                if (sscanf(tmp, "Private_Clean: %u kB", &private_clean))
+                if (sscanf(tmp, "Private_Clean: %u kB", &private_clean) == 1) /* CQL-80 */
                 {
                     getProcessInfo.private_clean_total += private_clean;
                     linesToSkipForPrivateClean = linesSkippedForPrivateClean + 1;
@@ -3154,7 +3208,7 @@ int getProcessInfos_initial(FILE *smap)
             }
             else if (!linesToSkipForDirtyPrivate)
             {
-                if (sscanf(tmp, "Private_Dirty: %u kB", &private_dirty))
+                if (sscanf(tmp, "Private_Dirty: %u kB", &private_dirty) == 1) /* CQL-81 */
                 {
                     getProcessInfo.private_dirty_total += private_dirty;
                     linesToSkipForDirtyPrivate = linesSkippedForDirtyPrivate + 1;
@@ -3168,7 +3222,7 @@ int getProcessInfos_initial(FILE *smap)
             }
             else if (!linesToSkipForSwapPss)
             {
-                if (sscanf(tmp, "SwapPss: %u kB", &swap_pss))
+                if (sscanf(tmp, "SwapPss: %u kB", &swap_pss) == 1) /* CQL-82 */
                 {
                     getProcessInfo.swap_pss_total += swap_pss;
                     linesToSkipForSwapPss = linesSkippedForSwapPss + 1;
@@ -3179,7 +3233,7 @@ int getProcessInfos_initial(FILE *smap)
                 else
                 {
                     // check if smap doesn't contain swappss..
-                    if (sscanf(tmp, "Rss: %u kB", &rss))
+                    if (sscanf(tmp, "Rss: %u kB", &rss) == 1) /* CQL-83 */
                     {
                         getProcessInfo.rssTotal += rss;
                         linesToSkipForRollover = linesSkippedForSwapPss + 1;
@@ -3202,7 +3256,7 @@ int getProcessInfos_initial(FILE *smap)
             }
             else if (!linesToSkipForRollover)
             {
-                if (sscanf(tmp, "Rss: %u kB", &rss))
+                if (sscanf(tmp, "Rss: %u kB", &rss) == 1) /* CQL-84 */
                 {
                     getProcessInfo.rssTotal += rss;
                     linesToSkipForRollover = linesSkippedForRollover + 1;
@@ -3235,7 +3289,7 @@ int getProcessInfos_initial(FILE *smap)
             {
                 if (expect_rss)
                 {
-                    if (sscanf(tmp, "Rss: %u kB", &rss))
+                    if (sscanf(tmp, "Rss: %u kB", &rss) == 1) /* CQL-85 */
                     {
                         PRINT_DBG_SCANNED("Read Rss (%u) after %u/%u lines --> %s\r", rss, skipped,
                                               lines_To_skip, tmp);
@@ -3263,7 +3317,7 @@ int getProcessInfos_initial(FILE *smap)
                 }
                 else if (expect_pss)
                 {
-                    if (sscanf(tmp, "Pss: %u kB", &pss))
+                    if (sscanf(tmp, "Pss: %u kB", &pss) == 1) /* CQL-86 */
                     {
                         PRINT_DBG_SCANNED("Read Pss (%u) after %u/%u lines  --> %s\r", pss, skipped, lines_To_skip,
                                           tmp);
@@ -3278,7 +3332,7 @@ int getProcessInfos_initial(FILE *smap)
                 }
                 else if (expect_shared_clean)
                 {
-                    if (sscanf(tmp, "Shared_Clean: %u kB", &shared_clean))
+                    if (sscanf(tmp, "Shared_Clean: %u kB", &shared_clean) == 1) /* CQL-87 */
                     {
                         PRINT_DBG_SCANNED("Read shared_clean (%u)  %u/%u lines --> %s\r", shared_clean, skipped,
                                           lines_To_skip, tmp);
@@ -3295,7 +3349,7 @@ int getProcessInfos_initial(FILE *smap)
                 }
                 else if (expect_private_clean)
                 {
-                    if (sscanf(tmp, "Private_Clean: %u kB", &private_clean))
+                    if (sscanf(tmp, "Private_Clean: %u kB", &private_clean) == 1) /* CQL-88 */
                     {
                         expect_private_clean = 0;
                         PRINT_DBG_SCANNED("Read private_clean (%u)  %u/%u lines --> %s\r", private_clean, skipped,
@@ -3309,7 +3363,7 @@ int getProcessInfos_initial(FILE *smap)
                 }
                 else if (expect_private_dirty)
                 {
-                    if (sscanf(tmp, "Private_Dirty: %u kB", &private_dirty))
+                    if (sscanf(tmp, "Private_Dirty: %u kB", &private_dirty) == 1) /* CQL-89 */
                     {
                         expect_private_dirty = 0;
                         PRINT_DBG_SCANNED("Read private_dirty (%u)  %u/%u lines --> %s\r", private_dirty, skipped,
@@ -3331,7 +3385,7 @@ int getProcessInfos_initial(FILE *smap)
                 }
                 else if (expect_swap_pss)
                 {
-                    if (sscanf(tmp, "SwapPss: %u kB", &swap_pss))
+                    if (sscanf(tmp, "SwapPss: %u kB", &swap_pss) == 1) /* CQL-90 */
                     {
                         expect_swap_pss = 0;
                         expect_rss = 1;
@@ -3453,9 +3507,9 @@ void printHelpAndUsage(char *argv[], bool moreInfo, int returnCode)
 
     printf("Options:\n");
     printf("  -a, --all                         Include kernel threads for process monitoring\n");
-    printf("  -c, --config <file>               Path to configuration file with %s extension\n", CONFIG_EXTN);
+    printf("  -c, --config <file>               Path to configuration file with %s extension ( '..' is rejected)\n", CONFIG_EXTN);
     printf("  -h, --help                        Show this help message and exit\n");
-    printf("  -o, --output <directory>          Output directory for generated report files (default: %s; basename must contain 'meminsight')\n", DEFAULT_OUT_DIR);
+    printf("  -o, --output <directory>          Output directory for generated report files (default: %s; basename must contain 'meminsight'; '..' is rejected)\n", DEFAULT_OUT_DIR);
     printf("      --interval <seconds>          Interval in seconds between iterations (overrides config)\n");
     printf("      --iterations <count>          Number of iterations to run (overrides config, max: %d)\n", MAX_ITERATIONS);
     printf("      --upload-enable               Enable Cadence based upload\n");
@@ -3705,6 +3759,7 @@ int collectSystemMemoryStats(bool enableKThreads, const char *outDir, int iterat
 
         // Current timestamp
         time_t timenow = time(NULL);
+        /* CQL-115: localtime kept in the collect loop — single-threaded, lower overhead than localtime_r wrapper. */
         struct tm *tm_info = localtime(&timenow);
         char timestamp[32] = {0};
         char ts[32] = {0};
@@ -3743,6 +3798,7 @@ int collectSystemMemoryStats(bool enableKThreads, const char *outDir, int iterat
 
         FILE *output = NULL;
         if (g_reportFormat == REPORT_CSV) {
+            /* CQL-111 CQL-118: fopen kept in the collect loop; output dir already validated at CLI/config parse. */
             output = fopen(outputfile, "w");
             if (NULL == output) {
                 PRINT_MUST("%s: Open failed, %d [%s]\n", outputfile, errno, strerror(errno));
@@ -3936,6 +3992,14 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, bool cli_out
                                     ? cli_out_dir
                                     : (config.outputDir[0] ? config.outputDir : DEFAULT_OUT_DIR);
 
+    if (!isSafeUserPath(final_out_dir))
+    {
+        PRINT_MUST("Error: Output directory '%s' contains an unsafe path component\n", final_out_dir);
+        for (unsigned j = 0; j < config.whiteListCount; j++)
+            if (config.whitelist[j]) free(config.whitelist[j]);
+        if (config.whitelist) free(config.whitelist);
+        return -1;
+    }
     if (!outputDirHasMeminsightBase(final_out_dir))
     {
         PRINT_MUST("Error: Output directory '%s' must have 'meminsight' in the final path component\n", final_out_dir);
@@ -4014,6 +4078,7 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, bool cli_out
 
         // Get timestamp
         time_t timenow = time(NULL);
+        /* CQL-114: localtime kept in the collect loop — single-threaded, lower overhead than localtime_r wrapper. */
         struct tm *tm_info = localtime(&timenow);
         char timestamp[32] = {0};
         char ts[32] = {0};
@@ -4057,6 +4122,7 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, bool cli_out
 
         FILE *output = NULL;
         if (g_reportFormat == REPORT_CSV) {
+            /* CQL-110: fopen kept in the collect loop; output dir already validated at CLI/config parse. */
             output = fopen(outputFilePath, "w");
             if (!output) {
                 PRINT_ERROR("Error: Failed to open output file '%s' for writing\n", outputFilePath);
@@ -4276,7 +4342,7 @@ void saveMeminfo(FILE *out)
         while (fgets(tmp, 127, meminfo) && (processIndex < MEMINFO_NEEDED_FIELDS_COUNT)) {
 #ifdef TESTME
             char tstname[64];
-            if (!sscanf(tmp, "%s %lu kB", tstname, &value)) {
+            if (sscanf(tmp, "%63s %lu kB", tstname, &value) != 2) {
                 PRINT_ERROR("%s: Error parsing [%s]\n", __FUNCTION__, tmp);
                 continue; 
             }
@@ -4317,7 +4383,7 @@ void saveMeminfo(FILE *out)
             {
                 char name[64];
                 // Below lines repeat, but okay..for clarity and not needed to check whether learnt again
-                if (!sscanf(tmp, "%s %lu kB", name, &value)) {
+                if (sscanf(tmp, "%63s %lu kB", name, &value) != 2) { /* CQL-76 CQL-116 */
                     PRINT_ERROR("%s: Error parsing [%s]\n", __FUNCTION__, tmp);
                     continue; 
                 }
@@ -4537,7 +4603,7 @@ int writeJSONToFile(const char *filepath, const SetupInfo *setup)
         return -1;
     }
 
-    FILE *out = fopen(filepath, "w");
+    FILE *out = fopen(filepath, "w"); /* CQL-111: fopen in collect loop; dir already validated at startup. */
     if (!out) {
         PRINT_ERROR("Failed to open %s for writing: %s\n", filepath, strerror(errno));
         g_cjson.Delete(g_rootObject);
@@ -4675,6 +4741,7 @@ int writeT2Report(const char *filepath, const SetupInfo *setup, int iteration, i
 
     /* Timestamp, Date, Uptime, Iteration */
     time_t timenow = time(NULL);
+    /* CQL-114 CQL-115: localtime kept in the collect loop for low overhead. */
     struct tm *tm_info = localtime(&timenow);
     char ts[32] = {0};
     char dateStr[16] = {0};
@@ -5074,7 +5141,7 @@ int writeT2Report(const char *filepath, const SetupInfo *setup, int iteration, i
     /* --- Assemble and write --- */
     g_cjson.AddItemToObject(root, "Report", reportArray);
 
-    FILE *out = fopen(filepath, "w");
+    FILE *out = fopen(filepath, "w"); /* CQL-110: fopen in collect loop; dir already validated at startup. */
     if (!out) {
         PRINT_ERROR("T2: Failed to open %s for writing: %s\n", filepath, strerror(errno));
         g_cjson.Delete(root);
@@ -5160,6 +5227,13 @@ int main(int argc, char *argv[])
             if (i + 1 < argc)
             {
                 strncpy(confFile, argv[i + 1], PATH_MAX - 1);
+                confFile[PATH_MAX - 1] = '\0';
+                /* CQL-117: reject path traversal before fopen of CLI config path. */
+                if (!isSafeUserPath(confFile) || strstr(confFile, "..") != NULL)
+                {
+                    PRINT_ERROR("Error: Config file path '%s' contains an unsafe component\n", confFile);
+                    printHelpAndUsage(argv, true, 1);
+                }
                 FILE *fp = fopen(confFile, "r");
                 if (!fp)
                 {
@@ -5269,6 +5343,12 @@ int main(int argc, char *argv[])
             {
                 strncpy(out_dir, argv[i + 1], PATH_MAX - 1);
                 out_dir[PATH_MAX - 1] = '\0';
+                /* CQL-118: reject path traversal in --output before any file access. */
+                if (!isSafeUserPath(out_dir) || strstr(out_dir, "..") != NULL)
+                {
+                    PRINT_MUST("Error: Output directory '%s' contains an unsafe path component\n", out_dir);
+                    printHelpAndUsage(argv, false, 1);
+                }
                 if (!validateOutputDirOrHelp(out_dir, argv, false))
                     return 1;
                 cli_output_set = true;

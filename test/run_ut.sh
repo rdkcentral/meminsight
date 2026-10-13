@@ -1219,6 +1219,45 @@ else
 fi
 echo ""
 
+CQL_SMAP="test/1-non-zero-swap-entry/meminsight_testSmap.txt"
+CQL_MEMINFO="test/1-non-zero-swap-entry/meminsight_testMeminfo.txt"
+
+# CQL-118: reject path traversal in --output
+PATH_OUT_DESC="Test 36: --output path with .. is rejected"
+echo "------------------------------------------"
+echo "$PATH_OUT_DESC"
+echo "------------------------------------------"
+echo "Command: $MEM_BIN -o /tmp/../tmp/meminsight -t $CQL_SMAP $CQL_MEMINFO"
+PATH_OUT_LOG="/tmp/meminsight_cql_output_dotdot.log"
+if $MEM_BIN -o /tmp/../tmp/meminsight -t "$CQL_SMAP" "$CQL_MEMINFO" >"$PATH_OUT_LOG" 2>&1; then
+    echo "✗ $PATH_OUT_DESC FAILED (path traversal was accepted)"
+    cat "$PATH_OUT_LOG"
+    TEST_FAILED=$((TEST_FAILED + 1))
+    record_tc_result "36" "--output path with .. is rejected" "FAILURE"
+else
+    echo "✓ $PATH_OUT_DESC PASSED"
+    record_tc_result "36" "--output path with .. is rejected" "SUCCESS"
+fi
+echo ""
+
+# CQL-117: reject path traversal in --config
+PATH_CFG_DESC="Test 37: --config path with .. is rejected"
+echo "------------------------------------------"
+echo "$PATH_CFG_DESC"
+echo "------------------------------------------"
+echo "Command: $MEM_BIN -c ../evil.conf"
+PATH_CFG_LOG="/tmp/meminsight_cql_config_dotdot.log"
+if $MEM_BIN -c ../evil.conf >"$PATH_CFG_LOG" 2>&1; then
+    echo "✗ $PATH_CFG_DESC FAILED (path traversal was accepted)"
+    cat "$PATH_CFG_LOG"
+    TEST_FAILED=$((TEST_FAILED + 1))
+    record_tc_result "37" "--config path with .. is rejected" "FAILURE"
+else
+    echo "✓ $PATH_CFG_DESC PASSED"
+    record_tc_result "37" "--config path with .. is rejected" "SUCCESS"
+fi
+echo ""
+
 # Summary
 echo "===================================================================================="
 echo "Test Summary"

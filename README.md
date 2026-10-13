@@ -152,6 +152,7 @@ Audit outcomes currently tracked in repository documentation and planning notes 
 - ✅ Code audit and findings complete
 - ✅ CRITICAL resource leak fixes completed
 - ✅ Coverity findings COV-123 through COV-127 addressed (iteration-bound sanitization, meminfo skip-array bounds, mkdir-first output-dir creation, sysfs open-instead-of-access, `/dev/urandom` run-id suffix)
+- ✅ CodeQL findings CQL-75 through CQL-122 addressed (scanf conversion-count checks, bounded meminfo `%s`, `..` rejected on CLI/config paths, pinned reusable workflows). Per-iteration report writes keep `fopen`/`localtime` to avoid extra syscall overhead.
 - ℹ️ Integrated memleakutil for runtime leak detection in CI/CD
 
 ## Development Setup
@@ -206,8 +207,8 @@ meminsight [OPTIONS]
 
 OPTIONS:
    -a, --all                   Include kernel threads for process monitoring
-   -c, --config FILE           Path to configuration file (must end with .conf)
-   -o, --output DIR            Output directory for generated reports (default: /opt/meminsight)
+   -c, --config FILE           Path to configuration file (must end with .conf; '..' is rejected)
+   -o, --output DIR            Output directory for generated reports (default: /opt/meminsight; basename must contain 'meminsight'; '..' is rejected)
    -b, --backup N              Pre-run backup count for existing reports (1-100, default: 30)
          --iterations N          Number of iterations to run (overrides config, max: 100000)
          --interval SECONDS      Seconds between iterations (overrides config)
@@ -483,7 +484,7 @@ CPU stat fixture coverage includes:
 Bandwidth fixture coverage includes:
 - `test/12-bandwidth-sample/meminsight_testBandwidth.txt` for deterministic CSV/JSON bandwidth validation under TESTME without relying on platform sysfs
 
-`test/run_ut.sh` also checks that `--help` documents the `--iterations` maximum and that an oversized `--iterations` value is capped at `100000` in report metadata.
+`test/run_ut.sh` also checks that `--help` documents the `--iterations` maximum, that an oversized `--iterations` value is capped at `100000` in report metadata, and that `..` is rejected in `--output`/`--config` paths.
 
 When JSON output is enabled, the unit tests validate `cpu_stat` content with whitespace-tolerant numeric matching, accept `30543.0`-style rendering, and treat runtime cJSON-to-CSV fallback as a skip instead of a failure.
 
@@ -533,7 +534,7 @@ make install
 
 ### Execution Flow (Manual and Automatic)
 
-1. **Argument parsing** — Parse CLI options including output directory and upload flags.
+1. **Argument parsing** — Parse CLI options including output directory and upload flags. `--output` and `--config` paths that contain a `..` component are rejected.
 2. **Startup backup preparation** — `ensure_output_dir()` creates the output directory with `mkdir` first (and treats `EEXIST` as already present) to avoid a stat-then-create race. If the path is already a directory, it applies format-scoped pre-run backup handling (`.csv` in CSV mode, `.json` in JSON mode):
    - If report count is `<= backup count`, move all matching reports into `<timestamp>_<RUN_ID>_backup`.
    - If report count is `> backup count`, move the newest `N` matching reports into backup and delete the older matching ones.
