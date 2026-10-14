@@ -330,7 +330,7 @@ if [ -w "/etc" ] || [ -w "$DEVPROP_FILE" ] || [ ! -e "$DEVPROP_FILE" ]; then
     rm -rf /tmp/meminsight/*.csv
     if $MEM_BIN -o /tmp/meminsight -t "$DEVPROP_SMAP_FILE" "$DEVPROP_MEMINFO_FILE" >"$DEVPROP_LOG" 2>&1; then
         CSV_FILE=$(ls /tmp/meminsight/*.csv 2>/dev/null | head -n 1)
-        if [ -n "$CSV_FILE" ] && grep -E '^[^,]+,000000000000,' "$CSV_FILE" >/dev/null 2>&1; then
+	if [ -n "$CSV_FILE" ] && grep -E '^[^,]+,00:00:00:00:00:00,' "$CSV_FILE" >/dev/null 2>&1; then
             echo "✓ $DEVPROP_DESC PASSED"
             record_tc_result "14" "Invalid interface -> DEFAULT_MAC" "SUCCESS"
         else
@@ -842,6 +842,7 @@ if $MEM_BIN -o "$META_OUT1" -b 42 -t "$RET_SMAP_FILE" "$RET_MEMINFO_FILE"; then
     CSV_FILE=$(ls "$META_OUT1"/*.csv 2>/dev/null | head -n 1)
     if [ -n "$CSV_FILE" ] && \
        head -n 1 "$CSV_FILE" | grep -F "BACKUP_ARG_PASSED,BACKUP_COUNT" >/dev/null 2>&1 && \
+            sed -n '2p' "$CSV_FILE" | grep -E '^[^,]+,([[:xdigit:]]{2}:){5}[[:xdigit:]]{2},' >/dev/null 2>&1 && \
        sed -n '2p' "$CSV_FILE" | grep -E ',1,42$' >/dev/null 2>&1; then
         echo "✓ $META_DESC1 PASSED"
         record_tc_result "25" "CSV backup metadata with explicit --backup" "SUCCESS"
@@ -908,6 +909,7 @@ if $MEM_BIN --help 2>&1 | grep -F -- "--fmt" >/dev/null 2>&1; then
         JSON_FILE=$(ls "$META_OUT3"/*.json 2>/dev/null | head -n 1)
         CSV_FALLBACK_FILE=$(ls "$META_OUT3"/*.csv 2>/dev/null | head -n 1)
         if [ -n "$JSON_FILE" ] && \
+              grep -Eq '"MAC_ADDRESS"[[:space:]]*:[[:space:]]*"([[:xdigit:]]{2}:){5}[[:xdigit:]]{2}"' "$JSON_FILE" >/dev/null 2>&1 && \
               grep -Eq '"BACKUP_ARG_PASSED"[[:space:]]*:[[:space:]]*1' "$JSON_FILE" >/dev/null 2>&1 && \
               grep -Eq '"BACKUP_COUNT"[[:space:]]*:[[:space:]]*7' "$JSON_FILE" >/dev/null 2>&1; then
             echo "✓ $META_DESC3 PASSED"
@@ -1010,8 +1012,8 @@ else
 fi
 echo ""
 
-# Test 30: upload marker carries upload settings; configstore carries persistent state
-META_DESC6="Test 30: Upload marker and configstore key separation"
+# Test 30: configstore saves format/destination/interval; trigger activates the upload service
+META_DESC6="Test 30: Upload configuration saved to configstore and service activated"
 META_OUT6="$RET_BASE/meminsight_case11_upload_handoff"
 META_MARKER="/tmp/.meminsight_upload"
 
@@ -1024,27 +1026,25 @@ rm -rf "$META_OUT6"
 rm -f "$META_MARKER" /tmp/.meminsight_configstore
 if $MEM_BIN --upload-enable --upload-interval 1800 --upload-url https://example.test/upload -o "$META_OUT6" -t "$RET_SMAP_FILE" "$RET_MEMINFO_FILE" >/tmp/meminsight_upload_handoff.log 2>&1; then
     META_CONFIG="$META_OUT6/.meminsight_configstore"
-    if [ -f "$META_CONFIG" ] && [ -s "$META_MARKER" ] && [ ! -e /tmp/.meminsight_configstore ] && \
+    if [ -f "$META_CONFIG" ] && [ -e "$META_MARKER" ] && [ ! -e /tmp/.meminsight_configstore ] && \
        grep -F "RUN_ID=" "$META_CONFIG" >/dev/null 2>&1 && \
-       ! grep -E '^(UPLOAD_ENABLED|UPLOAD_INTERVAL)=' "$META_CONFIG" >/dev/null 2>&1 && \
-       grep -F "CONFIGSTORE_PATH=$META_CONFIG" "$META_MARKER" >/dev/null 2>&1 && \
-       grep -E '^RUN_ID=' "$META_MARKER" >/dev/null 2>&1 && \
-       grep -F "UPLOAD_ENABLED=1" "$META_MARKER" >/dev/null 2>&1 && \
-       grep -F "UPLOAD_INTERVAL=1800" "$META_MARKER" >/dev/null 2>&1; then
+       grep -F "OUTPUT_FORMAT=" "$META_CONFIG" >/dev/null 2>&1 && \
+       grep -F "UPLOAD_INTERVAL=1800" "$META_CONFIG" >/dev/null 2>&1 && \
+       ! grep -E 'HTTP|curl|Upload: .*->' /tmp/meminsight_upload_handoff.log >/dev/null 2>&1; then
         echo "✓ $META_DESC6 PASSED"
-        record_tc_result "30" "Upload marker/configstore key separation" "SUCCESS"
+        record_tc_result "30" "Upload configuration saved to configstore and service activated" "SUCCESS"
     else
-        echo "✗ $META_DESC6 FAILED (marker/configstore ownership mismatch)"
+        echo "✗ $META_DESC6 FAILED (configstore/trigger contents mismatch)"
         [ -f "$META_CONFIG" ] && cat "$META_CONFIG"
         [ -f "$META_MARKER" ] && cat "$META_MARKER"
         TEST_FAILED=$((TEST_FAILED + 1))
-        record_tc_result "30" "Upload marker/configstore key separation" "FAILURE"
+        record_tc_result "30" "Upload configuration saved to configstore and service activated" "FAILURE"
     fi
 else
     echo "✗ $META_DESC6 FAILED (command execution failed)"
     cat /tmp/meminsight_upload_handoff.log
     TEST_FAILED=$((TEST_FAILED + 1))
-    record_tc_result "30" "Upload marker/configstore key separation" "FAILURE"
+    record_tc_result "30" "Upload configuration saved to configstore and service activated" "FAILURE"
 fi
 rm -f "$META_MARKER"
 echo ""
@@ -1070,7 +1070,7 @@ if $MEM_BIN --help 2>&1 | grep -F "t2" >/dev/null 2>&1; then
 	   grep -F '"cpu_stats.user"' "$T2_FILE" >/dev/null 2>&1 && \
            grep -F '"tail.PID"' "$T2_FILE" >/dev/null 2>&1 && \
            grep -F '"tail.PSS"' "$T2_FILE" >/dev/null 2>&1 && \
-	   grep -F '"mac"' "$T2_FILE" >/dev/null 2>&1 && \
+	   grep -E '"mac"[[:space:]]*:[[:space:]]*"([[:xdigit:]]{2}:){5}[[:xdigit:]]{2}"' "$T2_FILE" >/dev/null 2>&1 && \
 	   grep -F '"device.model"' "$T2_FILE" >/dev/null 2>&1; then
             echo "✓ $T2_DESC PASSED"
             echo "Output sample:"
@@ -1165,6 +1165,142 @@ else
 fi
 echo ""
 
+# Test 38b: malformed upload interval values are rejected before the upload service starts
+UP38B_DESC="Test 38b: Reject malformed --upload-interval values"
+UP38B_LOG="/tmp/meminsight_up38b.log"
+
+echo "------------------------------------------"
+echo "$UP38B_DESC"
+echo "------------------------------------------"
+
+UPLOAD_INTERVAL_VALIDATION_FAILED=0
+if $MEM_BIN --upload-enable --upload-interval >"$UP38B_LOG" 2>&1; then
+    echo "✗ $UP38B_DESC FAILED (accepted a missing interval value)"
+    cat "$UP38B_LOG"
+    UPLOAD_INTERVAL_VALIDATION_FAILED=1
+elif ! grep -F "Missing upload interval value after --upload-interval" "$UP38B_LOG" >/dev/null 2>&1; then
+    echo "✗ $UP38B_DESC FAILED (missing-value error not reported)"
+    cat "$UP38B_LOG"
+    UPLOAD_INTERVAL_VALIDATION_FAILED=1
+fi
+
+for INVALID_UPLOAD_INTERVAL in --upload-url 12seconds 0 -1 999999999999999999999999999999999999999 ""; do
+    [ "$UPLOAD_INTERVAL_VALIDATION_FAILED" -eq 0 ] || break
+    if $MEM_BIN --upload-enable --upload-interval "$INVALID_UPLOAD_INTERVAL" >"$UP38B_LOG" 2>&1; then
+        echo "✗ $UP38B_DESC FAILED (accepted '$INVALID_UPLOAD_INTERVAL')"
+        cat "$UP38B_LOG"
+        UPLOAD_INTERVAL_VALIDATION_FAILED=1
+        break
+    elif ! grep -F "Invalid upload interval value '$INVALID_UPLOAD_INTERVAL' after --upload-interval" "$UP38B_LOG" >/dev/null 2>&1; then
+        echo "✗ $UP38B_DESC FAILED (validation error missing for '$INVALID_UPLOAD_INTERVAL')"
+        cat "$UP38B_LOG"
+        UPLOAD_INTERVAL_VALIDATION_FAILED=1
+        break
+    fi
+done
+
+if [ "$UPLOAD_INTERVAL_VALIDATION_FAILED" -eq 0 ]; then
+    echo "✓ $UP38B_DESC PASSED"
+    record_tc_result "38b" "Reject malformed --upload-interval values" "SUCCESS"
+else
+    TEST_FAILED=$((TEST_FAILED + 1))
+    record_tc_result "38b" "Reject malformed --upload-interval values" "FAILURE"
+fi
+echo ""
+
+# Test 38c: reject CR/LF in the CLI upload URL before writing handoff state
+UP38C_DESC="Test 38c: Reject CR/LF in CLI upload URL"
+UP38C_OUT="$RET_BASE/meminsight_case14_crlf_cli_url"
+UP38C_LOG="/tmp/meminsight_up38c.log"
+UP38C_BAD_URL='https://example.test/upload
+OUTPUT_DIR=/tmp/injected'
+
+echo "------------------------------------------"
+echo "$UP38C_DESC"
+echo "------------------------------------------"
+
+rm -rf "$UP38C_OUT"
+rm -f /tmp/.meminsight_upload
+if $MEM_BIN --upload-enable --upload-url "$UP38C_BAD_URL" -o "$UP38C_OUT" \
+    -t "$RET_SMAP_FILE" "$RET_MEMINFO_FILE" >"$UP38C_LOG" 2>&1; then
+    echo "✗ $UP38C_DESC FAILED (command unexpectedly succeeded)"
+    TEST_FAILED=$((TEST_FAILED + 1))
+    record_tc_result "38c" "Reject CR/LF in CLI upload URL" "FAILURE"
+else
+    if grep -F "Upload URL must not contain CR or LF" "$UP38C_LOG" >/dev/null 2>&1 && \
+       [ ! -e "$UP38C_OUT/.meminsight_configstore" ] && \
+       [ ! -e /tmp/.meminsight_upload ]; then
+        echo "✓ $UP38C_DESC PASSED"
+        record_tc_result "38c" "Reject CR/LF in CLI upload URL" "SUCCESS"
+    else
+        echo "✗ $UP38C_DESC FAILED (validation or early-rejection behavior missing)"
+        cat "$UP38C_LOG"
+        TEST_FAILED=$((TEST_FAILED + 1))
+        record_tc_result "38c" "Reject CR/LF in CLI upload URL" "FAILURE"
+    fi
+fi
+echo ""
+
+# Test 38d: reject CR/LF in the environment upload URL before writing handoff state
+UP38D_DESC="Test 38d: Reject CR/LF in environment upload URL"
+UP38D_OUT="$RET_BASE/meminsight_case15_crlf_env_url"
+UP38D_LOG="/tmp/meminsight_up38d.log"
+UP38D_BAD_URL=$(printf 'https://example.test/upload\rOUTPUT_DIR=/tmp/injected')
+
+echo "------------------------------------------"
+echo "$UP38D_DESC"
+echo "------------------------------------------"
+
+rm -rf "$UP38D_OUT"
+rm -f /tmp/.meminsight_upload
+if MEMINSIGHT_UPLOAD_URL="$UP38D_BAD_URL" $MEM_BIN --upload-enable \
+    -o "$UP38D_OUT" -t "$RET_SMAP_FILE" "$RET_MEMINFO_FILE" >"$UP38D_LOG" 2>&1; then
+    echo "✗ $UP38D_DESC FAILED (command unexpectedly succeeded)"
+    TEST_FAILED=$((TEST_FAILED + 1))
+    record_tc_result "38d" "Reject CR/LF in environment upload URL" "FAILURE"
+else
+    if grep -F "Upload URL must not contain CR or LF" "$UP38D_LOG" >/dev/null 2>&1 && \
+       [ ! -e "$UP38D_OUT/.meminsight_configstore" ] && \
+       [ ! -e /tmp/.meminsight_upload ]; then
+        echo "✓ $UP38D_DESC PASSED"
+        record_tc_result "38d" "Reject CR/LF in environment upload URL" "SUCCESS"
+    else
+        echo "✗ $UP38D_DESC FAILED (validation or early-rejection behavior missing)"
+        cat "$UP38D_LOG"
+        TEST_FAILED=$((TEST_FAILED + 1))
+        record_tc_result "38d" "Reject CR/LF in environment upload URL" "FAILURE"
+    fi
+fi
+echo ""
+
+# Test 41: uploads remain disabled when --upload-enable is not requested (binary side)
+UP41_DESC="Test 41: Binary does not create a trigger without --upload-enable"
+UP41_OUT="$RET_BASE/meminsight_case13_no_upload"
+
+echo "------------------------------------------"
+echo "$UP41_DESC"
+echo "------------------------------------------"
+echo "Command: $MEM_BIN --iterations 1 -o $UP41_OUT -t $RET_SMAP_FILE $RET_MEMINFO_FILE"
+
+rm -rf "$UP41_OUT"
+rm -f /tmp/.meminsight_upload
+if $MEM_BIN --iterations 1 -o "$UP41_OUT" -t "$RET_SMAP_FILE" "$RET_MEMINFO_FILE" >/tmp/meminsight_up41.log 2>&1; then
+    if [ ! -e /tmp/.meminsight_upload ]; then
+        echo "✓ $UP41_DESC PASSED"
+        record_tc_result "41" "Binary does not create a trigger without --upload-enable" "SUCCESS"
+    else
+        echo "✗ $UP41_DESC FAILED (trigger created without --upload-enable)"
+        TEST_FAILED=$((TEST_FAILED + 1))
+        record_tc_result "41" "Binary does not create a trigger without --upload-enable" "FAILURE"
+    fi
+else
+    echo "✗ $UP41_DESC FAILED (command execution failed)"
+    cat /tmp/meminsight_up41.log
+    TEST_FAILED=$((TEST_FAILED + 1))
+    record_tc_result "41" "Binary does not create a trigger without --upload-enable" "FAILURE"
+fi
+echo ""
+
 # Summary
 echo "===================================================================================="
 echo "Test Summary"
@@ -1183,3 +1319,5 @@ else
     echo "===================================================================================="
     exit 1
 fi
+
+
