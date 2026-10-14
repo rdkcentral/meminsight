@@ -1995,6 +1995,20 @@ size_t getMacAddress(const char *iface, char *macAddress, size_t szBufSize)
     return ret;
 }
 
+static void formatReportMacAddress(const char *macAddress, char *formattedMac, size_t szBufSize)
+{
+    if (!macAddress || !formattedMac || szBufSize == 0)
+        return;
+
+    if (strlen(macAddress) == 12 && szBufSize >= 18) {
+        snprintf(formattedMac, szBufSize, "%.2s:%.2s:%.2s:%.2s:%.2s:%.2s",
+                 macAddress, macAddress + 2, macAddress + 4,
+                 macAddress + 6, macAddress + 8, macAddress + 10);
+    } else {
+        snprintf(formattedMac, szBufSize, "%s", macAddress);
+    }
+}
+
 /**
  * @brief Check whether a string is a numeric PID token.
  *
@@ -3476,6 +3490,8 @@ int collectSystemMemoryStats(bool enableKThreads, const char *outDir, int iterat
 {
     // Initialize setup info (MAC, firmware name, output dir, file extension)
     SetupInfo setup = initializeSetupInfo(outDir, g_reportFormat);
+    char reportMac[18];
+    formatReportMacAddress(setup.mac, reportMac, sizeof(reportMac));
     if (!setup.dirCreated) {
         PRINT_MUST("Failed to create output directory: %s\n", setup.outputDir);
         return -1;
@@ -3520,7 +3536,7 @@ int collectSystemMemoryStats(bool enableKThreads, const char *outDir, int iterat
                 return -1;
             }
             g_cjson.AddStringToObject(g_rootObject, "FIRMWARE_NAME", setup.fwName);
-            g_cjson.AddStringToObject(g_rootObject, "MAC_ADDRESS",   setup.mac);
+	    g_cjson.AddStringToObject(g_rootObject, "MAC_ADDRESS",   reportMac);
             g_cjson.AddStringToObject(g_rootObject, "TIMESTAMP",     ts);
             g_cjson.AddStringToObject(g_rootObject, "UPTIME",        uptime);
             g_cjson.AddStringToObject(g_rootObject, "KERNEL_VERSION", setup.kernelVersion);
@@ -3543,7 +3559,7 @@ int collectSystemMemoryStats(bool enableKThreads, const char *outDir, int iterat
                 return -1;
             }
             fprintf(output, "%s\n", CSV_META_HEADER);
-            fprintf(output, "%s,%s,%s,%s,%s,%s,%d,%d,%d,%s,%d,%d\n\n", setup.fwName, setup.mac, ts, uptime, setup.kernelVersion, reportVersion, iter + 1, iterations, interval, setup.runHash, g_backupArgPassed, g_backupCount);
+	    fprintf(output, "%s,%s,%s,%s,%s,%s,%d,%d,%d,%s,%d,%d\n\n", setup.fwName, reportMac, ts, uptime, setup.kernelVersion, reportVersion, iter + 1, iterations, interval, setup.runHash, g_backupArgPassed, g_backupCount);
         }
 
         unsigned long rssTotal = 0, pssTotal = 0, shared_clean_total = 0, private_clean_total = 0, private_dirty_total = 0, swap_pss_total = 0;
@@ -3740,6 +3756,8 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, bool cli_out
 
     // Initialize setup info (MAC, firmware name, output dir, file extension)
     SetupInfo setup = initializeSetupInfo(final_out_dir, g_reportFormat);
+    char reportMac[18];
+    formatReportMacAddress(setup.mac, reportMac, sizeof(reportMac));
     if (!setup.dirCreated) {
         PRINT_MUST("Failed to create output directory: %s\n", setup.outputDir);
         for (unsigned j = 0; j < config.whiteListCount; j++)
@@ -3833,7 +3851,7 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, bool cli_out
                 return -1;
             }
             g_cjson.AddStringToObject(g_rootObject, "FIRMWARE_NAME",  setup.fwName);
-            g_cjson.AddStringToObject(g_rootObject, "MAC_ADDRESS",    setup.mac);
+	    g_cjson.AddStringToObject(g_rootObject, "MAC_ADDRESS",    reportMac);
             g_cjson.AddStringToObject(g_rootObject, "TIMESTAMP",      ts);
             g_cjson.AddStringToObject(g_rootObject, "UPTIME",         uptime);
             g_cjson.AddStringToObject(g_rootObject, "KERNEL_VERSION", setup.kernelVersion);
@@ -3859,7 +3877,7 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, bool cli_out
                 return -1;
             }
             fprintf(output, "%s\n", CSV_META_HEADER);
-            fprintf(output, "%s,%s,%s,%s,%s,%s,%d,%d,%d,%s,%d,%d\n\n", setup.fwName, setup.mac, ts, uptime, setup.kernelVersion, reportVersion, iter + 1, final_iterations, final_interval, setup.runHash, g_backupArgPassed, g_backupCount);
+	    fprintf(output, "%s,%s,%s,%s,%s,%s,%d,%d,%d,%s,%d,%d\n\n", setup.fwName, reportMac, ts, uptime, setup.kernelVersion, reportVersion, iter + 1, final_iterations, final_interval, setup.runHash, g_backupArgPassed, g_backupCount);
         }
 
         unsigned long rssTotal = 0, pssTotal = 0, shared_clean_total = 0, private_clean_total = 0, private_dirty_total = 0, swap_pss_total = 0;

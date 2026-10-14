@@ -330,7 +330,7 @@ if [ -w "/etc" ] || [ -w "$DEVPROP_FILE" ] || [ ! -e "$DEVPROP_FILE" ]; then
     rm -rf /tmp/meminsight/*.csv
     if $MEM_BIN -o /tmp/meminsight -t "$DEVPROP_SMAP_FILE" "$DEVPROP_MEMINFO_FILE" >"$DEVPROP_LOG" 2>&1; then
         CSV_FILE=$(ls /tmp/meminsight/*.csv 2>/dev/null | head -n 1)
-        if [ -n "$CSV_FILE" ] && grep -E '^[^,]+,000000000000,' "$CSV_FILE" >/dev/null 2>&1; then
+	if [ -n "$CSV_FILE" ] && grep -E '^[^,]+,00:00:00:00:00:00,' "$CSV_FILE" >/dev/null 2>&1; then
             echo "✓ $DEVPROP_DESC PASSED"
             record_tc_result "14" "Invalid interface -> DEFAULT_MAC" "SUCCESS"
         else
@@ -842,6 +842,7 @@ if $MEM_BIN -o "$META_OUT1" -b 42 -t "$RET_SMAP_FILE" "$RET_MEMINFO_FILE"; then
     CSV_FILE=$(ls "$META_OUT1"/*.csv 2>/dev/null | head -n 1)
     if [ -n "$CSV_FILE" ] && \
        head -n 1 "$CSV_FILE" | grep -F "BACKUP_ARG_PASSED,BACKUP_COUNT" >/dev/null 2>&1 && \
+            sed -n '2p' "$CSV_FILE" | grep -E '^[^,]+,([[:xdigit:]]{2}:){5}[[:xdigit:]]{2},' >/dev/null 2>&1 && \
        sed -n '2p' "$CSV_FILE" | grep -E ',1,42$' >/dev/null 2>&1; then
         echo "✓ $META_DESC1 PASSED"
         record_tc_result "25" "CSV backup metadata with explicit --backup" "SUCCESS"
@@ -908,6 +909,7 @@ if $MEM_BIN --help 2>&1 | grep -F -- "--fmt" >/dev/null 2>&1; then
         JSON_FILE=$(ls "$META_OUT3"/*.json 2>/dev/null | head -n 1)
         CSV_FALLBACK_FILE=$(ls "$META_OUT3"/*.csv 2>/dev/null | head -n 1)
         if [ -n "$JSON_FILE" ] && \
+              grep -Eq '"MAC_ADDRESS"[[:space:]]*:[[:space:]]*"([[:xdigit:]]{2}:){5}[[:xdigit:]]{2}"' "$JSON_FILE" >/dev/null 2>&1 && \
               grep -Eq '"BACKUP_ARG_PASSED"[[:space:]]*:[[:space:]]*1' "$JSON_FILE" >/dev/null 2>&1 && \
               grep -Eq '"BACKUP_COUNT"[[:space:]]*:[[:space:]]*7' "$JSON_FILE" >/dev/null 2>&1; then
             echo "✓ $META_DESC3 PASSED"
