@@ -70,7 +70,7 @@
 ./meminsight --all
 
 # Write reports to a custom directory
-./meminsight --output /tmp/memreports --iterations 3
+./meminsight --output /tmp/meminsight --iterations 3
 
 # Enable fragmentation data collection (disabled by default)
 ./meminsight --frag --iterations 5 --interval 60
@@ -347,7 +347,7 @@ log_level=INFO
 | Parameter | Description | Default Value | Example |
 |-----------|-------------|---------------|---------|
 | `process_whitelist` | Comma-separated list of process names/PIDs | All processes | `apache2,mysql,1234` |
-| `output_dir` | Directory for output files | `/opt/meminsight` | `/var/log/monitoring` |
+| `output_dir` | Directory for output files (final component must contain `meminsight`; `..` is rejected) | `/opt/meminsight` | `/var/log/meminsight` |
 | `iterations` | Number of sampling cycles (capped at `100000`) | `1` | `10` |
 | `interval` | Seconds between samples | `5` | `60` |
 | `log_level` | Logging verbosity (parsed from config; current builds may not print logs unless debug is enabled) | `INFO` | `DEBUG`, `ERROR` |
@@ -544,10 +544,10 @@ make install
 5. **Upload marker creation** — If `--upload-enable` was passed, create `/tmp/.meminsight_upload` to signal the systemd upload service.
 6. **In-progress sentinel** — Create `/tmp/.meminsight_inprogress` to mark an active run.
 7. **Iteration loop** — For each iteration:
-   - Capture fresh timestamp and uptime.
+   - Capture fresh timestamp and uptime (`localtime` is used here to keep the collect path lightweight).
    - Collect system meminfo, optional aggregate CPU stat counters, process smaps stats.
    - If `--frag` is active, collect fragmentation data.
-   - Write CSV/JSON report with full metadata row: `FIRMWARE_NAME, MAC_ADDRESS, TIMESTAMP, UPTIME, KERNEL_VERSION, REPORT_VERSION, ITERATION, RUN_ITERATIONS, RUN_INTERVAL, RUN_ID, BACKUP_ARG_PASSED, BACKUP_COUNT`.
+   - Write CSV/JSON report with `fopen` (output directory already validated at startup) and the metadata row: `FIRMWARE_NAME, MAC_ADDRESS, TIMESTAMP, UPTIME, KERNEL_VERSION, REPORT_VERSION, ITERATION, RUN_ITERATIONS, RUN_INTERVAL, RUN_ID, BACKUP_ARG_PASSED, BACKUP_COUNT`.
 8. **Cleanup** — Remove in-progress sentinel on completion or error. Configstore persists for upload script reference.
 9. **Automatic run (systemd)** — Service starts meminsight with desired flags; path unit watches for marker and triggers upload service.
 
@@ -592,7 +592,7 @@ EOF
 ```bash
 # Monitor database memory usage every minute for 2 hours
 ./meminsight --iterations 120 --interval 60 \
-              --output /tmp/db-analysis \
+              --output /tmp/meminsight \
               --config database.conf
 ```
 
@@ -602,7 +602,7 @@ EOF
 # Lightweight monitoring for embedded systems
 CPPFLAGS="-DDEVICE_INTERFACE_KEY=\"ESTB_INTERFACE\"" make clean && make
 # Ensure /etc/device.properties contains: ESTB_INTERFACE=eth0
-./meminsight --iterations 24 --interval 3600 --output /mnt/logs/
+./meminsight --iterations 24 --interval 3600 --output /mnt/logs/meminsight
 ```
 
 ### Example 4: Upload-Enabled Monitoring (12-Hour Capture)
@@ -611,7 +611,7 @@ CPPFLAGS="-DDEVICE_INTERFACE_KEY=\"ESTB_INTERFACE\"" make clean && make
 # Capture system memory every 15 minutes (48 iterations) with hourly upload cadence
 ./meminsight --upload-enable --upload-interval 3600 \
              --iterations 48 --interval 900 \
-             --output /opt/meminsight-reports \
+             --output /opt/meminsight \
              --fmt json --json-pretty
 
 # What happens:
@@ -779,6 +779,8 @@ Workflows are intentionally split by responsibility:
    - Build-only workflow using `cov_build.sh --clean` then `cov_build.sh --enable-cjson --test`
 - `.github/workflows/unit-test.yml`
    - Builds with the same flags and runs fixture tests through `test/run_ut.sh`
+- `.github/workflows/cla.yml` and `.github/workflows/fossid_integration_stateless_diffscan_target_repo.yml`
+   - Reusable workflows are pinned to commit SHAs (CLA `v1` / FossID `1.0.0`) rather than floating tags
 
 ## 🔧 Troubleshooting
 
@@ -789,6 +791,19 @@ Workflows are intentionally split by responsibility:
 # Solution: Run with appropriate privileges
 sudo ./meminsight
 # Or adjust /proc permissions
+```
+
+**Issue**: Config or output path rejected
+```bash
+# Paths that contain a '..' component are rejected at startup.
+# The output directory's final component must contain 'meminsight'.
+./meminsight --output /tmp/meminsight --iterations 1 --interval 0
+```
+
+**Issue**: `--iterations` appears lower than the value you passed
+```bash
+# Values above 100000 are capped. Values below 1 fall back to 1.
+./meminsight --help   # documents the maximum
 ```
 
 **Issue**: High memory usage during monitoring

@@ -27,6 +27,7 @@ The current parser accumulates:
 2. Learned offsets are reused in subsequent parsing calls for reduced scanning overhead.
 3. If SwapPss is absent in an observed source layout, parsing continues without failing the process record.
 4. Shared_Clean handling differs between smaps and smaps_rollup code paths according to current implementation logic.
+5. Numeric field parses (`Rss`, `Pss`, `Shared_Clean`, `Private_Clean`, `Private_Dirty`, `SwapPss`, and the Locked fallback) are accepted only when `sscanf` returns the expected conversion count. `EOF` is not treated as a successful match.
 
 ## Failure handling
 

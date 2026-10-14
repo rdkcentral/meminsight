@@ -7,12 +7,15 @@ This specification defines the configuration file contract and whitelist-driven 
 ## Config format
 
 1. Config path must use .conf extension.
-2. Supported keys:
+2. Config path must not contain a `..` path component.
+3. Supported keys:
 - process_whitelist
 - output_dir
 - iterations
 - interval
 - log_level
+4. `output_dir` from the config file is subject to the same rules as `--output`: no `..` component, and the final path component must contain `meminsight`.
+5. `iterations` from the config file is sanitized to the range 1..100000.
 
 ## Whitelist semantics
 
@@ -25,7 +28,7 @@ This specification defines the configuration file contract and whitelist-driven 
 
 1. CLI output directory overrides config output_dir.
 2. CLI iterations and interval values override config values when valid.
-3. Invalid or missing iteration/interval values are normalized to built-in defaults.
+3. Invalid or missing iteration/interval values are normalized to built-in defaults. Iteration counts above 100000 are capped; values below 1 fall back to the default.
 
 ## Output behavior in config mode
 
