@@ -164,7 +164,7 @@ flowchart TD
   - iterative loop with sleep(interval)
   - long-run mode when no finite iteration plan is enforced
   - per-iteration timestamp and output file generation
-  - finite `--iterations` values are sanitized to 1..100000 before use as a loop bound
+  - finite `--iterations` values are sanitized to 1..100000 before use as a loop bound; a message is printed when the requested value is changed
 - Per-iteration report writes use `fopen`/`localtime` after startup validation so the collect loop stays lightweight.
 
 ### Inferences

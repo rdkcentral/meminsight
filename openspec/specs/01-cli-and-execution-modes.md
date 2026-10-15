@@ -36,7 +36,7 @@ Supported options in the current implementation:
 9. Long-run mode is active by default when no explicit interval/iterations pair is supplied.
 10. `--backup` / `-b` accepts values in range 1..100; out-of-range values trigger usage error output and non-success exit.
 11. `--output` / `-o` requires the final path component to contain `meminsight`; otherwise output-directory setup fails.
-12. `--iterations` values below 1 fall back to the default; values above 100000 are capped. The same cap applies to `iterations` read from a config file. Help text documents the maximum.
+12. `--iterations` values below 1 fall back to the default; values above 100000 are capped. The same cap applies to `iterations` read from a config file. A message is printed when the requested value is changed. Help text documents the maximum.
 13. `--output` and `--config` paths that contain a `..` path component are rejected at parse time (startup). Constructed per-iteration report filenames are not re-walked for `..`.
 14. `--help` lists the iterations maximum and the `..` rejection rule for `--output`/`--config`.
 

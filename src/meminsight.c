@@ -231,14 +231,23 @@ static bool readConfigStoreValue(const char *dir, const char *key, char *value, 
 /**
  * Clamp a parsed iteration count into a trusted range before it is used
  * as a loop bound. Values below 1 fall back to DEFAULT_ITERATIONS.
+ * Prints when the requested value is changed so CLI/config sanitization is visible.
  * COV-123: TAINTED_SCALAR — untrusted loop bound from CLI/config.
  */
 static int sanitizeIterationCount(int value)
 {
     if (value < 1)
+    {
+        PRINT_MUST("Invalid iterations %d (must be between 1 and %d); using default %d\n",
+                   value, MAX_ITERATIONS, DEFAULT_ITERATIONS);
         return DEFAULT_ITERATIONS;
+    }
     if (value > MAX_ITERATIONS)
+    {
+        PRINT_MUST("Iterations %d exceeds max %d; capping to %d\n",
+                   value, MAX_ITERATIONS, MAX_ITERATIONS);
         return MAX_ITERATIONS;
+    }
     return value;
 }
 

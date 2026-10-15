@@ -15,7 +15,7 @@ This specification defines the configuration file contract and whitelist-driven 
 - interval
 - log_level
 4. `output_dir` from the config file is subject to the same rules as `--output`: no `..` component, and the final path component must contain `meminsight`.
-5. `iterations` from the config file is sanitized to the range 1..100000.
+5. `iterations` from the config file is sanitized to the range 1..100000. A message is printed when the parsed value is changed.
 
 ## Whitelist semantics
 
@@ -28,7 +28,7 @@ This specification defines the configuration file contract and whitelist-driven 
 
 1. CLI output directory overrides config output_dir.
 2. CLI iterations and interval values override config values when valid.
-3. Invalid or missing iteration/interval values are normalized to built-in defaults. Iteration counts above 100000 are capped; values below 1 fall back to the default.
+3. Invalid or missing iteration/interval values are normalized to built-in defaults. Iteration counts above 100000 are capped; values below 1 fall back to the default. A message is printed when the iteration count is changed.
 
 ## Output behavior in config mode
 

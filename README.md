@@ -226,7 +226,7 @@ OPTIONS:
 
 If you run `./meminsight` with no flags, it runs in a long-running mode (indefinite iterations) with a 15-minute interval and writes CSV reports under `/opt/meminsight/`.
 
-To run a finite capture, specify `--iterations` and/or `--interval`. Iteration counts below 1 fall back to `1`; values above `100000` are capped.
+To run a finite capture, specify `--iterations` and/or `--interval`. Iteration counts below 1 fall back to `1`; values above `100000` are capped. A message is printed when the requested value is changed.
 
 ### Basic Usage Examples
 
@@ -348,7 +348,7 @@ log_level=INFO
 |-----------|-------------|---------------|---------|
 | `process_whitelist` | Comma-separated list of process names/PIDs | All processes | `apache2,mysql,1234` |
 | `output_dir` | Directory for output files (final component must contain `meminsight`; `..` is rejected) | `/opt/meminsight` | `/var/log/meminsight` |
-| `iterations` | Number of sampling cycles (capped at `100000`) | `1` | `10` |
+| `iterations` | Number of sampling cycles (capped at `100000`; a message is printed when sanitized) | `1` | `10` |
 | `interval` | Seconds between samples | `5` | `60` |
 | `log_level` | Logging verbosity (parsed from config; current builds may not print logs unless debug is enabled) | `INFO` | `DEBUG`, `ERROR` |
 
@@ -484,7 +484,7 @@ CPU stat fixture coverage includes:
 Bandwidth fixture coverage includes:
 - `test/12-bandwidth-sample/meminsight_testBandwidth.txt` for deterministic CSV/JSON bandwidth validation under TESTME without relying on platform sysfs
 
-`test/run_ut.sh` also checks that `--help` documents the `--iterations` maximum, that an oversized `--iterations` value is capped at `100000` in report metadata, and that `..` is rejected in `--output`/`--config` paths.
+`test/run_ut.sh` also checks that `--help` documents the `--iterations` maximum, that an oversized `--iterations` value is capped at `100000` in report metadata and prints a sanitization message, and that `..` is rejected in `--output`/`--config` paths.
 
 When JSON output is enabled, the unit tests validate `cpu_stat` content with whitespace-tolerant numeric matching, accept `30543.0`-style rendering, and treat runtime cJSON-to-CSV fallback as a skip instead of a failure.
 
@@ -803,6 +803,7 @@ sudo ./meminsight
 **Issue**: `--iterations` appears lower than the value you passed
 ```bash
 # Values above 100000 are capped. Values below 1 fall back to 1.
+# A message is printed when the requested value is changed.
 ./meminsight --help   # documents the maximum
 ```
 
