@@ -6,8 +6,8 @@ This document records the current implementation-to-spec parity verification for
 
 ## Verification timestamp
 
-- Date: 2026-07-06
-- Verification basis: source scan of src/meminsight.c and existing openspec/specs capability files.
+- Date: 2026-10-14
+- Verification basis: source scan of src/meminsight.c and existing openspec/specs capability files after Coverity COV-123..COV-127 and CodeQL CQL-75..CQL-122 as-is updates.
 
 ## Parity matrix
 
