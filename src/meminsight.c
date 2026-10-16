@@ -3979,6 +3979,7 @@ int collectSystemMemoryStats(bool enableKThreads, const char *outDir, int iterat
  * @param[in] cli_out_dir      Output directory override from CLI (may be NULL).
  * @param[in] cli_output_set   true if --output was explicitly passed on the CLI.
  * @param[in] cli_iterations   Iteration count from CLI (-1 if not set).
+ *                             Explicit values are sanitized before precedence.
  * @param[in] cli_interval     Interval in seconds from CLI (-1 if not set).
  * @param[in] enableKThreads   Include kernel threads when true.
  * @param[in] long_run         Run indefinitely when true (ignores iteration count).
@@ -4028,7 +4029,12 @@ int handleConfigMode(const char *confFile, const char *cli_out_dir, bool cli_out
         return -1;
     }
 
-    // Interval/Iterations logic (CLI > config > default)
+    // Interval/Iterations logic (CLI > config > default).
+    // Sanitize an explicit CLI count first so values below 1 become the
+    // default and still override the config file (COV-123).
+    if (cli_iterations != -1)
+        cli_iterations = sanitizeIterationCount(cli_iterations); /* COV-123 */
+
     int final_iterations = config.iterations;
     int final_interval = config.interval;
 
@@ -5388,8 +5394,7 @@ int main(int argc, char *argv[])
             if (i + 1 < argc)
             {
                 cli_iterations = atoi(argv[i + 1]);
-                if (cli_iterations > 0)
-                    cli_iterations = sanitizeIterationCount(cli_iterations); /* COV-123 */
+                cli_iterations = sanitizeIterationCount(cli_iterations); /* COV-123 */
                 i++; // skip next arg (iterations)
                 long_run = false; // If iterations are specified, it's not a long run
             }
@@ -5643,7 +5648,7 @@ int main(int argc, char *argv[])
 
     if (isConfigPresent)
     {
-        if (cli_iterations > 0)
+        if (cli_iterations != -1)
             cli_iterations = sanitizeIterationCount(cli_iterations); /* COV-123 */
 #ifdef TESTME
     return (handleConfigMode(confFile, out_dir, cli_output_set, cli_iterations, cli_interval, enableKThreads, long_run, effective_upload_enable, cli_upload_interval, resolved_upload_url) == 0) ? 0 : 1;

@@ -27,7 +27,7 @@ This specification defines the configuration file contract and whitelist-driven 
 ## Runtime precedence
 
 1. CLI output directory overrides config output_dir.
-2. CLI iterations and interval values override config values when valid.
+2. An explicit CLI `--iterations` value is sanitized first, then overrides the config value. `--iterations 0` becomes 1 and still overrides a config of 10.
 3. Invalid or missing iteration/interval values are normalized to built-in defaults. Iteration counts above 100000 are capped; values below 1 fall back to the default. A message is printed when the iteration count is changed.
 
 ## Output behavior in config mode

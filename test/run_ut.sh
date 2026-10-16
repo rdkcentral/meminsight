@@ -1223,6 +1223,50 @@ else
 fi
 echo ""
 
+# Coverity COV-123: explicit --iterations below 1 is sanitized before config precedence
+ITER_ZERO_DESC="Test 38: --iterations 0 is sanitized and overrides config"
+ITER_ZERO_SMAP="test/1-non-zero-swap-entry/meminsight_testSmap.txt"
+ITER_ZERO_MEMINFO="test/1-non-zero-swap-entry/meminsight_testMeminfo.txt"
+ITER_ZERO_OUT="/tmp/meminsight_iterations_zero"
+ITER_ZERO_CONF="/tmp/meminsight_iterations_zero.conf"
+ITER_ZERO_LOG="/tmp/meminsight_iterations_zero.log"
+
+echo "------------------------------------------"
+echo "$ITER_ZERO_DESC"
+echo "------------------------------------------"
+echo "Command: $MEM_BIN --config $ITER_ZERO_CONF --iterations 0 --interval 0 -o $ITER_ZERO_OUT -t $ITER_ZERO_SMAP $ITER_ZERO_MEMINFO"
+
+rm -rf "$ITER_ZERO_OUT"
+mkdir -p "$ITER_ZERO_OUT"
+cat >"$ITER_ZERO_CONF" <<EOF
+process_whitelist=1
+output_dir=$ITER_ZERO_OUT
+iterations=10
+interval=0
+log_level=INFO
+EOF
+
+if $MEM_BIN --config "$ITER_ZERO_CONF" --iterations 0 --interval 0 -o "$ITER_ZERO_OUT" -t "$ITER_ZERO_SMAP" "$ITER_ZERO_MEMINFO" >"$ITER_ZERO_LOG" 2>&1; then
+    if grep -F "Invalid iterations 0 (must be between 1 and 100000); using default 1" "$ITER_ZERO_LOG" >/dev/null 2>&1 && \
+       grep -E '^RUN_ITERATIONS=1$' "$ITER_ZERO_OUT/.meminsight_configstore" >/dev/null 2>&1; then
+        echo "✓ $ITER_ZERO_DESC PASSED"
+        record_tc_result "38" "--iterations 0 is sanitized and overrides config" "SUCCESS"
+    else
+        echo "✗ $ITER_ZERO_DESC FAILED (expected default 1 and sanitization message, not config 10)"
+        cat "$ITER_ZERO_LOG"
+        [ -f "$ITER_ZERO_OUT/.meminsight_configstore" ] && cat "$ITER_ZERO_OUT/.meminsight_configstore"
+        TEST_FAILED=$((TEST_FAILED + 1))
+        record_tc_result "38" "--iterations 0 is sanitized and overrides config" "FAILURE"
+    fi
+else
+    echo "✗ $ITER_ZERO_DESC FAILED (command execution failed)"
+    cat "$ITER_ZERO_LOG"
+    TEST_FAILED=$((TEST_FAILED + 1))
+    record_tc_result "38" "--iterations 0 is sanitized and overrides config" "FAILURE"
+fi
+echo ""
+rm -f "$ITER_ZERO_CONF"
+
 CQL_SMAP="test/1-non-zero-swap-entry/meminsight_testSmap.txt"
 CQL_MEMINFO="test/1-non-zero-swap-entry/meminsight_testMeminfo.txt"
 
