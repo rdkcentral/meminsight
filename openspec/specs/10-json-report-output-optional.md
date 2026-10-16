@@ -33,6 +33,7 @@ Current JSON report includes:
 
 1. Pretty or compact serialization is selected by `--json-pretty`.
 2. JSON root object is released after each write.
+3. Per-iteration JSON/T2 files are created with `fopen` after the output directory has been validated at startup.
 
 ## Source anchors
 

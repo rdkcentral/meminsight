@@ -1298,6 +1298,145 @@ else
     cat /tmp/meminsight_up41.log
     TEST_FAILED=$((TEST_FAILED + 1))
     record_tc_result "41" "Binary does not create a trigger without --upload-enable" "FAILURE"
+=======
+# Coverity COV-123: help text documents the iterations cap
+ITER_HELP_DESC="Test 34: Help documents --iterations maximum"
+echo "------------------------------------------"
+echo "$ITER_HELP_DESC"
+echo "------------------------------------------"
+echo "Command: $MEM_BIN --help"
+
+if $MEM_BIN --help 2>&1 | grep -E -- '--iterations .*max: 100000' >/dev/null 2>&1; then
+    echo "✓ $ITER_HELP_DESC PASSED"
+    record_tc_result "34" "Help documents --iterations maximum" "SUCCESS"
+else
+    echo "✗ $ITER_HELP_DESC FAILED (--iterations max not documented in help)"
+    $MEM_BIN --help 2>&1 | grep -F -- "--iterations" || true
+    TEST_FAILED=$((TEST_FAILED + 1))
+    record_tc_result "34" "Help documents --iterations maximum" "FAILURE"
+fi
+echo ""
+
+# Coverity COV-123: untrusted iteration counts are clamped before use as a loop bound
+ITER_CAP_DESC="Test 35: Oversized --iterations is capped at 100000"
+ITER_CAP_SMAP="test/1-non-zero-swap-entry/meminsight_testSmap.txt"
+ITER_CAP_MEMINFO="test/1-non-zero-swap-entry/meminsight_testMeminfo.txt"
+ITER_CAP_OUT="/tmp/meminsight_iterations_cap"
+
+echo "------------------------------------------"
+echo "$ITER_CAP_DESC"
+echo "------------------------------------------"
+ITER_CAP_LOG="/tmp/meminsight_iterations_cap.log"
+echo "Command: $MEM_BIN --iterations 999999 --interval 0 -o $ITER_CAP_OUT -t $ITER_CAP_SMAP $ITER_CAP_MEMINFO"
+
+rm -rf "$ITER_CAP_OUT"
+mkdir -p "$ITER_CAP_OUT"
+
+if $MEM_BIN --iterations 999999 --interval 0 -o "$ITER_CAP_OUT" -t "$ITER_CAP_SMAP" "$ITER_CAP_MEMINFO" >"$ITER_CAP_LOG" 2>&1; then
+    CSV_FILE=$(ls "$ITER_CAP_OUT"/*.csv 2>/dev/null | head -n 1)
+    if [ -n "$CSV_FILE" ] && \
+       grep -F "Iterations 999999 exceeds max 100000; capping to 100000" "$ITER_CAP_LOG" >/dev/null 2>&1 && \
+       grep -E '^RUN_ITERATIONS=100000$' "$ITER_CAP_OUT/.meminsight_configstore" >/dev/null 2>&1 && \
+       head -n 1 "$CSV_FILE" | grep -F "RUN_ITERATIONS" >/dev/null 2>&1 && \
+       sed -n '2p' "$CSV_FILE" | awk -F',' '{exit ($8 == 100000) ? 0 : 1}'; then
+        echo "✓ $ITER_CAP_DESC PASSED"
+        record_tc_result "35" "Oversized --iterations is capped at 100000" "SUCCESS"
+    else
+        echo "✗ $ITER_CAP_DESC FAILED (iteration cap not reflected in metadata or missing sanitization message)"
+        cat "$ITER_CAP_LOG"
+        [ -f "$ITER_CAP_OUT/.meminsight_configstore" ] && cat "$ITER_CAP_OUT/.meminsight_configstore"
+        [ -n "$CSV_FILE" ] && head -n 2 "$CSV_FILE"
+        TEST_FAILED=$((TEST_FAILED + 1))
+        record_tc_result "35" "Oversized --iterations is capped at 100000" "FAILURE"
+    fi
+else
+    echo "✗ $ITER_CAP_DESC FAILED (command execution failed)"
+    cat "$ITER_CAP_LOG"
+    TEST_FAILED=$((TEST_FAILED + 1))
+    record_tc_result "35" "Oversized --iterations is capped at 100000" "FAILURE"
+fi
+echo ""
+
+# Coverity COV-123: explicit --iterations below 1 is sanitized before config precedence
+ITER_ZERO_DESC="Test 38: --iterations 0 is sanitized and overrides config"
+ITER_ZERO_SMAP="test/1-non-zero-swap-entry/meminsight_testSmap.txt"
+ITER_ZERO_MEMINFO="test/1-non-zero-swap-entry/meminsight_testMeminfo.txt"
+ITER_ZERO_OUT="/tmp/meminsight_iterations_zero"
+ITER_ZERO_CONF="/tmp/meminsight_iterations_zero.conf"
+ITER_ZERO_LOG="/tmp/meminsight_iterations_zero.log"
+
+echo "------------------------------------------"
+echo "$ITER_ZERO_DESC"
+echo "------------------------------------------"
+echo "Command: $MEM_BIN --config $ITER_ZERO_CONF --iterations 0 --interval 0 -o $ITER_ZERO_OUT -t $ITER_ZERO_SMAP $ITER_ZERO_MEMINFO"
+
+rm -rf "$ITER_ZERO_OUT"
+mkdir -p "$ITER_ZERO_OUT"
+cat >"$ITER_ZERO_CONF" <<EOF
+process_whitelist=1
+output_dir=$ITER_ZERO_OUT
+iterations=10
+interval=0
+log_level=INFO
+EOF
+
+if $MEM_BIN --config "$ITER_ZERO_CONF" --iterations 0 --interval 0 -o "$ITER_ZERO_OUT" -t "$ITER_ZERO_SMAP" "$ITER_ZERO_MEMINFO" >"$ITER_ZERO_LOG" 2>&1; then
+    if grep -F "Invalid iterations 0 (must be between 1 and 100000); using default 1" "$ITER_ZERO_LOG" >/dev/null 2>&1 && \
+       grep -E '^RUN_ITERATIONS=1$' "$ITER_ZERO_OUT/.meminsight_configstore" >/dev/null 2>&1; then
+        echo "✓ $ITER_ZERO_DESC PASSED"
+        record_tc_result "38" "--iterations 0 is sanitized and overrides config" "SUCCESS"
+    else
+        echo "✗ $ITER_ZERO_DESC FAILED (expected default 1 and sanitization message, not config 10)"
+        cat "$ITER_ZERO_LOG"
+        [ -f "$ITER_ZERO_OUT/.meminsight_configstore" ] && cat "$ITER_ZERO_OUT/.meminsight_configstore"
+        TEST_FAILED=$((TEST_FAILED + 1))
+        record_tc_result "38" "--iterations 0 is sanitized and overrides config" "FAILURE"
+    fi
+else
+    echo "✗ $ITER_ZERO_DESC FAILED (command execution failed)"
+    cat "$ITER_ZERO_LOG"
+    TEST_FAILED=$((TEST_FAILED + 1))
+    record_tc_result "38" "--iterations 0 is sanitized and overrides config" "FAILURE"
+fi
+echo ""
+rm -f "$ITER_ZERO_CONF"
+
+CQL_SMAP="test/1-non-zero-swap-entry/meminsight_testSmap.txt"
+CQL_MEMINFO="test/1-non-zero-swap-entry/meminsight_testMeminfo.txt"
+
+# CQL-118: reject path traversal in --output
+PATH_OUT_DESC="Test 36: --output path with .. is rejected"
+echo "------------------------------------------"
+echo "$PATH_OUT_DESC"
+echo "------------------------------------------"
+echo "Command: $MEM_BIN -o /tmp/../tmp/meminsight -t $CQL_SMAP $CQL_MEMINFO"
+PATH_OUT_LOG="/tmp/meminsight_cql_output_dotdot.log"
+if $MEM_BIN -o /tmp/../tmp/meminsight -t "$CQL_SMAP" "$CQL_MEMINFO" >"$PATH_OUT_LOG" 2>&1; then
+    echo "✗ $PATH_OUT_DESC FAILED (path traversal was accepted)"
+    cat "$PATH_OUT_LOG"
+    TEST_FAILED=$((TEST_FAILED + 1))
+    record_tc_result "36" "--output path with .. is rejected" "FAILURE"
+else
+    echo "✓ $PATH_OUT_DESC PASSED"
+    record_tc_result "36" "--output path with .. is rejected" "SUCCESS"
+fi
+echo ""
+
+# CQL-117: reject path traversal in --config
+PATH_CFG_DESC="Test 37: --config path with .. is rejected"
+echo "------------------------------------------"
+echo "$PATH_CFG_DESC"
+echo "------------------------------------------"
+echo "Command: $MEM_BIN -c ../evil.conf"
+PATH_CFG_LOG="/tmp/meminsight_cql_config_dotdot.log"
+if $MEM_BIN -c ../evil.conf >"$PATH_CFG_LOG" 2>&1; then
+    echo "✗ $PATH_CFG_DESC FAILED (path traversal was accepted)"
+    cat "$PATH_CFG_LOG"
+    TEST_FAILED=$((TEST_FAILED + 1))
+    record_tc_result "37" "--config path with .. is rejected" "FAILURE"
+else
+    echo "✓ $PATH_CFG_DESC PASSED"
+    record_tc_result "37" "--config path with .. is rejected" "SUCCESS"
 fi
 echo ""
 

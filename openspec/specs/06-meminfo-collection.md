@@ -35,6 +35,8 @@ The current implementation targets these fields:
 2. The parser learns skip offsets and header order on first successful parse and reuses them for subsequent iterations.
 3. JSON output writes the same field set as numeric key/value entries under a meminfo object.
 4. Missing or parse-failed lines are skipped without process termination.
+5. Field-name conversions use a bounded `sscanf` width (`%63s`). A line is accepted only when the expected conversion count is met (`EOF` is not treated as success).
+6. Learnt skip-offset reads stay inside the field-count array. Empty tokens are not stripped.
 
 ## Source anchors
 

@@ -14,7 +14,7 @@ This specification defines the current upload signaling and run-state file behav
 
 1. At run startup, the configstore is written or updated only in the selected output directory.
 2. If configstore already contains the same persistent key/value set, file rewrite is skipped.
-3. The configstore retains `RUN_ID` for backup archive continuity, but does not store upload-only settings.
+3. The configstore retains `RUN_ID` for backup archive continuity, but does not store upload-only settings. `RUN_ID` is `<epoch_seconds><pid><2-digit-suffix>` with the suffix from `/dev/urandom` (time/pid mix if `/dev/urandom` is unavailable).
 4. When `--upload-enable` is supplied, an atomic upload marker is published after configstore creation and before capture begins.
 5. The marker contains `CONFIGSTORE_PATH`, `RUN_ID`, `UPLOAD_ENABLED`, and `UPLOAD_INTERVAL`.
 6. The sidecar reads upload settings from the marker and reads `OUTPUT_DIR` and persistent state from the configured configstore.
@@ -31,7 +31,7 @@ Persistent configstore keys include uptime, kernel version, meminsight version, 
 The temporary marker contains:
 
 - `CONFIGSTORE_PATH`: absolute path to the selected output-directory configstore
-- `RUN_ID`: run identity used by the uploader
+- `RUN_ID`: run identity used by the uploader (`<epoch_seconds><pid><2-digit-suffix>`)
 - `UPLOAD_ENABLED`: `1` when upload is enabled
 - `UPLOAD_INTERVAL`: requested upload cadence in seconds
 

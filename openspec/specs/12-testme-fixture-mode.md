@@ -15,6 +15,7 @@ This specification defines test-only runtime behavior enabled by TESTME builds.
 1. Parser outputs derived from runtime parsing are compared against fixture-driven parser expectations for selected fields.
 2. Mismatch conditions mark unit test failure state.
 3. In test flow, iteration count is constrained according to current test-mode control logic.
+4. `test/run_ut.sh` also validates CLI safety that is independent of fixtures: `--help` documents the iterations maximum, an oversized `--iterations` value is stored as `100000` and prints a sanitization message, `--iterations 0` is sanitized to `1` and still overrides a config-file iteration count, and `--output`/`--config` paths containing `..` are rejected.
 
 ## Fixture usage
 
