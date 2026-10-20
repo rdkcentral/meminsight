@@ -1658,19 +1658,6 @@ if MEMINSIGHT_UPLOAD_TRIGGER="$UP38_DIR/.meminsight_upload_trigger" MEMINSIGHT_O
         TEST_FAILED=$((TEST_FAILED + 1))
         record_tc_result "38" "Missing destination for JSON/T2 warns and skips safely" "FAILURE"
     fi
-MEMINSIGHT_NOW_UPTIME=0 \
-sh "$UP_SCRIPT" >/tmp/meminsight_up38.log 2>&1; then
-if grep -F "[WARN]" "$UP38_DIR/meminsight.log" >/dev/null 2>&1 && \
-grep -F "no upload destination configured" "$UP38_DIR/meminsight.log" >/dev/null 2>&1 && \
-[ -e "$UP38_DIR/report1.json" ]; then
-echo "✓ $UP38_DESC PASSED"
-record_tc_result "38" "Missing destination for JSON/T2 warns and skips safely" "SUCCESS"
-else
-echo "✗ $UP38_DESC FAILED (missing warning or file incorrectly removed)"
-cat "$UP38_DIR/meminsight.log" 2>/dev/null
-TEST_FAILED=$((TEST_FAILED + 1))
-record_tc_result "38" "Missing destination for JSON/T2 warns and skips safely" "FAILURE"
-fi
 else
 echo "✗ $UP38_DESC FAILED (script exited non-zero instead of skipping)"
 cat /tmp/meminsight_up38.log
