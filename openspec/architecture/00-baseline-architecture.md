@@ -164,6 +164,8 @@ flowchart TD
   - iterative loop with sleep(interval)
   - long-run mode when no finite iteration plan is enforced
   - per-iteration timestamp and output file generation
+  - finite `--iterations` values are sanitized to 1..100000 before CLI/config precedence and before use as a loop bound; a message is printed when the requested value is changed
+- Per-iteration report writes use `fopen`/`localtime` after startup validation so the collect loop stays lightweight.
 
 ### Inferences
 - Data model is primarily snapshot-based, not delta-derived over history.
@@ -203,6 +205,8 @@ flowchart LR
 - Explicit precedence implemented in code:
   - CLI values override config-file values for output/iterations/interval in config mode.
   - Config values override defaults when CLI does not provide overrides.
+- CLI `--output`/`--config` and config `output_dir` reject a `..` path component at startup. The output basename must contain `meminsight`.
+- `RUN_ID` is `<epoch_seconds><pid><2-digit-suffix>` from `/dev/urandom` (time/pid mix if unavailable). Output-directory create uses mkdir-first.
 - Output format defaults to CSV; JSON requires both build-time support and runtime libcjson load success.
 - If JSON runtime loading fails, code explicitly falls back to CSV.
 

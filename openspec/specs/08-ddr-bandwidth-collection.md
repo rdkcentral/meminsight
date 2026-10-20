@@ -11,9 +11,9 @@ This specification defines optional DDR bandwidth reporting behavior based on sy
 
 ## Current behavior
 
-1. Availability is determined at startup by checking required file access permissions.
+1. Availability is determined once at startup by opening the mode and bandwidth sysfs nodes directly (not `access()` then `fopen`).
 2. Bandwidth collection is attempted only when startup checks indicate availability.
-3. During collection, mode is verified and enabled when required.
+3. During collection, mode is verified and enabled when required. The collect-loop enable write uses `fopen` so the per-iteration path stays lightweight.
 4. When a parseable line is read, CSV output appends a Bandwidth section with total bandwidth and usage percentage.
 5. When JSON output is active and a parseable line is read, JSON output includes a `bandwidth` object with total bandwidth and usage percentage.
 6. Failures to open or parse bandwidth sources are logged and do not terminate the run.

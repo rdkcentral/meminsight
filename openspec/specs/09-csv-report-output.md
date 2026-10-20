@@ -56,6 +56,10 @@ Current metadata fields are:
 - RUN_ITERATIONS
 - RUN_INTERVAL
 - RUN_ID
+- BACKUP_ARG_PASSED
+- BACKUP_COUNT
+
+`RUN_ITERATIONS` is the sanitized iteration count (1..100000). `RUN_ID` is generated at setup as described in C02/C11. Per-iteration CSV files are created with `fopen` after the output directory has been validated at startup.
 
 ## Source anchors
 
