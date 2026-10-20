@@ -1429,13 +1429,16 @@ echo "------------------------------------------"
 echo "Command: $MEM_BIN -c ../evil.conf"
 PATH_CFG_LOG="/tmp/meminsight_cql_config_dotdot.log"
 if $MEM_BIN -c ../evil.conf >"$PATH_CFG_LOG" 2>&1; then
-echo "✗ $PATH_CFG_DESC FAILED (path traversal was accepted)"
-cat "$PATH_CFG_LOG"
-TEST_FAILED=$((TEST_FAILED + 1))
-record_tc_result "37" "--config path with .. is rejected" "FAILURE"
+    echo "✗ $PATH_CFG_DESC FAILED (path traversal was accepted)"
+    cat "$PATH_CFG_LOG"
+    TEST_FAILED=$((TEST_FAILED + 1))
+    record_tc_result "37" "--config path with .. is rejected" "FAILURE"
 else
-echo "✓ $PATH_CFG_DESC PASSED"
-record_tc_result "37" "--config path with .. is rejected" "SUCCESS"
+   echo "✓ $PATH_CFG_DESC PASSED"
+   record_tc_result "37" "--config path with .. is rejected" "SUCCESS"
+fi
+echo ""
+
 # --- upload_MemReports.sh test setup -------------------------------------
 UP_SCRIPT="scripts/upload_MemReports.sh"
 UP_FAKEBIN="/tmp/meminsight_upload_fakebin"
@@ -1699,22 +1702,6 @@ echo "------------------------------------------"
 echo "$UP38B_DESC"
 echo "------------------------------------------"
 
-if $MEM_BIN --upload-enable --upload-interval --upload-url https://example.test/upload >/tmp/meminsight_up38b.log 2>&1; then
-    echo "✗ $UP38B_DESC FAILED (command unexpectedly succeeded)"
-    cat "$UP38B_LOG"
-    TEST_FAILED=$((TEST_FAILED + 1))
-    record_tc_result "38b" "Reject malformed --upload-interval values" "FAILURE"
-else
-    if grep -F "Invalid upload interval value '--upload-url' after --upload-interval" "$UP38B_LOG" >/dev/null 2>&1 || \
-       grep -F "Missing upload interval value after --upload-interval" "$UP38B_LOG" >/dev/null 2>&1; then
-        echo "✓ $UP38B_DESC PASSED"
-        record_tc_result "38b" "Reject malformed --upload-interval values" "SUCCESS"
-    else
-        echo "✗ $UP38B_DESC FAILED (validation error missing)"
-        cat "$UP38B_LOG"
-        TEST_FAILED=$((TEST_FAILED + 1))
-        record_tc_result "38b" "Reject malformed --upload-interval values" "FAILURE"
-    fi
 UPLOAD_INTERVAL_VALIDATION_FAILED=0
 if $MEM_BIN --upload-enable --upload-interval >"$UP38B_LOG" 2>&1; then
     echo "✗ $UP38B_DESC FAILED (accepted a missing interval value)"
