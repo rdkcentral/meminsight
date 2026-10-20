@@ -1602,7 +1602,7 @@ EOF
 echo "{}" > "$UP37_DIR/report1.t2.json"
 
 if PATH="$UP_FAKEBIN:$PATH" MEMINSIGHT_UPLOAD_TRIGGER="$UP37_DIR/.meminsight_upload_trigger" \
-    MEMINSIGHT_OUTPUT_DIR="$UP37_DIR" MEMINSIGHT_LOG_FILE="$UP37_DIR/meminsight.log" \
+   MEMINSIGHT_OUTPUT_DIR="$UP37_DIR" MEMINSIGHT_LOG_FILE="$UP37_DIR/meminsight.log" \
    MEMINSIGHT_CERT_PATH="$UP_FAKE_CERT" MEMINSIGHT_CERT_PASS_FILE="$UP_FAKE_PASS" \
    MEMINSIGHT_UPLOAD_RETRIES=2 MEMINSIGHT_UPLOAD_RETRY_DELAY=0 \
    MEMINSIGHT_TEST_HTTP_CODE=500 sh "$UP_SCRIPT" >/tmp/meminsight_up37.log 2>&1; then
@@ -1617,21 +1617,6 @@ if PATH="$UP_FAKEBIN:$PATH" MEMINSIGHT_UPLOAD_TRIGGER="$UP37_DIR/.meminsight_upl
         TEST_FAILED=$((TEST_FAILED + 1))
         record_tc_result "37" "Failed upload retries then retains the report" "FAILURE"
     fi
-MEMINSIGHT_OUTPUT_DIR="$UP37_DIR" MEMINSIGHT_LOG_FILE="$UP37_DIR/meminsight.log" \
-MEMINSIGHT_CERT_PATH="$UP_FAKE_CERT" MEMINSIGHT_CERT_PASS_FILE="$UP_FAKE_PASS" \
-MEMINSIGHT_UPLOAD_RETRIES=2 MEMINSIGHT_UPLOAD_RETRY_DELAY=0 \
-MEMINSIGHT_TEST_HTTP_CODE=500 MEMINSIGHT_NOW_UPTIME=0 sh "$UP_SCRIPT" >/tmp/meminsight_up37.log 2>&1; then
-RETRY_COUNT=$(grep -c "Response status.*HTTP 500" "$UP37_DIR/meminsight.log" 2>/dev/null || echo 0)
-if [ "$RETRY_COUNT" -eq 2 ] && [ -e "$UP37_DIR/report1.t2.json" ] && \
-grep -F "retained locally after 2 failed attempt(s)" "$UP37_DIR/meminsight.log" >/dev/null 2>&1; then
-echo "✓ $UP37_DESC PASSED"
-record_tc_result "37" "Failed upload retries then retains the report" "SUCCESS"
-else
-echo "✗ $UP37_DESC FAILED (retry/retain behavior mismatch)"
-cat "$UP37_DIR/meminsight.log" 2>/dev/null
-TEST_FAILED=$((TEST_FAILED + 1))
-record_tc_result "37" "Failed upload retries then retains the report" "FAILURE"
-fi
 else
 echo "✗ $UP37_DESC FAILED (script exited non-zero)"
 cat /tmp/meminsight_up37.log
