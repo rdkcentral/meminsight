@@ -1570,20 +1570,6 @@ if PATH="$UP_FAKEBIN:$PATH" MEMINSIGHT_UPLOAD_TRIGGER="$UP36_DIR/.meminsight_upl
         TEST_FAILED=$((TEST_FAILED + 1))
         record_tc_result "36" "T2/JSON format uploads to ELK and HTTP 302 deletes the report" "FAILURE"
     fi
-MEMINSIGHT_OUTPUT_DIR="$UP36_DIR" MEMINSIGHT_LOG_FILE="$UP36_DIR/meminsight.log" \
-MEMINSIGHT_CERT_PATH="$UP_FAKE_CERT" MEMINSIGHT_CERT_PASS_FILE="$UP_FAKE_PASS" \
-MEMINSIGHT_TEST_HTTP_CODE=302 MEMINSIGHT_NOW_UPTIME=0 sh "$UP_SCRIPT" >/tmp/meminsight_up36.log 2>&1; then
-if grep -F "ELK destination 'https://example.test/elk'" "$UP36_DIR/meminsight.log" >/dev/null 2>&1 && \
-grep -F "HTTP 302" "$UP36_DIR/meminsight.log" >/dev/null 2>&1 && \
-[ ! -e "$UP36_DIR/report1.t2.json" ]; then
-echo "✓ $UP36_DESC PASSED"
-record_tc_result "36" "T2/JSON format uploads to ELK and HTTP 302 deletes the report" "SUCCESS"
-else
-echo "✗ $UP36_DESC FAILED (did not route to ELK or delete on 302)"
-cat "$UP36_DIR/meminsight.log" 2>/dev/null
-TEST_FAILED=$((TEST_FAILED + 1))
-record_tc_result "36" "T2/JSON format uploads to ELK and HTTP 302 deletes the report" "FAILURE"
-fi
 else
 echo "✗ $UP36_DESC FAILED (script exited non-zero)"
 cat /tmp/meminsight_up36.log
