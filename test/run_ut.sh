@@ -1527,20 +1527,6 @@ if PATH="$UP_FAKEBIN:$PATH" MEMINSIGHT_UPLOAD_TRIGGER="$UP35_DIR/.meminsight_upl
         TEST_FAILED=$((TEST_FAILED + 1))
         record_tc_result "35" "CSV format uploads to S3 and HTTP 200 deletes the report" "FAILURE"
     fi
-MEMINSIGHT_OUTPUT_DIR="$UP35_DIR" MEMINSIGHT_LOG_FILE="$UP35_DIR/meminsight.log" MEMINSIGHT_S3_UPLOAD_URL="https://example.test/s3" \
-MEMINSIGHT_CERT_PATH="$UP_FAKE_CERT" MEMINSIGHT_CERT_PASS_FILE="$UP_FAKE_PASS" \
-MEMINSIGHT_TEST_HTTP_CODE=200 MEMINSIGHT_NOW_UPTIME=0 sh "$UP_SCRIPT" >/tmp/meminsight_up35.log 2>&1; then
-if grep -F "S3 artifacts" "$UP35_DIR/meminsight.log" >/dev/null 2>&1 && \
-grep -F "HTTP 200" "$UP35_DIR/meminsight.log" >/dev/null 2>&1 && \
-[ ! -e "$UP35_DIR/report1.csv" ]; then
-echo "✓ $UP35_DESC PASSED"
-record_tc_result "35" "CSV format uploads to S3 and HTTP 200 deletes the report" "SUCCESS"
-else
-echo "✗ $UP35_DESC FAILED (did not route to S3 or delete on success)"
-cat "$UP35_DIR/meminsight.log" 2>/dev/null
-TEST_FAILED=$((TEST_FAILED + 1))
-record_tc_result "35" "CSV format uploads to S3 and HTTP 200 deletes the report" "FAILURE"
-fi
 else
 echo "✗ $UP35_DESC FAILED (script exited non-zero)"
 cat /tmp/meminsight_up35.log
