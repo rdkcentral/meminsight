@@ -1298,6 +1298,7 @@ else
     cat /tmp/meminsight_up41.log
     TEST_FAILED=$((TEST_FAILED + 1))
     record_tc_result "41" "Binary does not create a trigger without --upload-enable" "FAILURE"
+fi
 # Coverity COV-123: help text documents the iterations cap
 ITER_HELP_DESC="Test 34: Help documents --iterations maximum"
 echo "------------------------------------------"
@@ -1848,34 +1849,6 @@ else
     cat /tmp/meminsight_up40.log
     TEST_FAILED=$((TEST_FAILED + 1))
     record_tc_result "40" "Upload window closure is enforced" "FAILURE"
-fi
-echo ""
-
-# Test 41: uploads remain disabled when --upload-enable is not requested (binary side)
-UP41_DESC="Test 41: Binary does not create a trigger without --upload-enable"
-UP41_OUT="$RET_BASE/meminsight_case13_no_upload"
-
-echo "------------------------------------------"
-echo "$UP41_DESC"
-echo "------------------------------------------"
-echo "Command: $MEM_BIN --iterations 1 -o $UP41_OUT -t $RET_SMAP_FILE $RET_MEMINFO_FILE"
-
-rm -rf "$UP41_OUT"
-rm -f /tmp/.meminsight_upload
-if $MEM_BIN --iterations 1 -o "$UP41_OUT" -t "$RET_SMAP_FILE" "$RET_MEMINFO_FILE" >/tmp/meminsight_up41.log 2>&1; then
-    if [ ! -e /tmp/.meminsight_upload ]; then
-        echo "✓ $UP41_DESC PASSED"
-        record_tc_result "41" "Binary does not create a trigger without --upload-enable" "SUCCESS"
-    else
-        echo "✗ $UP41_DESC FAILED (trigger created without --upload-enable)"
-        TEST_FAILED=$((TEST_FAILED + 1))
-        record_tc_result "41" "Binary does not create a trigger without --upload-enable" "FAILURE"
-    fi
-else
-    echo "✗ $UP41_DESC FAILED (command execution failed)"
-    cat /tmp/meminsight_up41.log
-    TEST_FAILED=$((TEST_FAILED + 1))
-    record_tc_result "41" "Binary does not create a trigger without --upload-enable" "FAILURE"
 fi
 echo ""
 
